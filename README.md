@@ -6,6 +6,10 @@ Windows / macOS 桌面端 Markdown 笔记软件，笔记以本地 Markdown 文�
 
 需求见 [docs/需求文档.md](docs/需求文档.md)，界面定稿设计稿见 [prototype/index.html](prototype/index.html)（风格 A，浅色 + 夜读）。改进代码的方式见 [CONTRIBUTING.md](CONTRIBUTING.md)：先 Fork，再提交 Pull Request。安全漏洞按 [SECURITY.md](SECURITY.md) 私下报告。
 
+## 下载
+
+Windows 64 位安装包在 [Releases](https://github.com/HeiGouda/spark-notes/releases/latest)，下载后直接安装。安装包未签名，若 Windows 提示“Windows 已保护你的电脑”，点“更多信息”，再点“仍要运行”。macOS 安装包尚未提供。
+
 ## 技术栈
 
 Tauri 2（Rust）+ Vue 3 + TypeScript + Pinia，编辑器 Milkdown，代码高亮 Prism（`@milkdown/plugin-prism` + refractor），一键整理的中英文空格用 `pangu`，AI 对话的 Markdown 显示用 `markdown-it`。
