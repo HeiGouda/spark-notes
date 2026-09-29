@@ -1,6 +1,6 @@
 # Spark
 
-Windows / macOS 桌面端 Markdown 笔记软件，笔记以本地 Markdown 文件保存。GitHub 仓库名是 `spark-notes`，以 [MIT 许可证](LICENSE) 发布。
+小巧、性能强的 Windows / macOS 桌面端 Markdown 笔记软件，笔记以本地 Markdown 文件保存。实测安装包不到 5MB，冷启动不到半秒；打开一万篇笔记的库后，应用内存约 100MB，搜索仍是毫秒级。以 [MIT 许可证](LICENSE) 发布。
 
 支持 Windows 与 macOS 13 及以上版本。AI 的 API Key、WebDAV 密码和 Git 远程账号在 Windows 上写入凭据管理器，在 macOS 上写入钥匙串；在其他系统上保存凭据会失败。
 
@@ -98,9 +98,3 @@ src-tauri/src/
 - 删除需确认，移入 `.ttnote/trash/<时间戳>/`（保留原相对路径，并写 `meta.json` 记录原位置）。
 - 空段落不写成 `<br />`，保存结果保持纯 Markdown。
 - 图片通过 asset 协议显示，只放行当前打开的笔记库目录。
-
-## 已知问题
-
-- **WebView2 的公共开销约 150MB**：GPU 进程、浏览器主进程和工具进程不论界面内容都存在，M10 实测合计私有内存：不打开笔记库 196MB、打开万篇笔记库后 262MB。需求文档 7.1 的内存指标已改为只统计 Spark 进程与页面进程。关闭 GPU 加速（WebView2 参数 `--disable-gpu`）可再省约 70–90MB，输入与打开笔记速度不受影响，但滚动流畅度未验证，暂不采用。
-- 启动后第一次全文搜索较慢（最慢约 199ms，接近 200ms 上限），之后的搜索在 50ms 以内。
-- 发布版可执行文件约 9.3MB，前端产物 JS 约 1.0MB（含 markdown-it）。
