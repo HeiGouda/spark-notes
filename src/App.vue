@@ -8,6 +8,7 @@ import TitleBar from "./components/TitleBar.vue";
 import Sidebar from "./components/Sidebar.vue";
 import FormatToolbar from "./components/FormatToolbar.vue";
 import NoteEditor from "./components/NoteEditor.vue";
+import DiagramView from "./components/DiagramView.vue";
 import StatusBar from "./components/StatusBar.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import { dispatchShortcut, runCommand } from "./lib/commands";
@@ -30,6 +31,7 @@ import GuideDialog from "./components/GuideDialog.vue";
 import AiNoConfigDialog from "./components/AiNoConfigDialog.vue";
 import AiSummaryDialog from "./components/AiSummaryDialog.vue";
 import AiStructureDialog from "./components/AiStructureDialog.vue";
+import FlowGenDialog from "./components/FlowGenDialog.vue";
 import ChatView from "./components/ChatView.vue";
 import { useGitStore } from "./stores/git";
 
@@ -37,6 +39,7 @@ const settings = useSettingsStore();
 const tabs = useTabsStore();
 const ui = useUiStore();
 const chatShown = computed(() => ui.chatOpen && ui.mainView === "chat");
+const diagramShown = computed(() => !!tabs.active && tabs.active.kind !== "note");
 
 /** 从文件树、快速打开等处打开笔记时回到笔记 */
 watch(() => tabs.activePath, (path) => {
@@ -113,9 +116,10 @@ onBeforeUnmount(() => {
     <div class="body">
       <Sidebar v-if="settings.sidebarVisible" />
       <main class="main">
-        <FormatToolbar v-if="settings.toolbarVisible && !chatShown" />
+        <FormatToolbar v-if="settings.toolbarVisible && !chatShown && !diagramShown" />
+        <DiagramView v-if="tabs.active && diagramShown" v-show="!chatShown" :key="tabs.active.path" :tab="tabs.active" />
         <!-- 切到 AI 对话时编辑器只隐藏不销毁，保留光标位置供“插入到笔记”使用 -->
-        <NoteEditor v-if="tabs.active" v-show="!chatShown" :key="tabs.active.path" :tab="tabs.active" />
+        <NoteEditor v-else-if="tabs.active" v-show="!chatShown" :key="tabs.active.path" :tab="tabs.active" />
         <div v-else-if="!chatShown" class="main-empty">在左侧选择一篇笔记</div>
         <FindBar v-if="tabs.active && !chatShown" />
         <ChatView v-if="ui.chatOpen" v-show="chatShown" />
@@ -138,4 +142,5 @@ onBeforeUnmount(() => {
   <AiNoConfigDialog />
   <AiSummaryDialog />
   <AiStructureDialog />
+  <FlowGenDialog />
 </template>

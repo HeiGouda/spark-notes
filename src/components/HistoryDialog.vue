@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ask } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
+import DiagramPreview from "./DiagramPreview.vue";
 import { api } from "../lib/api";
 import { diffLines, type DiffLine } from "../lib/diff";
 import { formatGitWhen } from "../lib/gitTime";
@@ -21,6 +22,10 @@ const compare = ref(false);
 const loading = ref(false);
 
 const diff = computed<DiffLine[]>(() => (compare.value ? diffLines(preview.value, current.value) : []));
+const diagramKind = computed(() => {
+  const k = tabs.active?.kind;
+  return k === "mind" || k === "flow" ? k : null;
+});
 
 async function load() {
   const root = vault.root;
@@ -111,14 +116,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
           </li>
         </ul>
         <div class="hist-preview">
-          <pre v-if="!compare" class="hist-text">{{ preview }}</pre>
+          <!-- 图不提供对比：界面上不显示 Mermaid 文本（需求文档 5.8） -->
+          <DiagramPreview v-if="diagramKind" :key="selected" :kind="diagramKind" :text="preview" :name="tabs.active?.name ?? ''" />
+          <pre v-else-if="!compare" class="hist-text">{{ preview }}</pre>
           <div v-else class="hist-text">
             <div v-for="(line, i) in diff" :key="i" class="diff-line" :class="line.kind"><span class="diff-mark">{{ line.kind === "add" ? "+" : line.kind === "del" ? "−" : " " }}</span>{{ line.text }}</div>
           </div>
         </div>
       </div>
       <div v-if="versions.length" class="hist-foot">
-        <button class="fb-txt" type="button" @click="compare = !compare">{{ compare ? "查看原文" : "与当前对比" }}</button>
+        <button v-if="!diagramKind" class="fb-txt" type="button" @click="compare = !compare">{{ compare ? "查看原文" : "与当前对比" }}</button>
+        <span v-else />
+
         <button class="btn-primary" type="button" :disabled="!selected" @click="restore()">恢复此版本</button>
       </div>
     </div>

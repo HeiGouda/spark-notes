@@ -18,9 +18,17 @@ export interface VaultUiState {
   expanded: string[];
   sortKey: SortKey;
   sortDesc: boolean;
+  /** 图的视图状态（不写进文件）：相对路径 → 折叠的节点、缩放 */
+  diagrams: Record<string, DiagramViewState>;
 }
 
-export const DEFAULT_VAULT_UI: VaultUiState = { tabs: [], active: null, expanded: [], sortKey: "name", sortDesc: false };
+export interface DiagramViewState {
+  /** 折叠的思维导图节点，用从根节点起的文字路径标识 */
+  collapsed?: string[];
+  zoom?: number;
+}
+
+export const DEFAULT_VAULT_UI: VaultUiState = { tabs: [], active: null, expanded: [], sortKey: "name", sortDesc: false, diagrams: {} };
 
 /** 应用级设置（每台电脑各自一份，不随笔记库同步） */
 export interface AppSettings {
@@ -267,6 +275,15 @@ export const useSettingsStore = defineStore("settings", () => {
     vaultTimer = window.setTimeout(() => void save("vaults", vaults.value), VAULT_UI_SAVE_DELAY);
   }
 
+  function diagramView(root: string, path: string): DiagramViewState {
+    return vaultUi(root).diagrams[path] ?? {};
+  }
+
+  function patchDiagramView(root: string, path: string, patch: DiagramViewState) {
+    const diagrams = vaultUi(root).diagrams;
+    patchVaultUi(root, { diagrams: { ...diagrams, [path]: { ...diagrams[path], ...patch } } });
+  }
+
   /** 退出前立即写入尚在延迟中的界面状态 */
   async function flushVaultUi() {
     if (!vaultTimer) return;
@@ -408,7 +425,7 @@ export const useSettingsStore = defineStore("settings", () => {
     openLastVault, restoreTabs, zoom, editorFontSize, editorLineHeight, editorMaxWidth, codeLineNumbers, spellcheck, editorFont, vaultList, tidyRules, aiPreset, aiBaseUrl, aiModel, aiModels, aiProviderContexts,
     setShortcut, resetShortcut, resetAllShortcuts, replaceShortcuts,
     toggleToolbarButton, resetToolbarButtons, pushRecentCommand,
-    hydrate, vaultUi, patchVaultUi, flushVaultUi, setTheme, toggleDarkTheme, setLastVault, toggleSidebar, toggleToolbar, toggleStatusbar,
+    hydrate, vaultUi, patchVaultUi, flushVaultUi, diagramView, patchDiagramView, setTheme, toggleDarkTheme, setLastVault, toggleSidebar, toggleToolbar, toggleStatusbar,
     setOpenLastVault, setRestoreTabs, setZoom, patchEditor, rememberVault, forgetVault, setTidyRule, setAiPreset, setAiBaseUrl, setAiModels, setAiProviderContexts, contextOf,
   };
 });

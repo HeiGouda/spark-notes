@@ -3,7 +3,7 @@
 
 use crate::secret::{delete_secret, read_secret, write_secret};
 use crate::webdav::hash_bytes;
-use crate::{fsops, history, vault};
+use crate::{doctype, fsops, history, vault};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -449,34 +449,29 @@ fn ensure_gitignore(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 笔记、思维导图和流程图：自动提交时点名，冲突时保留两份
 fn is_note_path(path: &str) -> bool {
-    Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
-}
-
-fn stem_of(path: &str) -> String {
-    Path::new(path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string())
-}
-
-fn path_without_md(path: &str) -> String {
-    let p = Path::new(path);
-    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    match p.parent().map(|d| d.to_string_lossy().replace('\\', "/")) {
-        Some(dir) if !dir.is_empty() => format!("{dir}/{stem}"),
-        _ => stem,
-    }
+    doctype::is_doc(path)
 }
 
 fn format_group(label: &str, paths: &[String]) -> String {
-    let stems: Vec<String> = paths.iter().map(|p| stem_of(p)).collect();
-    let names: Vec<String> = paths
+    let stems: Vec<&str> = paths.iter().map(|p| doctype::display_name(p)).collect();
+    let base: Vec<String> = paths
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let dup = stems.iter().filter(|s| *s == &stems[i]).count() > 1;
-            if dup { path_without_md(p) } else { stems[i].clone() }
+            let dup = stems.iter().filter(|s| **s == stems[i]).count() > 1;
+            if dup { doctype::strip_ext(&p.replace('\\', "/")).to_string() } else { stems[i].to_string() }
+        })
+        .collect();
+    let names: Vec<String> = base
+        .iter()
+        .zip(paths)
+        .map(|(name, p)| match doctype::kind_of(p) {
+            Some(kind) if kind != doctype::DocKind::Note && base.iter().filter(|b| *b == name).count() > 1 => {
+                format!("{name}（{}）", kind.label())
+            }
+            _ => name.clone(),
         })
         .collect();
     let shown = if names.len() > 3 {
@@ -487,7 +482,7 @@ fn format_group(label: &str, paths: &[String]) -> String {
     format!("{label} {} 篇（{shown}）", names.len())
 }
 
-/// `prefix` 为「自动提交」或「拉取前自动提交」。只点名 `.md`，其余文件另计。
+/// `prefix` 为「自动提交」或「拉取前自动提交」。只点名笔记和图，其余文件另计。
 pub fn auto_commit_message(prefix: &str, changes: &[ParsedChange]) -> String {
     let mut parts = Vec::new();
     for (kind, label) in [(ChangeKind::Added, "新增"), (ChangeKind::Modified, "修改"), (ChangeKind::Deleted, "删除")] {
@@ -511,15 +506,20 @@ pub fn auto_commit_message(prefix: &str, changes: &[ParsedChange]) -> String {
     format!("{prefix}：{body}")
 }
 
-/// 冲突副本的相对路径。`seq <= 1` 不加序号，从 2 起写成 ` 2`。
+/// 冲突副本的相对路径，保留原来的类型扩展名。`seq <= 1` 不加序号，从 2 起写成 ` 2`。
 pub fn conflict_rel(path: &str, computer: &str, stamp: &str, seq: u32) -> String {
     let slash = path.replace('\\', "/");
-    let p = Path::new(&slash);
-    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "笔记".into());
-    let parent = p.parent().map(|d| d.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+    let (dir, file) = match slash.rfind('/') {
+        Some(i) => (&slash[..i], &slash[i + 1..]),
+        None => ("", slash.as_str()),
+    };
+    let (stem, ext) = match doctype::split(file) {
+        Some((stem, _)) => (stem, &file[stem.len()..]),
+        None => (file, ".md"),
+    };
     let suffix = if seq <= 1 { String::new() } else { format!(" {seq}") };
-    let file = format!("{stem} (冲突 {computer} {stamp}){suffix}.md");
-    if parent.is_empty() { file } else { format!("{parent}/{file}") }
+    let file = format!("{stem} (冲突 {computer} {stamp}){suffix}{ext}");
+    if dir.is_empty() { file } else { format!("{dir}/{file}") }
 }
 
 fn xy_bytes(field: &str) -> (u8, u8) {
@@ -632,7 +632,7 @@ fn display_change(change: &ParsedChange) -> GitChange {
         Some(i) => (slash[..i].to_string(), slash[i + 1..].to_string()),
         None => (String::new(), slash.clone()),
     };
-    let name = if is_note_path(&file) { stem_of(&file) } else { file };
+    let name = if is_note_path(&file) { doctype::display_name(&file).to_string() } else { file };
     GitChange { path: slash, letter: change.letter.to_string(), name, dir }
 }
 
@@ -1577,6 +1577,17 @@ mod tests {
             auto_commit_message("自动提交", &[ch("a.png", ChangeKind::Modified), ch("b.png", ChangeKind::Added)]),
             "自动提交：其他文件 2 个"
         );
+        let diagrams = vec![
+            ch("工作/上线流程.flow.mmd", ChangeKind::Modified),
+            ch("周报.md", ChangeKind::Modified),
+            ch("周报.mind.mmd", ChangeKind::Added),
+        ];
+        assert_eq!(
+            auto_commit_message("自动提交", &diagrams),
+            "自动提交：新增 1 篇（周报）、修改 2 篇（上线流程、周报）"
+        );
+        let same_name = vec![ch("周报.md", ChangeKind::Modified), ch("周报.flow.mmd", ChangeKind::Modified)];
+        assert_eq!(auto_commit_message("自动提交", &same_name), "自动提交：修改 2 篇（周报、周报（流程图））");
         assert_eq!(
             auto_commit_message("拉取前自动提交", &[ch("周报.md", ChangeKind::Modified)]),
             "拉取前自动提交：修改 1 篇（周报）"
@@ -1597,6 +1608,10 @@ mod tests {
         assert_eq!(
             conflict_rel("周报.md", "OFFICE", "2026-09-28 1026", 2),
             "周报 (冲突 OFFICE 2026-09-28 1026) 2.md"
+        );
+        assert_eq!(
+            conflict_rel("工作/上线流程.flow.mmd", "OFFICE", "2026-09-28 1026", 1),
+            "工作/上线流程 (冲突 OFFICE 2026-09-28 1026).flow.mmd"
         );
     }
 

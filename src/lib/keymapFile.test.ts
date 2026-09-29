@@ -23,6 +23,15 @@ describe("keymap 导入导出", () => {
     expect(() => parseKeymap(text, ids)).toThrow(/同时分配/);
   });
 
+  it("编辑器和图的快捷键可以相同，图里允许单个按键", () => {
+    const scopeOf = (id: string) => (id === "a" ? "editor" : id === "b" ? "diagram" : "global") as "editor" | "diagram" | "global";
+    const same = JSON.stringify({ keybindings: { a: "Ctrl+Alt+K", b: "Ctrl+Alt+K" } });
+    expect(parseKeymap(same, ids, scopeOf).keybindings).toEqual({ a: "Ctrl+Alt+K", b: "Ctrl+Alt+K" });
+    const withGlobal = JSON.stringify({ keybindings: { b: "Ctrl+Alt+K", c: "Ctrl+Alt+K" } });
+    expect(() => parseKeymap(withGlobal, ids, scopeOf)).toThrow(/同时分配/);
+    expect(parseKeymap(JSON.stringify({ keybindings: { b: "Enter" } }), ids, scopeOf).keybindings).toEqual({ b: "Enter" });
+  });
+
   it("格式错误", () => {
     expect(() => parseKeymap("不是 json", ids)).toThrow();
     expect(() => parseKeymap("{}", ids)).toThrow(/keybindings/);

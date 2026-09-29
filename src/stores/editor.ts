@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, markRaw, ref, shallowRef } from "vue";
-import type { Editor } from "@milkdown/kit/core";
+import { editorViewCtx, type Editor } from "@milkdown/kit/core";
 import { currentHeadingIndex, type Heading } from "../editor/navigate";
 
 export interface ActiveMarks {
@@ -53,5 +53,15 @@ export const useEditorStore = defineStore("editor", () => {
     if (pullFn && (notePath === undefined || notePath === path.value)) pullFn();
   }
 
-  return { editor, path, block, marks, line, col, words, docVersion, headings, cursor, currentHeading, attach, detach, pull };
+  /** 当前选中的文字（段落之间换行） */
+  function selectionText(): string {
+    const e = editor.value;
+    if (!e) return "";
+    return e.action((ctx) => {
+      const { from, to } = ctx.get(editorViewCtx).state.selection;
+      return ctx.get(editorViewCtx).state.doc.textBetween(from, to, "\n", " ");
+    });
+  }
+
+  return { editor, path, block, marks, line, col, words, docVersion, headings, cursor, currentHeading, attach, detach, pull, selectionText };
 });

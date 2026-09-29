@@ -5,6 +5,7 @@ import { fuzzyMatch, highlightSegments } from "../lib/fuzzy";
 import { isEnabled, listCommands, runCommand, shortcutOf, type AppCommand } from "../lib/commands";
 import { displayShortcut } from "../lib/shortcut";
 import { dirOf } from "../lib/api";
+import { DOC_ICON, docKind } from "../lib/doctype";
 import { useUiStore } from "../stores/ui";
 import { useSettingsStore } from "../stores/settings";
 import { useVaultStore } from "../stores/vault";
@@ -27,6 +28,7 @@ interface Row {
   detail: string;
   shortcut: string[];
   group?: string;
+  icon?: string;
   run: () => void;
 }
 
@@ -75,12 +77,13 @@ function fileRow(path: string, indices: number[]): Row {
     label: highlightSegments(name, indices),
     detail: dirOf(path) || "根目录",
     shortcut: [],
+    icon: DOC_ICON[docKind(path) ?? "note"],
     run: () => void tabs.open(path),
   };
 }
 
 const fileRows = computed<Row[]>(() => {
-  const all = vault.notePaths;
+  const all = vault.docPaths;
   const q = query.value.trim();
   if (!q) {
     // 最近打开的在前（跳转历史倒序），其余按名称
@@ -157,7 +160,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocDown, true)
     <input
       ref="input"
       v-model="query"
-      :placeholder="mode === 'files' ? '按笔记名搜索' : '输入命令名称'"
+      :placeholder="mode === 'files' ? '按笔记或图的名称搜索' : '输入命令名称'"
       spellcheck="false"
       @keydown="onKey"
     />
@@ -165,7 +168,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocDown, true)
       <template v-for="(r, i) in rows" :key="r.key">
         <div v-if="r.group" class="pal-group">{{ r.group }}</div>
         <div class="pal-row" :class="{ on: i === index }" @mouseenter="index = i" @mousedown.prevent @click="choose(i)">
-          <Icon v-if="mode === 'files'" name="file" sm />
+          <Icon v-if="r.icon" :name="r.icon" sm />
           <span class="pt"><template v-for="(s, j) in r.label" :key="j"><b v-if="s.hit">{{ s.text }}</b><template v-else>{{ s.text }}</template></template></span>
           <span class="pc">{{ r.detail }}</span>
           <span v-if="r.shortcut.length" class="kbd"><span v-for="k in r.shortcut" :key="k">{{ k }}</span></span>

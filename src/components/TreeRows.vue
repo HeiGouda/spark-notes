@@ -8,9 +8,10 @@ import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { useNoticeStore } from "../stores/notice";
 import { useContextMenuStore } from "../stores/contextMenu";
-import { shortcutOf } from "../lib/commands";
-import { displayShortcut } from "../lib/shortcut";
 import { fileManagerName, isMac } from "../lib/platform";
+import { DOC_ICON, DOC_TAG, docKind } from "../lib/doctype";
+import { newItems } from "../lib/newMenu";
+import { useMindGenStore } from "../stores/mindGen";
 
 defineProps<{ nodes: TreeNode[]; depth: number }>();
 const vault = useVaultStore();
@@ -62,9 +63,11 @@ function onMenu(e: MouseEvent, node: TreeNode) {
   vault.selected = node.path;
   const dir = node.isDir ? node.path : dirOf(node.path);
   const items: MenuEntry[] = [
-    { kind: "item", label: "新建笔记", hint: displayShortcut(shortcutOf("file.newNote")), action: () => vault.newNote(dir) },
-    { kind: "item", label: "新建文件夹", hint: displayShortcut(shortcutOf("file.newFolder")), action: () => vault.newFolder(dir) },
+    ...newItems(dir),
     { kind: "sep" },
+    ...(docKind(node.path) === "note"
+      ? [{ kind: "item", label: "用 AI 生成思维导图", action: () => useMindGenStore().start(node.path) } as MenuEntry, { kind: "sep" } as MenuEntry]
+      : []),
     { kind: "item", label: "重命名", hint: "F2", action: () => (vault.renaming = node.path) },
     { kind: "item", label: "删除", hint: isMac ? "Cmd+Backspace" : "Delete", action: () => vault.trash(node.path) },
     { kind: "sep" },
@@ -184,7 +187,7 @@ function dropClass(node: TreeNode) {
     >
       <Icon v-if="node.isDir" class="chev" :name="vault.expanded.has(node.path) ? 'down' : 'right'" />
       <span v-else class="spacer" />
-      <Icon :name="node.isDir ? 'folder' : 'file'" />
+      <Icon :name="node.isDir ? 'folder' : DOC_ICON[docKind(node.path) ?? 'note']" />
       <input
         v-if="vault.renaming === node.path"
         class="row-rename"
@@ -196,6 +199,7 @@ function dropClass(node: TreeNode) {
         @blur="commitRename(node, $event.target as HTMLInputElement)"
       />
       <span v-else class="name">{{ node.name }}</span>
+      <span v-if="!node.isDir && DOC_TAG[docKind(node.path) ?? 'note']" class="kind-tag">{{ DOC_TAG[docKind(node.path) ?? 'note'] }}</span>
       <Icon v-if="vault.favorites.has(node.path)" class="star" name="star" sm />
     </li>
     <TreeRows v-if="node.isDir && vault.expanded.has(node.path)" :nodes="node.children" :depth="depth + 1" />

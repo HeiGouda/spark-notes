@@ -83,19 +83,22 @@ export const RESERVED_SHORTCUTS = isMac
 /** Windows 默认快捷键在 macOS 上被系统占用或不合习惯时，改用的默认值：命令 id → 快捷键 */
 export const MAC_DEFAULT_SHORTCUTS: Record<string, string> = {
   "edit.redo": "Ctrl+Shift+Z",
+  "diagram.redo": "Ctrl+Shift+Z",
   "edit.replace": "Ctrl+Alt+F",
   "tab.next": "Ctrl+Shift+]",
   "tab.prev": "Ctrl+Shift+[",
   // Option+方向键在 macOS 上是按词移动光标
   "nav.back": "Ctrl+[",
   "nav.forward": "Ctrl+]",
+  "diagram.summary": "Ctrl+Alt+]",
   "format.quote": "Ctrl+Alt+Q",
 };
 
-/** 校验能否作为快捷键；不能时返回原因 */
-export function shortcutProblem(spec: string): string | null {
+/** 校验能否作为快捷键；不能时返回原因。图的编辑区不输入文字，单个按键也可以 */
+export function shortcutProblem(spec: string, scope?: string): string | null {
   const s = normalizeShortcut(spec);
   if (RESERVED_SHORTCUTS.includes(s)) return `${displayShortcut(s)} 是保留组合键，不能占用`;
+  if (scope === "diagram") return null;
   const p = parse(s);
   const fnKey = /^F\d{1,2}$/.test(p.key);
   const editKey = p.key === "Tab" && !p.ctrl && !p.alt;

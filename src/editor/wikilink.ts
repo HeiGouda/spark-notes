@@ -4,6 +4,7 @@ import { InputRule } from "@milkdown/kit/prose/inputrules";
 import { Plugin, PluginKey, type EditorState } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { Node as PmNode } from "@milkdown/kit/prose/model";
+import { linkDisplay } from "../lib/links";
 
 /**
  * 双向链接 `[[目标]]`、`[[目标|显示文字]]`、`[[目标#标题]]`。
@@ -28,8 +29,13 @@ export function parseWiki(value: string): WikiParts {
 export function wikiLabel(value: string): string {
   const { target, heading, alias } = parseWiki(value);
   if (alias) return alias;
-  const name = target.split("/").pop() || target;
+  const name = linkDisplay(target.split("/").pop() || target).label;
   return heading ? (name ? `${name} › ${heading}` : heading) : name;
+}
+
+/** 链接到思维导图 / 流程图时的类型，用于显示图标 */
+export function wikiKind(value: string): "flow" | "mind" | null {
+  return linkDisplay(parseWiki(value).target).kind;
 }
 
 const WIKI_RE = /\[\[([^[\]\n]+?)\]\]/g;
@@ -80,7 +86,11 @@ export const wikiSchema = $nodeSchema("wikilink", () => ({
   ],
   toDOM: (node) => [
     "span",
-    { class: "wikilink", "data-wikilink": node.attrs.value, title: `[[${node.attrs.value}]]` },
+    {
+      class: wikiKind(node.attrs.value as string) ? `wikilink wikilink-${wikiKind(node.attrs.value as string)}` : "wikilink",
+      "data-wikilink": node.attrs.value,
+      title: `[[${node.attrs.value}]]`,
+    },
     wikiLabel(node.attrs.value as string),
   ],
   parseMarkdown: {

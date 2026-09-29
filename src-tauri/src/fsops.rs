@@ -1,6 +1,7 @@
 //! 笔记库内的文件操作：新建、重命名、移动、移入回收站、附件、笔记库配置。
-//! 笔记的附件目录 `笔记名.assets/` 始终跟随笔记一起重命名、移动和删除。
+//! 笔记的附件目录 `笔记名.assets/` 始终跟随笔记一起重命名、移动和删除；思维导图和流程图没有附件目录。
 
+use crate::doctype::{self, DocKind};
 use crate::vault::{atomic_write, rel_of, resolve, resolve_dir};
 use serde::Serialize;
 use serde_json::json;
@@ -80,16 +81,22 @@ fn require_dir(path: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 pub fn create_note(root: &Path, dir_rel: &str, name: Option<&str>) -> Result<String, String> {
+    create_doc(root, dir_rel, name, DocKind::Note)
+}
+
+/// 新建空文件。空的思维导图和流程图打开时按空白图显示，第一次编辑才写入内容。
+pub fn create_doc(root: &Path, dir_rel: &str, name: Option<&str>, kind: DocKind) -> Result<String, String> {
     let dir = resolve_dir(root, dir_rel)?;
     require_dir(&dir)?;
     let stem = validate_name(name.unwrap_or("未命名"))?;
-    let path = unique_path(&dir, &stem, ".md");
+    let path = unique_path(&dir, &stem, kind.ext());
     OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&path)
-        .map_err(|e| io_err("新建笔记失败", &path, e))?;
+        .map_err(|e| io_err(&format!("新建{}失败", kind.label()), &path, e))?;
     rel_of(root, &path)
 }
 
@@ -132,11 +139,15 @@ pub fn rewrite_asset_refs(content: &str, old_stem: &str, new_stem: &str) -> Stri
     out
 }
 
-/// 移动或重命名笔记文件，并带上它的附件目录；附件目录移动失败时把笔记移回原处
+fn is_note(path: &Path) -> bool {
+    doctype::kind_of(&path.to_string_lossy()) == Some(DocKind::Note)
+}
+
+/// 移动或重命名文件；笔记带上它的附件目录，附件目录移动失败时把笔记移回原处
 fn move_note(src: &Path, dst: &Path) -> Result<(), String> {
     let src_assets = assets_dir(src);
     let dst_assets = assets_dir(dst);
-    let has_assets = src_assets.is_dir();
+    let has_assets = is_note(src) && src_assets.is_dir();
     if has_assets && dst_assets.exists() && !same_path_ignoring_case(&src_assets, &dst_assets) {
         return Err(format!("目标位置已存在附件目录：{}", dst_assets.display()));
     }
@@ -174,15 +185,16 @@ pub fn rename_entry(root: &Path, rel: &str, new_name: &str) -> Result<String, St
         return rel_of(root, &dst);
     }
 
-    let dst = parent.join(format!("{name}.md"));
+    let kind = doctype::kind_of(rel).ok_or_else(|| format!("不支持的文件类型：{rel}"))?;
+    let dst = parent.join(format!("{name}{}", kind.ext()));
     if dst == src {
         return Ok(rel.to_string());
     }
     if dst.exists() && !same_path_ignoring_case(&src, &dst) {
-        return Err(format!("已存在同名笔记：{name}"));
+        return Err(format!("已存在同名{}：{name}", kind.label()));
     }
     let old_stem = note_stem(&src);
-    let had_assets = assets_dir(&src).is_dir();
+    let had_assets = kind == DocKind::Note && assets_dir(&src).is_dir();
     move_note(&src, &dst)?;
     if had_assets {
         let content = fs::read_to_string(&dst).map_err(|e| io_err("读取笔记失败", &dst, e))?;
@@ -277,11 +289,10 @@ fn read_meta(bucket: &Path) -> Result<serde_json::Value, String> {
 }
 
 fn item_name(path: &str, is_dir: bool) -> String {
-    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    if !is_dir && file.len() > 3 && file.to_ascii_lowercase().ends_with(".md") {
-        file[..file.len() - 3].to_string()
+    if is_dir {
+        path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
     } else {
-        file.to_string()
+        doctype::display_name(path).to_string()
     }
 }
 
@@ -447,6 +458,38 @@ mod tests {
         assert_eq!(create_note(root, "新建文件夹", Some("周报")).unwrap(), "新建文件夹/周报.md");
         assert!(create_note(root, "missing", None).is_err());
         assert!(create_folder(root, "", Some("x.assets")).is_err());
+    }
+
+    #[test]
+    fn create_diagrams_as_empty_files_with_their_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        assert_eq!(create_doc(root, "", None, DocKind::Mind).unwrap(), "未命名.mind.mmd");
+        assert_eq!(create_doc(root, "", None, DocKind::Mind).unwrap(), "未命名 1.mind.mmd");
+        assert_eq!(create_doc(root, "", Some("上线"), DocKind::Flow).unwrap(), "上线.flow.mmd");
+        assert_eq!(create_note(root, "", Some("上线")).unwrap(), "上线.md");
+        assert_eq!(fs::read_to_string(root.join("上线.flow.mmd")).unwrap(), "");
+    }
+
+    #[test]
+    fn diagrams_keep_extension_and_never_take_the_notes_assets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        touch(&root.join("d/周报.md"), "![](周报.assets/a.png)");
+        touch(&root.join("d/周报.assets/a.png"), "img");
+        touch(&root.join("d/周报.flow.mmd"), "flowchart TD\n");
+        assert!(rename_entry(root, "d/周报.flow.mmd", "周报").is_ok());
+        assert_eq!(rename_entry(root, "d/周报.flow.mmd", "上线").unwrap(), "d/上线.flow.mmd");
+        assert!(root.join("d/周报.assets/a.png").exists());
+        touch(&root.join("d/上线.mind.mmd"), "mindmap\n");
+        assert!(rename_entry(root, "d/上线.mind.mmd", "上线").is_ok());
+        touch(&root.join("d/x.mind.mmd"), "");
+        assert!(rename_entry(root, "d/x.mind.mmd", "上线").unwrap_err().contains("已存在同名思维导图"));
+        fs::create_dir_all(root.join("e")).unwrap();
+        assert_eq!(move_entry(root, "d/上线.flow.mmd", "e").unwrap(), "e/上线.flow.mmd");
+        trash_entry(root, "e/上线.flow.mmd").unwrap();
+        assert_eq!(trash_list(root).unwrap()[0].name, "上线");
+        assert!(root.join("d/周报.assets/a.png").exists());
     }
 
     #[test]

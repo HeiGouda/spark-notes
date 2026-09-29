@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { api, baseName, dirOf, isWithin, remapPath, type TreeNode } from "../lib/api";
 import { sortTree, type CustomOrder } from "../lib/treeSort";
+import { DOC_LABEL, docKind, type DocKind } from "../lib/doctype";
 import { useSettingsStore, type SortKey } from "./settings";
 import { useNoticeStore } from "./notice";
 import { useTabsStore } from "./tabs";
@@ -49,13 +50,16 @@ export const useVaultStore = defineStore("vault", () => {
 
   const sortedTree = computed(() => sortTree(tree.value, sortKey.value, sortDesc.value, customOrder.value));
 
-  /** 所有笔记的相对路径，用于双向链接补全 */
-  const notePaths = computed(() => {
+  /** 笔记和图的相对路径，用于快速打开 */
+  const docPaths = computed(() => {
     const out: string[] = [];
     const walk = (nodes: TreeNode[]) => nodes.forEach((n) => (n.isDir ? walk(n.children) : out.push(n.path)));
     walk(tree.value);
     return out;
   });
+
+  /** 所有笔记的相对路径，用于双向链接补全 */
+  const notePaths = computed(() => docPaths.value.filter((p) => docKind(p) === "note"));
 
   const notice = () => useNoticeStore();
 
@@ -224,19 +228,21 @@ export const useVaultStore = defineStore("vault", () => {
     return activePath ? dirOf(activePath) : "";
   }
 
-  async function newNote(dir = targetDir()): Promise<void> {
+  async function newDoc(kind: DocKind, dir = targetDir()): Promise<void> {
     if (!root.value) return;
     try {
-      const rel = await api.createNote(root.value, dir);
+      const rel = await api.createNote(root.value, dir, undefined, kind);
       await refresh();
       reveal(rel);
       selected.value = rel;
       await useTabsStore().open(rel);
       renaming.value = rel;
     } catch (e) {
-      notice().report("新建笔记失败", e);
+      notice().report(`新建${DOC_LABEL[kind]}失败`, e);
     }
   }
+
+  const newNote = (dir?: string) => newDoc("note", dir);
 
   async function newFolder(dir = targetDir()): Promise<void> {
     if (!root.value) return;
@@ -358,7 +364,10 @@ export const useVaultStore = defineStore("vault", () => {
     if (!root.value) return;
     const n = node(path);
     if (!n) return;
-    const what = n.isDir ? `文件夹“${n.name}”及其中的所有内容` : `笔记“${n.name}”及其附件`;
+    const kind = docKind(path);
+    const what = n.isDir
+      ? `文件夹“${n.name}”及其中的所有内容`
+      : kind === "note" || !kind ? `笔记“${n.name}”及其附件` : `${DOC_LABEL[kind]}“${n.name}”`;
     const ok = await ask(`确定删除${what}吗？\n\n将移入笔记库的回收站（.ttnote/trash），之后可以恢复。`, {
       title: "删除",
       kind: "warning",
@@ -416,7 +425,7 @@ export const useVaultStore = defineStore("vault", () => {
   return {
     root, tree, sortedTree, expanded, selected, renaming, sortKey, sortDesc, customOrder, favorites, loadError, switching, name,
     openVault, pickAndOpen, refresh, node, toggle, expand, collapseAll, reveal, targetDir,
-    newNote, newFolder, rename, move, place, trash, setSort, absolutePath,
-    favoriteList, toggleFavorite, reorderFavorite, notePaths,
+    newNote, newDoc, newFolder, rename, move, place, trash, setSort, absolutePath,
+    favoriteList, toggleFavorite, reorderFavorite, notePaths, docPaths,
   };
 });

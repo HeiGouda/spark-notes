@@ -6,14 +6,21 @@ import { MAC_DEFAULT_SHORTCUTS, matchShortcut, normalizeShortcut, withShortcut }
  * 命令注册表。菜单、按钮、快捷键、命令面板都通过命令 id 调用同一实现。
  * 快捷键 = 用户自定义（应用级设置）优先，否则为默认值（需求文档 5.13）。
  */
-export type CommandScope = "global" | "editor";
+export type CommandScope = "global" | "editor" | "diagram";
+
+export const SCOPE_LABEL: Record<CommandScope, string> = { global: "全局", editor: "编辑器", diagram: "图" };
+
+/** 两个作用范围的快捷键会不会互相抢：全局与任何范围都冲突，编辑器和图互不影响 */
+export function scopesClash(a: CommandScope, b: CommandScope): boolean {
+  return a === b || a === "global" || b === "global";
+}
 
 export interface AppCommand {
   id: string;
   title: string;
   /** 命令面板和快捷键设置里的分组 */
   category: string;
-  /** global：任何地方都生效；editor：只在编辑器获得焦点时生效 */
+  /** global：任何地方都生效；editor：只在笔记编辑器获得焦点时生效；diagram：只在图的编辑区获得焦点时生效 */
   scope?: CommandScope;
   /** 默认快捷键，null 表示默认无 */
   defaultShortcut: string | null;
@@ -82,11 +89,12 @@ export function dispatchShortcut(e: KeyboardEvent, scope: CommandScope = "global
   return null;
 }
 
-/** 已占用该快捷键的其他命令 */
+/** 已占用该快捷键、且作用范围会冲突的其他命令 */
 export function findConflict(spec: string, exceptId?: string): AppCommand | null {
   const want = normalizeShortcut(spec);
+  const scope = (exceptId && registry.get(exceptId)?.scope) || "global";
   for (const c of registry.values()) {
-    if (c.id === exceptId) continue;
+    if (c.id === exceptId || !scopesClash(scope, c.scope ?? "global")) continue;
     const s = shortcutOf(c.id);
     if (s && normalizeShortcut(s) === want) return c;
   }

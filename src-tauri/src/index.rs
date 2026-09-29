@@ -2,7 +2,9 @@
 
 #[cfg(test)]
 use crate::notes::resolve_link;
-use crate::notes::{map_wikilinks, parse, parse_query, snippet, tokenize, LinkIndex, Segment};
+use crate::diagram_text;
+use crate::doctype::{self, DocKind};
+use crate::notes::{link_base, map_wikilinks, parse, parse_query, snippet, strip_md, tokenize, LinkIndex, Segment};
 use crate::vault::{atomic_write, rel_of};
 use rusqlite::{params, Connection};
 #[cfg(test)]
@@ -66,7 +68,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
         let path = entry.path();
         if ft.is_dir() {
             walk(root, &path, out);
-        } else if ft.is_file() && name.to_lowercase().ends_with(".md") {
+        } else if ft.is_file() && doctype::is_doc(&name) {
             if let Ok(rel) = rel_of(root, &path) {
                 out.push((rel, path));
             }
@@ -74,15 +76,17 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
     }
 }
 
-fn stem(rel: &str) -> String {
-    let file = rel.rsplit('/').next().unwrap_or(rel);
-    file.strip_suffix(".md").or_else(|| file.strip_suffix(".MD")).unwrap_or(file).to_string()
-}
-
 fn index_one(conn: &Connection, rel: &str, content: &str, mtime: i64, size: i64) -> rusqlite::Result<()> {
     remove_one(conn, rel)?;
-    let parsed = parse(content);
-    let title = stem(rel);
+    let parsed = match doctype::kind_of(rel) {
+        // 图没有标签和链接；无法显示的图只按文件名搜索
+        Some(kind @ (DocKind::Mind | DocKind::Flow)) => crate::notes::Parsed {
+            body: diagram_text::extract(kind, content).unwrap_or_default(),
+            ..Default::default()
+        },
+        _ => parse(content),
+    };
+    let title = doctype::display_name(rel).to_string();
     conn.execute(
         "INSERT INTO notes(path, title, mtime, size, body) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![rel, title, mtime, size, parsed.body],
@@ -95,9 +99,7 @@ fn index_one(conn: &Connection, rel: &str, content: &str, mtime: i64, size: i64)
         conn.execute("INSERT INTO tags(path, tag) VALUES (?1, ?2)", params![rel, tag])?;
     }
     for link in &parsed.links {
-        let base = link.target.replace('\\', "/");
-        let base = base.rsplit('/').next().unwrap_or(&base);
-        let base = base.strip_suffix(".md").unwrap_or(base).to_lowercase();
+        let base = link_base(&link.target);
         conn.execute(
             "INSERT INTO links(src, raw, target, base, line) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![rel, link.raw, link.target, base, link.line],
@@ -272,7 +274,7 @@ pub struct Backlink {
 pub fn backlinks(conn: &Connection, path: &str) -> Result<Vec<Backlink>, String> {
     let all = all_paths(conn)?;
     let links = LinkIndex::new(&all);
-    let base = stem(path).to_lowercase();
+    let base = link_base(path);
     let mut stmt = conn
         .prepare("SELECT l.src, n.title, l.target, l.line FROM links l JOIN notes n ON n.path = l.src WHERE l.base = ?1")
         .map_err(db_err)?;
@@ -308,19 +310,13 @@ pub fn rewrite_links(conn: &Connection, root: &Path, from: &str, to: &str) -> Re
     let after_links = LinkIndex::new(&after);
 
     // 链接的 base 是目标的笔记名（小写），只有指向被移动笔记名字的链接才可能需要改写，其余笔记不必读取
-    let moved_bases: HashSet<String> = moved
-        .keys()
-        .map(|p| {
-            let s = stem(p).to_lowercase();
-            s.strip_suffix(".md").map(str::to_string).unwrap_or(s)
-        })
-        .collect();
+    let moved_bases: HashSet<String> = moved.keys().map(|p| link_base(p)).collect();
     let mut stmt = conn.prepare("SELECT DISTINCT src, base FROM links").map_err(db_err)?;
     let mut sources: BTreeSet<String> = BTreeSet::new();
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db_err)?;
     for row in rows {
         let (src, base) = row.map_err(db_err)?;
-        if moved_bases.contains(base.strip_suffix(".md").unwrap_or(&base)) {
+        if moved_bases.contains(&link_base(&base)) {
             sources.insert(src);
         }
     }
@@ -339,7 +335,7 @@ pub fn rewrite_links(conn: &Connection, root: &Path, from: &str, to: &str) -> Re
             let old = before_links.resolve(target, &src)?;
             let new_path = moved.get(old)?;
             let had_path = target.contains('/');
-            let as_path = new_path.strip_suffix(".md").unwrap_or(new_path).to_string();
+            let as_path = strip_md(new_path).to_string();
             let text = if had_path {
                 as_path
             } else {
@@ -502,5 +498,33 @@ mod tests {
         assert!(after.contains("[[工作/周总结#本周|周报]]"));
         assert!(after.contains("```md\n[[工作/周报]]\n```"));
         assert!(after.contains("`[[周报]]`"));
+    }
+
+    #[test]
+    fn diagrams_are_searchable_and_linked_by_suffix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        touch(root, "工作/上线流程.md", "上线的说明\n");
+        touch(root, "工作/上线流程.flow.mmd", "flowchart TD\n  test{测试通过？} -->|是| stage[部署预发]\n");
+        touch(root, "工作/坏图.flow.mmd", "flowchart TD\n  subgraph 部署预发\n  end\n");
+        touch(root, "发布规范.md", "按 [[上线流程.flow]] 执行\n另见 [[上线流程]]\n");
+        let mut conn = open(root).unwrap();
+        assert_eq!(sync(&mut conn, root).unwrap().total, 4);
+
+        let hits = search(&conn, "部署预发", 20).unwrap();
+        let paths: Vec<_> = hits.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(paths, vec!["工作/上线流程.flow.mmd"]);
+        assert_eq!(hits[0].title, "上线流程");
+        assert_eq!(search(&conn, "坏图", 20).unwrap()[0].path, "工作/坏图.flow.mmd");
+
+        let to_flow = backlinks(&conn, "工作/上线流程.flow.mmd").unwrap();
+        assert_eq!(to_flow.iter().map(|b| b.line.as_str()).collect::<Vec<_>>(), vec!["按 [[上线流程.flow]] 执行"]);
+        let to_note = backlinks(&conn, "工作/上线流程.md").unwrap();
+        assert_eq!(to_note.iter().map(|b| b.line.as_str()).collect::<Vec<_>>(), vec!["另见 [[上线流程]]"]);
+
+        fs::rename(root.join("工作/上线流程.flow.mmd"), root.join("工作/发布流程.flow.mmd")).unwrap();
+        let changed = rewrite_links(&conn, root, "工作/上线流程.flow.mmd", "工作/发布流程.flow.mmd").unwrap();
+        assert_eq!(changed, vec!["发布规范.md"]);
+        assert_eq!(fs::read_to_string(root.join("发布规范.md")).unwrap(), "按 [[发布流程.flow]] 执行\n另见 [[上线流程]]\n");
     }
 }

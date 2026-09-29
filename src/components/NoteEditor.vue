@@ -7,7 +7,8 @@ import BacklinksPanel from "./BacklinksPanel.vue";
 import { externalUrl } from "../editor/link";
 import { parseWiki } from "../editor/wikilink";
 import { goToHeading, goToText } from "../editor/navigate";
-import { linkCandidates, resolveLink } from "../lib/links";
+import { linkCandidates, linkDisplay, resolveLink } from "../lib/links";
+import { DOC_LABEL } from "../lib/doctype";
 import { inlineTags, mergeTags, parseTagInput } from "../lib/tags";
 import { useUiStore } from "../stores/ui";
 import { dispatchShortcut, runCommand, shortcutOf } from "../lib/commands";
@@ -23,6 +24,8 @@ import { createEditor, readMarkdown } from "../editor/createEditor";
 import { useTabsStore, type Tab } from "../stores/tabs";
 import { useEditorStore } from "../stores/editor";
 import { useNoticeStore } from "../stores/notice";
+import { useContextMenuStore } from "../stores/contextMenu";
+import { useFlowGenStore } from "../stores/flowGen";
 
 const props = defineProps<{ tab: Tab }>();
 
@@ -41,6 +44,20 @@ let baseline: string | null = null;
 /** 斜杠菜单的 h1~h3 对应标题级别命令，其余对应格式工具的命令 */
 function formatCommandId(id: string): string {
   return /^h\d$/.test(id) ? `format.${id}` : commandIdOf(id);
+}
+
+/* ---------- 右键菜单：选中文字时可以用来生成流程图，没有选中时保持系统菜单 ---------- */
+const ctxMenu = useContextMenuStore();
+function onEditorMenu(e: MouseEvent) {
+  const text = editorStore.path === props.tab.path ? editorStore.selectionText().trim() : "";
+  if (!text) return;
+  ctxMenu.show(e, [
+    { kind: "item", label: "剪切", command: "edit.cut" },
+    { kind: "item", label: "复制", command: "edit.copy" },
+    { kind: "item", label: "粘贴", command: "edit.paste" },
+    { kind: "sep" },
+    { kind: "item", label: "用选中文字生成流程图", action: () => useFlowGenStore().openDialog({ kind: "folder", folder: dirOf(props.tab.path) }, text) },
+  ]);
 }
 
 /* ---------- 附件 ---------- */
@@ -126,7 +143,7 @@ async function mountEditor(markdown: string) {
           openUrl(url).catch((err) => useNoticeStore().report("打开链接失败", err));
           return;
         }
-        const path = resolveLink(href, props.tab.path, vault.notePaths);
+        const path = resolveLink(href, props.tab.path, vault.docPaths);
         if (path) {
           void tabs.open(path);
           return;
@@ -148,7 +165,7 @@ async function mountEditor(markdown: string) {
       onError: (context, err) => useNoticeStore().report(context, err),
       attachments: { resolve: resolveSrc, save: saveFile },
       wiki: {
-        candidates: (q) => linkCandidates(q, vault.notePaths, props.tab.path),
+        candidates: (q) => linkCandidates(q, vault.docPaths, props.tab.path),
         open: (value) => void openWiki(value),
       },
     });
@@ -230,23 +247,25 @@ async function openWiki(value: string) {
     if (heading && editor) goToHeading(editor, heading);
     return;
   }
-  const path = resolveLink(target, props.tab.path, vault.notePaths);
+  const path = resolveLink(target, props.tab.path, vault.docPaths);
   if (path) return tabs.openAt(path, heading ? { heading } : {});
-  const create = await ask(`笔记“${target}”不存在，是否创建？`, {
+  const { label, kind } = linkDisplay(target.replace(/\.mmd$/i, ""));
+  const what = DOC_LABEL[kind ?? "note"];
+  const create = await ask(`${what}“${label}”不存在，是否创建？`, {
     title: "Spark",
     kind: "info",
     okLabel: "创建",
     cancelLabel: "取消",
   });
   if (!create) return;
-  const clean = target.replace(/\\/g, "/").replace(/\.md$/i, "");
+  const clean = label.replace(/\\/g, "/").replace(/\.md$/i, "");
   const dir = clean.includes("/") ? dirOf(clean) : dirOf(props.tab.path);
   try {
-    const rel = await api.createNote(vault.root, dir, baseName(clean));
+    const rel = await api.createNote(vault.root, dir, baseName(clean), kind ?? "note");
     await vault.refresh();
     await tabs.open(rel);
   } catch (e) {
-    useNoticeStore().report(`创建笔记“${target}”失败`, e);
+    useNoticeStore().report(`创建${what}“${label}”失败`, e);
   }
 }
 
@@ -356,7 +375,7 @@ onBeforeUnmount(() => {
         <datalist id="note-tag-options"><option v-for="t in knownTags" :key="t" :value="t" /></datalist>
         <span v-if="tab.created" class="date">创建于 {{ tab.created }}</span>
       </div>
-      <div ref="host" />
+      <div ref="host" @contextmenu="onEditorMenu" />
     </article>
     <BacklinksPanel :path="tab.path" />
   </div>

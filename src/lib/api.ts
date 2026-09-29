@@ -125,11 +125,14 @@ export const api = {
   readNote: (root: string, path: string) => invoke<NoteFile>("note_read", { root, path }),
   writeNote: (root: string, path: string, content: string) =>
     invoke<void>("note_write", { root, path, content }),
-  createNote: (root: string, dir: string, name?: string) => invoke<string>("note_create", { root, dir, name }),
+  /** kind 为 mind / flow 时新建空的思维导图或流程图 */
+  createNote: (root: string, dir: string, name?: string, kind?: "note" | "mind" | "flow") =>
+    invoke<string>("note_create", { root, dir, name, kind }),
   createFolder: (root: string, dir: string, name?: string) => invoke<string>("folder_create", { root, dir, name }),
   rename: (root: string, path: string, name: string) => invoke<string>("entry_rename", { root, path, name }),
   move: (root: string, path: string, targetDir: string) => invoke<string>("entry_move", { root, path, targetDir }),
   trash: (root: string, path: string) => invoke<void>("entry_trash", { root, path }),
+  openExternal: (root: string, path: string) => invoke<void>("entry_open_external", { root, path }),
   /** 返回相对笔记所在目录的引用路径 */
   saveAttachment: (root: string, note: string, name: string, bytes: Uint8Array) =>
     invoke<string>("attachment_save", bytes, {
@@ -143,6 +146,8 @@ export const api = {
     invoke<string>("attachment_import", { root, note, source }),
   readTextFile: (path: string) => invoke<string>("text_file_read", { path }),
   writeTextFile: (path: string, content: string) => invoke<void>("text_file_write", { path, content }),
+  writeBinaryFile: (path: string, bytes: Uint8Array) =>
+    invoke<void>("binary_file_write", bytes, { headers: { "x-path": encodeURIComponent(path) } }),
   readConfig: (root: string, name: string) => invoke<string | null>("vault_config_read", { root, name }),
   writeConfig: (root: string, name: string, content: string) =>
     invoke<void>("vault_config_write", { root, name, content }),

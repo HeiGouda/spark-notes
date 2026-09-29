@@ -8,6 +8,7 @@ import { displayShortcut } from "../lib/shortcut";
 import { isMac } from "../lib/platform";
 import { useSettingsStore } from "../stores/settings";
 import { useTabsStore } from "../stores/tabs";
+import { DOC_ICON } from "../lib/doctype";
 import { useNoticeStore } from "../stores/notice";
 import { useVaultStore } from "../stores/vault";
 import { useGitStore } from "../stores/git";
@@ -31,6 +32,8 @@ const MENU: MenuEntry[] = [
   {
     kind: "sub", label: "文件", items: [
       { kind: "item", label: "新建笔记", command: "file.newNote" },
+      { kind: "item", label: "新建思维导图", command: "file.newMind" },
+      { kind: "item", label: "新建流程图", command: "file.newFlow" },
       { kind: "item", label: "新建文件夹", command: "file.newFolder" },
       { kind: "sep" },
       { kind: "item", label: "打开笔记库…", command: "file.openVault" },
@@ -231,6 +234,7 @@ function onTabDrop(idx: number) {
         @drop.prevent="onTabDrop(i)"
         @dragend="dragFrom = dropAt = null"
       >
+        <Icon v-if="t.kind !== 'note'" class="tab-kind" :name="DOC_ICON[t.kind]" sm />
         <span class="name">{{ t.name }}</span>
         <span class="x" :title="tipFor('关闭', 'tab.close')" @click.stop="tabs.close(t.path)"><Icon name="close" sm /></span>
       </button>

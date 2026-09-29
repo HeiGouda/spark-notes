@@ -3,6 +3,7 @@ import { ref } from "vue";
 import Icon from "./Icon.vue";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore, nameOf } from "../stores/tabs";
+import { DOC_ICON, docKind } from "../lib/doctype";
 import { useContextMenuStore } from "../stores/contextMenu";
 import { useUiStore } from "../stores/ui";
 
@@ -61,7 +62,7 @@ function onDrop(i: number) {
         @dragend="dragFrom = dropAt = null"
       >
         <span class="spacer" />
-        <Icon :name="isDir(p) ? 'folder' : 'file'" />
+        <Icon :name="isDir(p) ? 'folder' : DOC_ICON[docKind(p) ?? 'note']" />
         <span class="name">{{ isDir(p) ? p.split("/").pop() : nameOf(p) }}</span>
         <Icon class="star" name="star" sm />
       </li>

@@ -1,6 +1,8 @@
 mod ai;
 mod archive;
 mod chat;
+mod diagram_text;
+mod doctype;
 mod fsops;
 mod git;
 mod history;
@@ -250,8 +252,9 @@ fn vault_create(parent: String, name: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn note_create(root: String, dir: String, name: Option<String>) -> Result<String, String> {
-    fsops::create_note(Path::new(&root), &dir, name.as_deref())
+fn note_create(root: String, dir: String, name: Option<String>, kind: Option<String>) -> Result<String, String> {
+    let kind = doctype::DocKind::parse(kind.as_deref().unwrap_or("note"))?;
+    fsops::create_doc(Path::new(&root), &dir, name.as_deref(), kind)
 }
 
 #[tauri::command]
@@ -285,6 +288,16 @@ fn entry_move(root: String, path: String, target_dir: String) -> Result<String, 
 #[tauri::command]
 fn entry_trash(root: String, path: String) -> Result<(), String> {
     fsops::trash_entry(Path::new(&root), &path)
+}
+
+/// 用系统默认程序打开笔记库里的文件（Spark 无法显示的图）
+#[tauri::command]
+fn entry_open_external(root: String, path: String) -> Result<(), String> {
+    let full = vault::resolve(Path::new(&root), &path)?;
+    if !full.is_file() {
+        return Err(format!("文件不存在：{path}"));
+    }
+    tauri_plugin_opener::open_path(&full, None::<&str>).map_err(|e| format!("用默认程序打开失败：{e}"))
 }
 
 fn percent_decode(s: &str) -> Result<String, String> {
@@ -545,6 +558,16 @@ fn text_file_write(path: String, content: String) -> Result<(), String> {
     vault::atomic_write(Path::new(&path), &content)
 }
 
+/// 导出图片等二进制文件到用户在保存对话框里选的位置；路径放在请求头里（URL 编码）
+#[tauri::command]
+fn binary_file_write(request: Request<'_>) -> Result<(), String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("文件数据格式错误".into());
+    };
+    let raw = request.headers().get("x-path").and_then(|v| v.to_str().ok()).ok_or("缺少参数 x-path")?;
+    vault::atomic_write_bytes(Path::new(&percent_decode(raw)?), bytes)
+}
+
 /// macOS 菜单栏。网页里的 Cmd+C / V / X / A 要靠“编辑”菜单里的系统菜单项才生效；
 /// 撤销 / 重做不放进来，交给编辑器自己的历史。
 /// “退出”不用系统菜单项，改为通知前端走关闭窗口的流程，先保存未存盘的笔记。
@@ -625,6 +648,7 @@ pub fn run() {
             link_rewrite,
             text_file_read,
             text_file_write,
+            binary_file_write,
             vault_allow_assets,
             note_read,
             note_write,
@@ -650,6 +674,7 @@ pub fn run() {
             entry_rename,
             entry_move,
             entry_trash,
+            entry_open_external,
             attachment_save,
             attachment_import,
             vault_config_read,

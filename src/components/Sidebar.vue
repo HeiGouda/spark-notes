@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import TreeRows from "./TreeRows.vue";
 import MenuList, { type MenuEntry } from "./MenuList.vue";
-import { shortcutOf, tipFor } from "../lib/commands";
-import { displayShortcut } from "../lib/shortcut";
+import { tipFor } from "../lib/commands";
 import { dirOf } from "../lib/api";
+import { newItems } from "../lib/newMenu";
 import { dragging, dropTarget, endDrag } from "../lib/treeDrag";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
@@ -19,6 +19,7 @@ import OutlineView from "./OutlineView.vue";
 import ScmView from "./ScmView.vue";
 import ChatList from "./ChatList.vue";
 import { useGitStore } from "../stores/git";
+import { useWebdavStore } from "../stores/webdav";
 import { runCommand } from "../lib/commands";
 import { useNoticeStore } from "../stores/notice";
 
@@ -26,8 +27,9 @@ const vault = useVaultStore();
 const tabs = useTabsStore();
 const ui = useUiStore();
 const git = useGitStore();
+const webdav = useWebdavStore();
 
-const VIEWS: { id: SidebarView; title: string; icon: string }[] = [
+const ALL_VIEWS: { id: SidebarView; title: string; icon: string }[] = [
   { id: "files", title: "文件", icon: "folder" },
   { id: "search", title: tipFor("搜索", "search.focus"), icon: "search" },
   { id: "tags", title: "标签", icon: "tag" },
@@ -35,6 +37,12 @@ const VIEWS: { id: SidebarView; title: string; icon: string }[] = [
   { id: "outline", title: "大纲", icon: "outline" },
   { id: "scm", title: "版本控制", icon: "git" },
 ];
+/** 同步方式选了 WebDAV 时不显示版本控制 */
+const scmHidden = computed(() => webdav.mode === "webdav");
+const VIEWS = computed(() => ALL_VIEWS.filter((v) => v.id !== "scm" || !scmHidden.value));
+watch([scmHidden, () => ui.view], ([hidden, view]) => {
+  if (hidden && view === "scm") ui.view = "files";
+}, { immediate: true });
 /** 点左栏其他视图即回到笔记（需求文档 5.17） */
 function pickView(id: SidebarView) {
   ui.showNotes();
@@ -80,16 +88,25 @@ function toggleSortMenu(e: MouseEvent) {
 function onSortOutside(e: MouseEvent) {
   const t = e.target as HTMLElement;
   if (sortAt.value && !t.closest(".sort-menu, .sort-btn")) sortAt.value = null;
+  if (newAt.value && !t.closest(".new-menu, .new-btn")) newAt.value = null;
 }
 onMounted(() => document.addEventListener("mousedown", onSortOutside, true));
 onBeforeUnmount(() => document.removeEventListener("mousedown", onSortOutside, true));
 
 function onBlankMenu(e: MouseEvent) {
   vault.selected = null;
-  ctxMenu.show(e, [
-    { kind: "item", label: "新建笔记", hint: displayShortcut(shortcutOf("file.newNote")), action: () => vault.newNote("") },
-    { kind: "item", label: "新建文件夹", hint: displayShortcut(shortcutOf("file.newFolder")), action: () => vault.newFolder("") },
-  ]);
+  ctxMenu.show(e, newItems(""));
+}
+
+const newAt = ref<{ x: number; y: number } | null>(null);
+
+function toggleNewMenu(e: MouseEvent) {
+  if (newAt.value) {
+    newAt.value = null;
+    return;
+  }
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  newAt.value = { x: r.left, y: r.bottom + 4 };
 }
 
 function onBlankClick(e: MouseEvent) {
@@ -154,11 +171,11 @@ watch(
     <template v-else-if="vault.root && ui.view === 'tags'"><TagsView /></template>
     <template v-else-if="vault.root && ui.view === 'favorites'"><FavoritesView /></template>
     <template v-else-if="vault.root && ui.view === 'outline'"><OutlineView /></template>
-    <template v-else-if="vault.root && ui.view === 'scm'"><ScmView /></template>
+    <template v-else-if="vault.root && ui.view === 'scm' && !scmHidden"><ScmView /></template>
     <template v-else-if="vault.root">
       <div class="tree-head">
         <span class="vault" :title="vault.root">{{ vault.name }}</span>
-        <button class="btn" :title="tipFor('新建笔记', 'file.newNote')" @click="vault.newNote()"><Icon name="file-plus" sm /></button>
+        <button class="btn new-btn" :class="{ 'is-active': newAt }" title="新建笔记、思维导图、流程图或文件夹" @click="toggleNewMenu"><Icon name="file-plus" sm /></button>
         <button class="btn" :title="tipFor('新建文件夹', 'file.newFolder')" @click="vault.newFolder()"><Icon name="folder-plus" sm /></button>
         <button class="btn sort-btn" :class="{ 'is-active': sortAt }" title="排序方式" @click="toggleSortMenu"><Icon name="sort" sm /></button>
         <button class="btn" title="全部折叠" @click="vault.collapseAll()"><Icon name="collapse" sm /></button>
@@ -186,5 +203,6 @@ watch(
       </button>
     </div>
     <MenuList v-if="sortAt" class="sort-menu" :items="sortItems()" :at="sortAt" @done="sortAt = null" />
+    <MenuList v-if="newAt" class="new-menu" :items="newItems()" :at="newAt" @done="newAt = null" />
   </aside>
 </template>

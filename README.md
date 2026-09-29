@@ -65,29 +65,6 @@ node scripts/perf/bench.mjs src-tauri\target\release\Spark.exe $env:TEMP\spark-p
 - `gen-vault.mjs` 只会清空空目录或它自己生成过的测试库，不会清空其他目录。
 - 内存按“Spark 进程 + WebView2 页面进程”统计；输出里也列出了 WebView2 其他进程，供参考。
 
-## 目录结构
-
-```
-src/
-  appCommands.ts     应用命令注册（菜单、按钮、快捷键共用）
-  session.ts         把标签页、展开状态、排序方式记到本机设置
-  components/        标题栏、侧栏文件树、格式工具栏、编辑器、状态栏、右键菜单、命令面板、查找栏、链接输入框、快捷键设置弹窗、AI 对话框（未配置提示、总结、整理结构）、AI 对话（会话列表 ChatList、对话标签页 ChatView）
-  editor/            Milkdown 配置、格式工具清单、代码框节点视图、附件（粘贴 / 拖入 / 图片显示）、双向链接节点与补全、大纲导航、高亮、脚注、链接、查找替换、浮动格式条与斜杠菜单、一键整理（tidy.ts）、AI 指令输入框与待确认区域（aiBlock.ts）
-  lib/               Front Matter 拆分、换行符、字数、快捷键（匹配 / 录入 / 校验 / 导入导出）、命令注册表、模糊匹配、文件树排序、AI 预设 / 提示词 / 整理结构的核对（ai.ts）、模型上下文长度与 token 估算（aiModels.ts）、对话的数据结构与上下文裁剪（chat.ts）、回复的 Markdown 渲染（markdown.ts）
-  stores/            Pinia：settings（应用设置）、vault（笔记库与文件操作）、tabs（标签页、自动保存、跳转历史）、editor、notice、contextMenu、ai（流式请求与取消）、chat（AI 对话的会话、附件、发送与存盘）
-  styles/            tokens.css（主题令牌：浅色 / 纸张 / 护眼 / 夜读 / 纯黑，含正文元素配色）、app.css、editor.css
-src-tauri/src/
-  vault.rs           笔记库扫描、读取、原子写入
-  fsops.rs           新建、重命名、移动、移入回收站、附件、笔记库配置
-  notes.rs           笔记解析：Front Matter、标签、双向链接、中文二元切分、搜索语法、摘要、链接解析
-  index.rs           搜索索引（SQLite FTS5）：增量同步、搜索、标签、反向链接、改名后改写链接
-  watch.rs           监听笔记库文件变化
-  ai.rs              AI 接口：OpenAI 兼容流式调用（支持图片）、取消、重试与超时、读取服务商模型列表
-  secret.rs          凭据存取：Windows 凭据管理器 / macOS 钥匙串
-  chat.rs            AI 对话的本机存储（应用数据目录 ai-chats/，会话 JSON 与图片）
-  lib.rs             Tauri 命令与插件注册
-```
-
 ## 数据安全约定
 
 - 保存采用“写临时文件并落盘 → 重命名覆盖”的原子写入。

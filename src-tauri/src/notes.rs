@@ -416,12 +416,23 @@ pub fn snippet(body: &str, terms: &[String], width: usize) -> Vec<Segment> {
 
 /* ---------- 链接解析 ---------- */
 
-fn strip_md(p: &str) -> &str {
-    if p.len() > 3 && p[p.len() - 3..].eq_ignore_ascii_case(".md") {
+/// 链接用的名字：笔记去掉 `.md`；图只去掉 `.mmd`，保留 `.flow` / `.mind`，
+/// 因此 `[[上线流程.flow]]` 指向流程图，不带后缀的 `[[上线流程]]` 只指向笔记（需求文档 5.3）
+pub fn strip_md(p: &str) -> &str {
+    let lower = p.to_ascii_lowercase();
+    if lower.len() > 9 && (lower.ends_with(".flow.mmd") || lower.ends_with(".mind.mmd")) {
+        &p[..p.len() - 4]
+    } else if p.len() > 3 && lower.ends_with(".md") {
         &p[..p.len() - 3]
     } else {
         p
     }
+}
+
+/// 链接名的最后一段（小写），用作反向链接的查找键
+pub fn link_base(p: &str) -> String {
+    let s = strip_md(p.trim()).replace('\\', "/");
+    s.rsplit('/').next().unwrap_or(&s).to_lowercase()
 }
 
 fn dir_of(p: &str) -> &str {

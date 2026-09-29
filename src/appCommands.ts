@@ -1,7 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { message, open, save } from "@tauri-apps/plugin-dialog";
-import { api } from "./lib/api";
+import { api, dirOf } from "./lib/api";
 import { useNoticeStore } from "./stores/notice";
 import { insertAttachments, type SavedAttachment } from "./editor/attachments";
 import { registerCommands, shortcutOf, type AppCommand } from "./lib/commands";
@@ -24,6 +24,9 @@ import { instructionMessages, tooLongMessage } from "./lib/ai";
 import { messagesTokens } from "./lib/aiModels";
 import { AiCancelled, useAiStore } from "./stores/ai";
 import { useChatStore } from "./stores/chat";
+import { useDiagramStore } from "./stores/diagram";
+import { useMindGenStore } from "./stores/mindGen";
+import { useFlowGenStore } from "./stores/flowGen";
 import { THEMES, themeCommandId } from "./lib/themes";
 
 /** 插入类的格式工具，在命令面板里归到“插入” */
@@ -120,9 +123,47 @@ export function registerAppCommands(): void {
     enabled: hasEditor,
   }));
 
+  /** 图的编辑区（需求文档 5.18），只在图获得焦点时响应 */
+  const diagramStore = useDiagramStore();
+  const hasDiagram = () => !!diagramStore.handle;
+  const diagramCommands: AppCommand[] = ([
+    ["diagram.addChild", "添加子节点", "Tab", "addChild"],
+    ["diagram.addSibling", "添加同级节点", "Enter", "addSibling"],
+    ["diagram.delete", "删除节点或连线", "Delete", "delete"],
+    ["diagram.edit", "编辑文字", "F2", "edit"],
+    ["diagram.toggleFold", "折叠 / 展开", "Space", "toggleFold"],
+    ["diagram.undo", "撤销", "Ctrl+Z", "undo"],
+    ["diagram.redo", "重做", "Ctrl+Y", "redo"],
+    ["diagram.center", "居中", null, "center"],
+    ["diagram.summary", "添加概要", "Ctrl+]", "summary"],
+    ["diagram.addSiblingBefore", "在前面添加同级节点", "Shift+Enter", "addSiblingBefore"],
+    ["diagram.addParent", "插入父主题", "Ctrl+Enter", "addParent"],
+    ["diagram.duplicate", "克隆", "Ctrl+D", "duplicate"],
+    ["diagram.zoomFit", "适应窗口", "Ctrl+0", "zoomFit"],
+    ["diagram.zoom100", "缩放到 100%", "Ctrl+1", "zoom100"],
+  ] as const).map(([id, title, key, action]) => ({
+    id,
+    title,
+    category: "图",
+    scope: "diagram" as const,
+    defaultShortcut: key,
+    run: () => diagramStore.run(action),
+    enabled: hasDiagram,
+  }));
+
+  /** 查找栏：笔记和图共用（需求文档 5.1、5.18） */
+  const diagramShown = () => !!tabs.active && tabs.active.kind !== "note" && !!diagramStore.handle;
+  const canFind = () => (diagramShown() ? true : hasEditor());
+  function openFind(replace: boolean) {
+    if (diagramShown()) ui.openFind(replace, diagramStore.handle!.find.selectedText());
+    else if (editor.editor) ui.openFind(replace, selectionText(editor.editor));
+  }
+
   registerCommands([
     // 文件
     { id: "file.newNote", title: "新建笔记", category: "文件", defaultShortcut: "Ctrl+N", run: () => vault.newNote(), enabled: hasVault },
+    { id: "file.newMind", title: "新建思维导图", category: "文件", defaultShortcut: null, run: () => vault.newDoc("mind"), enabled: hasVault },
+    { id: "file.newFlow", title: "新建流程图", category: "文件", defaultShortcut: null, run: () => vault.newDoc("flow"), enabled: hasVault },
     { id: "file.newFolder", title: "新建文件夹", category: "文件", defaultShortcut: "Ctrl+Shift+N", run: () => vault.newFolder(), enabled: hasVault },
     { id: "file.openVault", title: "打开笔记库", category: "文件", defaultShortcut: null, run: () => vault.pickAndOpen() },
     { id: "file.save", title: "立即保存", category: "文件", defaultShortcut: "Ctrl+S", run: () => tabs.saveActive() },
@@ -166,6 +207,7 @@ export function registerAppCommands(): void {
     // 编辑
     { id: "edit.undo", title: "撤销", category: "编辑", scope: "editor", defaultShortcut: "Ctrl+Z", run: onEditor((e) => FORMAT_ACTIONS.undo.run!(e)), enabled: hasEditor },
     { id: "edit.redo", title: "重做", category: "编辑", scope: "editor", defaultShortcut: "Ctrl+Y", run: onEditor((e) => FORMAT_ACTIONS.redo.run!(e)), enabled: hasEditor },
+    ...diagramCommands,
     { id: "edit.cut", title: "剪切", category: "编辑", defaultShortcut: null, run: () => document.execCommand("cut"), enabled: hasEditor, hidden: true },
     { id: "edit.copy", title: "复制", category: "编辑", defaultShortcut: null, run: () => document.execCommand("copy"), enabled: hasEditor, hidden: true },
     { id: "edit.paste", title: "粘贴", category: "编辑", defaultShortcut: null, run: () => navigator.clipboard.readText().then((t) => document.execCommand("insertText", false, t)), enabled: hasEditor, hidden: true },
@@ -174,16 +216,16 @@ export function registerAppCommands(): void {
       title: "查找",
       category: "编辑",
       defaultShortcut: "Ctrl+F",
-      run: onEditor((e) => ui.openFind(false, selectionText(e))),
-      enabled: hasEditor,
+      run: () => openFind(false),
+      enabled: canFind,
     },
     {
       id: "edit.replace",
       title: "替换",
       category: "编辑",
       defaultShortcut: "Ctrl+H",
-      run: onEditor((e) => ui.openFind(true, selectionText(e))),
-      enabled: hasEditor,
+      run: () => openFind(true),
+      enabled: canFind,
     },
     // 格式与插入
     ...headingCommands,
@@ -203,6 +245,34 @@ export function registerAppCommands(): void {
       },
     },
     { id: "ai.summary", title: "总结当前笔记", category: "AI", defaultShortcut: null, run: () => ai.ensureConfigured() && (ai.summaryOpen = true), enabled: hasEditor },
+    {
+      id: "ai.mindmap",
+      title: "AI：把当前笔记生成思维导图",
+      category: "AI",
+      defaultShortcut: null,
+      run: () => tabs.activePath && useMindGenStore().start(tabs.activePath),
+      enabled: () => tabs.active?.kind === "note",
+    },
+    {
+      id: "ai.generateFlow",
+      title: "AI：生成流程图",
+      category: "AI",
+      defaultShortcut: null,
+      run: () => {
+        const note = tabs.active?.kind === "note" ? tabs.active.path : null;
+        const text = note && editor.path === note ? editor.selectionText().trim() : "";
+        useFlowGenStore().openDialog({ kind: "folder", folder: note ? dirOf(note) : vault.targetDir() }, text);
+      },
+      enabled: () => !!vault.root,
+    },
+    {
+      id: "ai.arrangeFlow",
+      title: "AI：整理流程图",
+      category: "AI",
+      defaultShortcut: null,
+      run: () => diagramStore.run("aiArrange"),
+      enabled: () => tabs.active?.kind === "flow" && !tabs.active.draft && !!diagramStore.handle,
+    },
     { id: "ai.structure", title: "AI 整理结构", category: "AI", defaultShortcut: null, run: () => ai.ensureConfigured() && (ai.structureOpen = true), enabled: hasEditor },
     { id: "insert.link", title: "插入链接", category: "插入", scope: "editor", defaultShortcut: "Ctrl+K", run: () => (ui.linkOpen = true), enabled: hasEditor },
     { id: "insert.image", title: "插入图片", category: "插入", defaultShortcut: "Ctrl+Shift+I", run: insertImageFromDialog, enabled: hasEditor },

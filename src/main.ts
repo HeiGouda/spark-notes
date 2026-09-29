@@ -6,6 +6,7 @@ import "@milkdown/kit/prose/tables/style/tables.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/editor.css";
+import "./styles/diagram.css";
 import App from "./App.vue";
 import { applyTheme, loadSettings, useSettingsStore } from "./stores/settings";
 import { useVaultStore } from "./stores/vault";

@@ -37,8 +37,9 @@ export function installSessionPersistence(): void {
 
   watch(
     () => ({
-      tabs: tabs.tabs.map((t) => t.path),
-      active: tabs.activePath,
+      // AI 生成中的草稿还没有文件，不记入会话
+      tabs: tabs.tabs.filter((t) => !t.draft).map((t) => t.path),
+      active: tabs.active?.draft ? null : tabs.activePath,
       expanded: [...vault.expanded],
       sortKey: vault.sortKey,
       sortDesc: vault.sortDesc,

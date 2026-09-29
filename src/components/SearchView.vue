@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { api, dirOf, type SearchHit } from "../lib/api";
+import { DOC_ICON, DOC_LABEL, docKind } from "../lib/doctype";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { useSearchStore } from "../stores/search";
@@ -62,6 +63,11 @@ function firstTerm(): string | undefined {
   return ui.query.split(/\s+/).find((t) => t && !t.startsWith("#") && !t.startsWith("path:"));
 }
 
+function kindTag(path: string): string {
+  const k = docKind(path);
+  return k && k !== "note" ? DOC_LABEL[k] : "";
+}
+
 function open(hit: SearchHit, pin = false) {
   const term = firstTerm();
   void tabs.openAt(hit.path, term ? { text: term } : {}, !pin);
@@ -76,7 +82,7 @@ function open(hit: SearchHit, pin = false) {
         ref="input"
         v-model="ui.query"
         type="search"
-        placeholder="搜索笔记"
+        placeholder="搜索笔记和图"
         spellcheck="false"
         @keydown.enter.prevent="hits[0] && open(hits[0])"
         @keydown.esc="ui.query = ''"
@@ -96,7 +102,10 @@ function open(hit: SearchHit, pin = false) {
         @dblclick="open(h, true)"
         @keydown.enter="open(h)"
       >
-        <div class="result-title"><Icon name="file" sm />{{ h.title }}<span class="result-dir">{{ dirOf(h.path) }}</span></div>
+        <div class="result-title">
+          <Icon :name="DOC_ICON[docKind(h.path) ?? 'note']" sm />{{ h.title }}
+          <span class="result-dir">{{ [kindTag(h.path), dirOf(h.path)].filter(Boolean).join(" · ") }}</span>
+        </div>
         <div class="result-snip">
           <template v-for="(s, i) in h.snippet" :key="i"><mark v-if="s.hit">{{ s.text }}</mark><template v-else>{{ s.text }}</template></template>
         </div>

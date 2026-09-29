@@ -22,10 +22,13 @@ describe("macOS 快捷键", () => {
     expect(shortcutProblem("Shift+A")).toMatch(/Cmd 或 Option/);
   });
 
-  it("macOS 默认快捷键可用且互不重复", () => {
-    const values = Object.values(MAC_DEFAULT_SHORTCUTS);
-    for (const s of values) expect(shortcutProblem(s)).toBeNull();
-    expect(new Set(values).size).toBe(values.length);
+  it("macOS 默认快捷键可用，同一作用范围内互不重复", () => {
+    const entries = Object.entries(MAC_DEFAULT_SHORTCUTS);
+    for (const [, s] of entries) expect(shortcutProblem(s)).toBeNull();
+    for (const inDiagram of [true, false]) {
+      const values = entries.filter(([id]) => id.startsWith("diagram.") === inDiagram).map(([, s]) => s);
+      expect(new Set(values).size).toBe(values.length);
+    }
   });
 
   it("注册命令时换成 macOS 默认值", () => {

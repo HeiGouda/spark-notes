@@ -1,7 +1,8 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { api, baseName, isWithin, remapPath } from "../lib/api";
+import { api, isWithin, remapPath } from "../lib/api";
+import { docKind, docName, type DocKind } from "../lib/doctype";
 import { formatDate, joinFrontMatter, parseMeta, setFrontMatterTags, splitFrontMatter } from "../lib/frontmatter";
 import { applyEol, detectEol, toLf, type Eol } from "../lib/eol";
 import { useVaultStore } from "./vault";
@@ -13,7 +14,9 @@ export type SaveStatus = "saved" | "dirty" | "saving" | "error";
 
 export interface Tab {
   path: string;
-  /** 文件名即标题（不含 .md） */
+  /** 思维导图和流程图没有 Front Matter，body 是整个文件（换行统一为 LF） */
+  kind: DocKind;
+  /** 文件名即标题（不含扩展名） */
   name: string;
   /** 预览标签页：标题斜体，单击其他笔记时被替换；编辑或双击后固定 */
   preview: boolean;
@@ -28,14 +31,19 @@ export interface Tab {
   status: SaveStatus;
   error: string | null;
   savedAt: number | null;
+  /** AI 生成中的思维导图：磁盘上还没有文件，关闭即丢弃（需求文档 5.18） */
+  draft?: boolean;
+}
+
+function splitContent(kind: DocKind, content: string): { frontMatter: string; body: string } {
+  const text = toLf(content);
+  return kind === "note" ? splitFrontMatter(text) : { frontMatter: "", body: text };
 }
 
 const AUTOSAVE_DELAY = 1000;
 const HISTORY_LIMIT = 100;
 
-export function nameOf(path: string): string {
-  return baseName(path).replace(/\.md$/i, "");
-}
+export const nameOf = docName;
 
 export const useTabsStore = defineStore("tabs", () => {
   const tabs = ref<Tab[]>([]);
@@ -75,10 +83,12 @@ export const useTabsStore = defineStore("tabs", () => {
     if (!vault.root) return null;
     const file = await api.readNote(vault.root, path);
     const eol = detectEol(file.content);
-    const { frontMatter, body } = splitFrontMatter(toLf(file.content));
+    const kind = docKind(path) ?? "note";
+    const { frontMatter, body } = splitContent(kind, file.content);
     const meta = parseMeta(frontMatter);
     return {
       path,
+      kind,
       name: nameOf(path),
       preview,
       frontMatter,
@@ -132,6 +142,33 @@ export const useTabsStore = defineStore("tabs", () => {
     }
     setActive(path, opts.record ?? true);
     return true;
+  }
+
+  /** 打开一个还没有文件的草稿标签页 */
+  function openDraft(path: string, kind: DocKind): void {
+    const existing = find(path);
+    if (existing) removeTab(path);
+    const tab: Tab = {
+      path, kind, name: nameOf(path), preview: false, frontMatter: "", savedFrontMatter: "", eol: "\n",
+      body: "", savedBody: "", tags: [], created: null, status: "saved", error: null, savedAt: null, draft: true,
+    };
+    const at = tabs.value.findIndex((t) => t.path === activePath.value);
+    tabs.value.splice(at >= 0 ? at + 1 : tabs.value.length, 0, tab);
+    setActive(path, false);
+  }
+
+  /** 草稿已写成文件：换成真实路径和内容，之后与普通标签页相同 */
+  function finalizeDraft(path: string, rel: string, content: string) {
+    const tab = find(path);
+    if (!tab) return;
+    tab.draft = false;
+    tab.path = rel;
+    tab.name = nameOf(rel);
+    tab.body = content;
+    tab.savedBody = content;
+    tab.savedAt = Date.now();
+    tab.status = "saved";
+    if (activePath.value === path) setActive(rel);
   }
 
   function pin(path: string) {
@@ -196,6 +233,8 @@ export const useTabsStore = defineStore("tabs", () => {
     const tab = find(path);
     const vault = useVaultStore();
     if (!tab || !vault.root) return true;
+    // 草稿在磁盘上还没有文件，关闭即丢弃，不能按路径写出去
+    if (tab.draft) return true;
     if (unchanged(tab) && tab.status !== "error") return true;
 
     const snapshot = tab.body;
@@ -389,7 +428,7 @@ export const useTabsStore = defineStore("tabs", () => {
         useNoticeStore().report(`“${tab.name}”已在外部被删除或移动`, "标签页中的内容尚未丢失，编辑后会重新保存到原位置");
         continue;
       }
-      const { frontMatter, body } = splitFrontMatter(toLf(content));
+      const { frontMatter, body } = splitContent(tab.kind, content);
       if (body === tab.savedBody && frontMatter === tab.savedFrontMatter) continue;
       // 编辑器防抖期间敲下的内容还没进标签页，先收进来，否则会被当成未编辑而直接重载
       useEditorStore().pull(tab.path);
@@ -412,7 +451,7 @@ export const useTabsStore = defineStore("tabs", () => {
 
   return {
     tabs, activePath, active, canBack, canForward, history, editedTick, savedTick,
-    open, pin, update, setTags, save, saveActive, flushAll, flushUnder, close, closeAll, closeOthers, closeRight,
+    open, openDraft, finalizeDraft, pin, update, setTags, save, saveActive, flushAll, flushUnder, close, closeAll, closeOthers, closeRight,
     activate, cycle, reorder, back, forward, remap, reload, dropUnder, restore, resetHistory,
     pendingReveal, openAt, onExternalChange,
   };

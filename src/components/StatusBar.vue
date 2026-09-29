@@ -4,8 +4,11 @@ import Icon from "./Icon.vue";
 import { useEditorStore } from "../stores/editor";
 import { useTabsStore } from "../stores/tabs";
 import { useNoticeStore } from "../stores/notice";
+import { useDiagramStore } from "../stores/diagram";
+import { DOC_LABEL } from "../lib/doctype";
 
 const editorStore = useEditorStore();
+const diagram = useDiagramStore();
 const tabs = useTabsStore();
 const notice = useNoticeStore();
 
@@ -28,7 +31,12 @@ const saveText = computed(() => {
 
 <template>
   <footer class="statusbar">
-    <template v-if="tabs.active">
+    <template v-if="tabs.active && tabs.active.kind !== 'note'">
+      <span class="sb">{{ DOC_LABEL[tabs.active.kind] }}</span>
+      <span class="sb">{{ diagram.nodes }} 个节点<template v-if="tabs.active.kind === 'flow'"> · {{ diagram.edges }} 条连线</template><template v-if="diagram.selected > 1"> · 已选中 {{ diagram.selected }} 个</template></span>
+      <span class="sb">{{ Math.round(diagram.zoom * 100) }}%</span>
+    </template>
+    <template v-else-if="tabs.active">
       <span class="sb">字数 {{ editorStore.words.toLocaleString("zh-CN") }}</span>
       <span class="sb">行 {{ editorStore.line }}，列 {{ editorStore.col }}</span>
     </template>

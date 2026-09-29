@@ -73,6 +73,22 @@ export function commitMessages(files: string[], diff: string, truncated: boolean
   ];
 }
 
+/** 把笔记生成思维导图（需求文档 5.18），输出 Mermaid mindmap 的纯文字子集 */
+export function mindMapMessages(title: string, note: string): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "你把用户的笔记整理成思维导图。只输出 Mermaid mindmap 代码，不要任何解释。",
+        "格式：第一行写 mindmap；之后每行一个节点，用两个空格表示一级缩进；第一个节点是根节点，写笔记的主题。",
+        "节点只写纯文字，不要使用括号、方括号、花括号、图标或样式写法。",
+        "提炼要点，每个节点不超过 20 个字，不要照抄整段原文；层级不超过 4 层；保留原文中的专有名词。",
+      ].join("\n"),
+    },
+    { role: "user", content: `笔记标题：${title}\n\n${note}` },
+  ];
+}
+
 /** 去掉模型偶尔加上的整段代码块包裹 */
 export function unwrapFence(text: string): string {
   const m = /^\s*```(?:markdown|md)?[ \t]*\n([\s\S]*?)\n```\s*$/.exec(text);

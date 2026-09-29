@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import Icon from "./Icon.vue";
-import { findConflict, isCustomized, listCommands, shortcutOf, shortcutOverrides, getCommand, type AppCommand } from "../lib/commands";
+import { findConflict, isCustomized, listCommands, shortcutOf, shortcutOverrides, getCommand, SCOPE_LABEL, type AppCommand } from "../lib/commands";
 import { displayShortcut, eventToShortcut, normalizeShortcut, shortcutProblem } from "../lib/shortcut";
 import { parseKeymap, serializeKeymap } from "../lib/keymapFile";
 import { api } from "../lib/api";
@@ -59,7 +59,7 @@ function assign(id: string, spec: string | null) {
 
 /** 尝试分配，冲突时进入待确认状态 */
 function tryAssign(id: string, spec: string) {
-  const problem = shortcutProblem(spec);
+  const problem = shortcutProblem(spec, getCommand(id)?.scope);
   if (problem) {
     error.value = { id, text: problem };
     return;
@@ -122,7 +122,7 @@ async function importKeys() {
   try {
     const path = await open({ title: "导入快捷键", multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] });
     if (typeof path !== "string") return;
-    const parsed = parseKeymap(await api.readTextFile(path), new Set(listCommands().map((c) => c.id)));
+    const parsed = parseKeymap(await api.readTextFile(path), new Set(listCommands().map((c) => c.id)), (id) => getCommand(id)?.scope ?? "global");
     settings.replaceShortcuts(parsed.keybindings);
     info.value = parsed.skipped.length ? `已导入，跳过 ${parsed.skipped.length} 项：${parsed.skipped.join("；")}` : "已导入";
   } catch (e) {
@@ -198,7 +198,7 @@ onBeforeUnmount(() => {
                       <span v-if="isCustomized(c.id)" class="custom">已自定义</span>
                     </template>
                   </td>
-                  <td class="scope">{{ (c.scope ?? "global") === "editor" ? "编辑器" : "全局" }}</td>
+                  <td class="scope">{{ SCOPE_LABEL[c.scope ?? "global"] }}</td>
                   <td>
                     <button v-if="isCustomized(c.id)" class="reset" :title="`恢复默认（${c.defaultShortcut ?? '无'}）`" @click.stop="resetOne(c.id)">↺ 恢复</button>
                   </td>
