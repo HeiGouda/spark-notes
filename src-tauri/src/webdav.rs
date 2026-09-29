@@ -3,6 +3,7 @@
 //! （云端的移到 `.spark-trash/`，本地的存历史版本或移进回收站）。
 //! 密码只进系统凭据库。上次同步的记录在 `.ttnote/sync/state.json`，不参与同步。
 
+use crate::doctype;
 use crate::fsops;
 use crate::history;
 use crate::secret::{read_secret, write_secret};
@@ -98,7 +99,7 @@ pub struct RemoteInfo {
     pub missing: bool,
 }
 
-/// 笔记、附件（`*.assets/` 与根目录 `assets/`）和 `.ttnote/config/`。
+/// 笔记、思维导图、流程图、附件（`*.assets/` 与根目录 `assets/`）和 `.ttnote/config/`。
 pub fn should_sync(rel: &str) -> bool {
     let rel = rel.replace('\\', "/");
     if rel.is_empty() || rel.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
@@ -119,7 +120,7 @@ pub fn should_sync(rel: &str) -> bool {
     if rel.split('/').any(|p| p.ends_with(".assets")) && !rel.ends_with(".assets") {
         return true;
     }
-    Path::new(&rel).extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    doctype::is_doc(&rel)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -560,8 +561,9 @@ fn download_one(root: &Path, dav: &dyn Dav, item: &PlanItem, scan: &Scan, state:
     Ok(())
 }
 
+/// 笔记和图：被覆盖前存历史版本，不进回收站
 fn is_note(rel: &str) -> bool {
-    Path::new(rel).extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    doctype::is_doc(rel)
 }
 
 /// 上传返回的 ETag 不一定和列目录时的一致，重新列一次，免得下次把自己刚传的文件当成云端更新
@@ -1096,6 +1098,9 @@ mod tests {
         assert!(should_sync("周报.assets/a.png"));
         assert!(should_sync(".ttnote/config/order.json"));
         assert!(should_sync("assets/a.png"));
+        assert!(should_sync("工作/上线流程.flow.mmd"));
+        assert!(should_sync("路线.mind.mmd"));
+        assert!(!should_sync("其他.mmd"));
         assert!(!should_sync(".ttnote/history/a.md"));
         assert!(!should_sync(".ttnote/trash/1/a.md"));
         assert!(!should_sync(".ttnote/cache/index.db"));

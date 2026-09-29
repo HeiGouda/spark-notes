@@ -20,6 +20,8 @@ export interface SyncCheck {
   firstSync: boolean;
   downloads: number;
   downloadBytes: number;
+  /** 要下载、但服务器没有给出大小的文件数 */
+  missingSizes: number;
   removals: string[];
   guard: string | null;
   needsConfirm: boolean;

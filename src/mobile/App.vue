@@ -10,7 +10,8 @@ import FilesPage from "./pages/FilesPage.vue";
 import RecentPage from "./pages/RecentPage.vue";
 import SearchPage from "./pages/SearchPage.vue";
 import MePage from "./pages/MePage.vue";
-import NoteText from "./pages/NoteText.vue";
+import ReaderPage from "./pages/ReaderPage.vue";
+import DiagramPage from "./pages/DiagramPage.vue";
 import LibsSheet from "./overlays/LibsSheet.vue";
 import BulkDialog from "./overlays/BulkDialog.vue";
 import DeleteDialog from "./overlays/DeleteDialog.vue";
@@ -57,14 +58,15 @@ watch(
         <RecentPage v-else-if="page.p === 'recent'" />
         <SearchPage v-else-if="page.p === 'search'" />
         <MePage v-else-if="page.p === 'me'" />
-        <NoteText v-else-if="page.p === 'note'" :key="page.path" :path="page.path" />
+        <ReaderPage v-else-if="page.p === 'note'" :key="`${page.path}#${page.heading ?? ''}`" :path="page.path" :heading="page.heading" />
+        <DiagramPage v-else-if="page.p === 'diagram'" :key="page.path" :path="page.path" />
       </main>
       <nav v-if="activeTab" class="m-tabs">
         <button v-for="[key, label, icon] in TABS" :key="key" :class="{ on: activeTab === key }" @click="tab(key)">
           <Icon :name="icon" />{{ label }}
         </button>
       </nav>
-      <div v-if="currentOverlay" class="m-ovl">
+      <div v-if="currentOverlay && ['libs', 'bulk', 'del'].includes(currentOverlay.t)" class="m-ovl">
         <LibsSheet v-if="currentOverlay.t === 'libs'" />
         <BulkDialog v-else-if="currentOverlay.t === 'bulk'" />
         <DeleteDialog v-else-if="currentOverlay.t === 'del'" :id="currentOverlay.id" />

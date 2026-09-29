@@ -98,13 +98,14 @@ pub fn update_vault(base: &Path, id: &str, input: &VaultInput) -> Result<VaultCo
     let moved = vault.url != input.url || vault.remote_dir != input.remote_dir;
     *vault = VaultConfig { id: id.to_string(), name: input.name, url: input.url, remote_dir: input.remote_dir, username: input.username };
     let updated = vault.clone();
-    save_vaults(base, &vaults)?;
+    // 先清空再写配置：清空失败时地址和本地文件都保持原样
     if moved {
         if root.exists() {
             fs::remove_dir_all(&root).map_err(|e| format!("清空本地副本失败：{e}"))?;
         }
         fs::create_dir_all(&root).map_err(|e| format!("创建笔记库目录失败：{e}"))?;
     }
+    save_vaults(base, &vaults)?;
     Ok(updated)
 }
 
@@ -177,6 +178,8 @@ pub struct SyncCheck {
     pub downloads: u32,
     /// 要下载的文件总大小（字节）。服务器没给大小的文件不计入
     pub download_bytes: u64,
+    /// 要下载、但服务器没有给出大小的文件数
+    pub missing_sizes: u32,
     /// 云端已删除、本地要跟着删除的文件
     pub removals: Vec<String>,
     /// 云端文件突然少了很多时的提示
@@ -264,6 +267,7 @@ fn inspect<D: Dav>(root: &Path, dav: &ReadOnlyDav<D>) -> Result<(SyncCheck, Vec<
         first_sync: preview.last_sync_ms == 0,
         downloads: fetched.len() as u32,
         download_bytes: fetched.iter().filter_map(|rel| sizes.get(*rel)).sum(),
+        missing_sizes: fetched.iter().filter(|rel| !sizes.contains_key(**rel)).count() as u32,
         needs_confirm: preview.guard.is_some()
             || removals.len() > MAX_SILENT_REMOVALS
             || removals.len() * 10 > preview.local_files as usize,
@@ -373,11 +377,14 @@ pub mod commands {
         blocking(move || {
             let base = base(&app)?;
             find(&base, &id)?;
-            let password = if password.is_empty() { read_secret(&account(&id))?.unwrap_or_default() } else { password };
+            let password = if password.is_empty() {
+                read_secret(&account(&id))?.ok_or_else(|| "没有保存密码，请在「我的」里重新填写".to_string())?
+            } else {
+                password
+            };
             verify(&input, &password)?;
-            let vault = update_vault(&base, &id, &input)?;
             write_secret(&account(&id), &password)?;
-            Ok(vault)
+            update_vault(&base, &id, &input)
         })
         .await
     }
@@ -457,12 +464,16 @@ mod tests {
     struct Cloud {
         files: RefCell<BTreeMap<String, Vec<u8>>>,
         writes: Cell<u32>,
+        omit_size: RefCell<BTreeSet<String>>,
     }
 
     impl Cloud {
         fn new(files: &[(&str, &str)]) -> Self {
             let map = files.iter().map(|(k, v)| (k.to_string(), v.as_bytes().to_vec())).collect();
-            Self { files: RefCell::new(map), writes: Cell::new(0) }
+            Self { files: RefCell::new(map), writes: Cell::new(0), omit_size: RefCell::new(BTreeSet::new()) }
+        }
+        fn omit_size(&self, rel: &str) {
+            self.omit_size.borrow_mut().insert(rel.to_string());
         }
         fn set(&self, rel: &str, text: &str) {
             self.files.borrow_mut().insert(rel.into(), text.as_bytes().to_vec());
@@ -488,11 +499,12 @@ mod tests {
             }
             let mut out: Vec<RemoteEntry> =
                 dirs.into_iter().map(|rel| RemoteEntry { rel, etag: String::new(), is_dir: true, size: None, modified: String::new() }).collect();
+            let omit = self.omit_size.borrow();
             out.extend(files.iter().map(|(rel, bytes)| RemoteEntry {
                 rel: rel.clone(),
                 etag: hash_bytes(bytes),
                 is_dir: false,
-                size: Some(bytes.len() as u64),
+                size: if omit.contains(rel) { None } else { Some(bytes.len() as u64) },
                 modified: String::new(),
             }));
             Ok(out)
@@ -573,7 +585,7 @@ mod tests {
 
         let c = check(tmp.path(), &dav).unwrap();
         assert!(c.first_sync);
-        assert_eq!((c.downloads, c.download_bytes), (3, 22));
+        assert_eq!((c.downloads, c.download_bytes, c.missing_sizes), (3, 22, 0));
         assert!(!c.needs_confirm && c.removals.is_empty());
 
         let report = done(go(tmp.path(), &dav, &[]).unwrap());
@@ -584,6 +596,15 @@ mod tests {
         let again = check(tmp.path(), &dav).unwrap();
         assert!(!again.first_sync);
         assert_eq!(again.downloads, 0);
+    }
+
+    #[test]
+    fn files_without_a_size_are_counted_separately() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cloud = Cloud::new(&[("周报.md", "你好"), ("周报.assets/图.png", "0123")]);
+        cloud.omit_size("周报.assets/图.png");
+        let c = check(tmp.path(), &ReadOnlyDav::new(&cloud)).unwrap();
+        assert_eq!((c.downloads, c.download_bytes, c.missing_sizes), (2, "你好".len() as u64, 1));
     }
 
     #[test]
@@ -753,5 +774,20 @@ mod tests {
         assert!(root.is_dir());
         assert!(!root.join("周报.md").exists());
         assert_eq!(list_vaults(tmp.path()).unwrap()[0].url, "https://other.example.com");
+    }
+
+    #[test]
+    fn failed_clear_keeps_the_old_address_and_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let v = add_vault(tmp.path(), &input("工作", "https://dav.example.com")).unwrap();
+        let root = vault_root(tmp.path(), &v.id).unwrap();
+        fs::write(root.join("周报.md"), "工作").unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        fs::write(&root, "not a directory").unwrap();
+
+        let err = update_vault(tmp.path(), &v.id, &input("公司", "https://other.example.com")).unwrap_err();
+        assert!(err.contains("清空本地副本失败"), "{err}");
+        assert_eq!(list_vaults(tmp.path()).unwrap()[0].url, "https://dav.example.com");
+        assert_eq!(fs::read_to_string(&root).unwrap(), "not a directory");
     }
 }

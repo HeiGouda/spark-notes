@@ -3,6 +3,8 @@ import { computed, ref } from "vue";
 import type { TreeNode } from "../../lib/api";
 import Icon from "../Icon.vue";
 import StatusLine from "../StatusLine.vue";
+import { DOC_TAG, docKind, type DocKind } from "../../lib/doctype";
+import type { IconName } from "../icons";
 import { favoriteNotes, folderItems, folderLabel, timeLabel } from "../browse";
 import { useMobile } from "../store";
 import { back, go, open } from "../nav";
@@ -17,8 +19,19 @@ const favSet = computed(() => new Set(store.favorites));
 const title = computed(() => props.path.slice(props.path.lastIndexOf("/") + 1));
 const crumbs = computed(() => [store.current?.name ?? "", ...props.path.split("/").slice(0, -1)].join(" / "));
 
+function kindOf(n: TreeNode): DocKind {
+  return docKind(n.path) ?? "note";
+}
+
+function iconOf(n: TreeNode): IconName {
+  const k = kindOf(n);
+  return k === "note" ? "note" : k;
+}
+
 function openNode(n: TreeNode) {
-  go(n.isDir ? { p: "files", path: n.path } : { p: "note", path: n.path });
+  if (n.isDir) go({ p: "files", path: n.path });
+  else if (kindOf(n) === "note") go({ p: "note", path: n.path });
+  else go({ p: "diagram", path: n.path });
 }
 
 /* 下拉刷新：列表在顶部时往下拖超过 100px 松手 */
@@ -77,9 +90,9 @@ function onTouchEnd() {
         <template v-if="favs.length">
           <div class="sec">收藏</div>
           <button v-for="n in favs" :key="'fav-' + n.path" class="row" @click="openNode(n)">
-            <span class="ic"><Icon name="note" :size="20" /></span>
+            <span class="ic"><Icon :name="iconOf(n)" :size="20" /></span>
             <span class="main">
-              <div class="name">{{ n.name }}</div>
+              <div class="name">{{ n.name }}<span v-if="DOC_TAG[kindOf(n)]" class="badge">{{ DOC_TAG[kindOf(n)] }}</span></div>
               <div class="sub">{{ folderLabel(n.path) }} · {{ timeLabel(n.modifiedMs) }}</div>
             </span>
             <span class="end star"><Icon name="star" :size="14" /></span>
@@ -87,9 +100,9 @@ function onTouchEnd() {
           <div class="sec">全部</div>
         </template>
         <button v-for="n in items" :key="n.path" class="row" @click="openNode(n)">
-          <span class="ic"><Icon :name="n.isDir ? 'folder' : 'note'" :size="20" /></span>
+          <span class="ic"><Icon :name="n.isDir ? 'folder' : iconOf(n)" :size="20" /></span>
           <span class="main">
-            <div class="name">{{ n.name }}</div>
+            <div class="name">{{ n.name }}<span v-if="!n.isDir && DOC_TAG[kindOf(n)]" class="badge">{{ DOC_TAG[kindOf(n)] }}</span></div>
             <div class="sub">{{ n.isDir ? `${n.children.length} 项` : timeLabel(n.modifiedMs) }}</div>
           </span>
           <span class="end">

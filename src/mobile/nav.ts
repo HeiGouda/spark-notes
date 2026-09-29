@@ -1,4 +1,5 @@
 import { computed, ref } from "vue";
+import { docKind } from "../lib/doctype";
 
 export type Page =
   | { p: "welcome" }
@@ -8,9 +9,16 @@ export type Page =
   | { p: "recent" }
   | { p: "search" }
   | { p: "me" }
-  | { p: "note"; path: string };
+  | { p: "note"; path: string; heading?: string }
+  | { p: "diagram"; path: string };
 
-export type Overlay = { t: "libs" } | { t: "bulk" } | { t: "del"; id: string };
+export type Overlay =
+  | { t: "libs" }
+  | { t: "bulk" }
+  | { t: "del"; id: string }
+  | { t: "outline" }
+  | { t: "readset" }
+  | { t: "image"; src: string; alt: string };
 
 export type Tab = "files" | "recent" | "search" | "me";
 
@@ -70,6 +78,12 @@ export function back(): boolean {
     return true;
   }
   return false;
+}
+
+/** 笔记进阅读页，思维导图和流程图进图页 */
+export function openDoc(path: string, heading?: string) {
+  if ((docKind(path) ?? "note") === "note") go({ p: "note", path, heading });
+  else go({ p: "diagram", path });
 }
 
 export function go(next: Page) {

@@ -67,13 +67,13 @@ watch(
         <div class="logo round"><Icon name="cloud" :size="34" /></div>
         <h2>{{ vault?.name }}</h2>
         <p v-if="info" class="lead">
-          云端目录里有 <b>{{ info.downloads }}</b> 个文件，约 <b>{{ sizeLabel(info.downloadBytes) }}</b>
+          云端目录里有 <b>{{ info.downloads }}</b> 个文件<template v-if="info.downloadBytes > 0">，约 <b>{{ sizeLabel(info.downloadBytes) }}</b></template><template v-if="info.missingSizes">（另有 {{ info.missingSizes }} 个文件服务器没有给出大小）</template>
         </p>
         <p v-else-if="loadError" class="lead" style="color: var(--danger)">{{ loadError }}</p>
         <p v-else class="lead">正在读取云端目录…</p>
         <div v-if="metered && info" class="warnbox">
           <Icon name="warn" :size="18" />
-          <span>当前正在使用移动数据，下载约 {{ sizeLabel(info.downloadBytes) }} 会消耗流量。可以连上 Wi‑Fi 后再开始。</span>
+          <span>当前正在使用移动数据，<template v-if="info.downloadBytes > 0">下载约 {{ sizeLabel(info.downloadBytes) }} 会消耗流量</template><template v-else>下载会消耗流量</template>。可以连上 Wi‑Fi 后再开始。</span>
         </div>
         <ul class="facts">
           <li><Icon name="image" :size="18" /><span>图片等附件会一起下载，没有网络时也能完整查看</span></li>

@@ -54,7 +54,7 @@ async function test() {
   result.value = { ok: true, text: "正在连接…" };
   try {
     const info = await mobileApi.testVault(props.id, input(), form.password);
-    result.value = { ok: true, text: `连接成功，云端目录里有 ${info.notes} 篇笔记` };
+    result.value = { ok: true, text: `连接成功，云端目录里有 ${info.files} 个文件` };
   } catch (e) {
     result.value = { ok: false, text: `连接失败：${message(e)}` };
   } finally {

@@ -1,5 +1,6 @@
 import type { TreeNode } from "../lib/api";
 import { sortTree, type CustomOrder } from "../lib/treeSort";
+import type { RecentOpen } from "./prefs";
 
 function findFolder(tree: TreeNode[], path: string): TreeNode[] | null {
   if (!path) return tree;
@@ -34,8 +35,13 @@ export function favoriteNotes(tree: TreeNode[], favorites: string[]): TreeNode[]
   return favorites.flatMap((p) => byPath.get(p) ?? []);
 }
 
-export function recentNotes(tree: TreeNode[]): TreeNode[] {
-  return allNotes(tree).sort((a, b) => (b.modifiedMs ?? 0) - (a.modifiedMs ?? 0));
+/** 按打开顺序（新的在前）列出还存在的文件，没打开过的不出现 */
+export function recentOpened(tree: TreeNode[], opened: RecentOpen[]): { node: TreeNode; openedAt: number }[] {
+  const byPath = new Map(allNotes(tree).map((n) => [n.path, n]));
+  return opened.flatMap((e) => {
+    const node = byPath.get(e.path);
+    return node ? [{ node, openedAt: e.openedAt }] : [];
+  });
 }
 
 export function countNotes(tree: TreeNode[]): number {

@@ -1,6 +1,8 @@
 mod ai;
 mod archive;
 mod chat;
+mod diagram_text;
+mod doctype;
 mod fsops;
 mod git;
 mod history;

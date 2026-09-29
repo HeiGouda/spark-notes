@@ -2,9 +2,11 @@
 import { onMounted, ref, watch } from "vue";
 import { api, type SearchHit } from "../../lib/api";
 import Icon from "../Icon.vue";
+import { docKind } from "../../lib/doctype";
 import { folderLabel } from "../browse";
+import type { IconName } from "../icons";
 import { useMobile } from "../store";
-import { go } from "../nav";
+import { openDoc } from "../nav";
 
 const store = useMobile();
 const query = ref("");
@@ -44,6 +46,11 @@ function clear() {
   query.value = "";
   box.value?.focus();
 }
+
+function iconOf(path: string): IconName {
+  const k = docKind(path) ?? "note";
+  return k === "note" ? "note" : k;
+}
 </script>
 
 <template>
@@ -63,8 +70,8 @@ function clear() {
       </div>
       <template v-else-if="hits.length">
         <div class="sec">找到 {{ hits.length }} 条</div>
-        <button v-for="h in hits" :key="h.path" class="row tall" @click="go({ p: 'note', path: h.path })">
-          <span class="ic"><Icon name="note" :size="20" /></span>
+        <button v-for="h in hits" :key="h.path" class="row tall" @click="openDoc(h.path)">
+          <span class="ic"><Icon :name="iconOf(h.path)" :size="20" /></span>
           <span class="main">
             <div class="name">{{ h.title }}</div>
             <div class="snip">

@@ -4,7 +4,17 @@ import { api, type TreeNode } from "../lib/api";
 import type { CustomOrder } from "../lib/treeSort";
 import { mobileApi, type VaultConfig, type VaultInput } from "./api";
 import { countNotes } from "./browse";
-import { loadPrefs, savePrefs, type VaultMeta } from "./prefs";
+import { DEFAULT_READER, loadPrefs, savePrefs, type FontSize, type ReaderPrefs, type RecentOpen, type VaultMeta } from "./prefs";
+import { THEMES } from "../lib/themes";
+
+export const FONT_PX: Record<FontSize, number> = { small: 14, medium: 16, large: 18, xlarge: 20 };
+
+/** tokens.css 里浅色是默认值，其余主题是 :root 上的类名 */
+function applyReader(r: ReaderPrefs) {
+  const root = document.documentElement;
+  for (const t of THEMES) if (t.id !== "light") root.classList.toggle(t.id, t.id === r.theme);
+  root.style.setProperty("--read-size", `${FONT_PX[r.size]}px`);
+}
 
 /** never：还没下载过；held：有删除等待确认 */
 export type SyncState = "never" | "running" | "ok" | "fail" | "held";
@@ -26,6 +36,9 @@ export const useMobile = defineStore("mobile", () => {
   const order = ref<CustomOrder>({});
   const favorites = ref<string[]>([]);
   const meta = ref<Record<string, VaultMeta>>({});
+  const reader = ref<ReaderPrefs>({ ...DEFAULT_READER });
+  const recent = ref<Record<string, RecentOpen[]>>({});
+  const RECENT_LIMIT = 50;
   const sync = reactive({
     state: "never" as SyncState,
     done: 0,
@@ -41,7 +54,22 @@ export const useMobile = defineStore("mobile", () => {
   let inflight: { id: string; promise: Promise<void> } | null = null;
 
   function persist() {
-    return savePrefs({ current: currentId.value, meta: meta.value });
+    return savePrefs({ current: currentId.value, meta: meta.value, reader: reader.value, recent: recent.value });
+  }
+
+  /** 记一次打开。同一个文件再次打开时排到最前 */
+  async function rememberOpen(path: string) {
+    const id = currentId.value;
+    if (!id) return;
+    const list = [{ path, openedAt: Date.now() }, ...(recent.value[id] ?? []).filter((e) => e.path !== path)];
+    recent.value = { ...recent.value, [id]: list.slice(0, RECENT_LIMIT) };
+    await persist();
+  }
+
+  async function setReader(change: Partial<ReaderPrefs>) {
+    reader.value = { ...reader.value, ...change };
+    applyReader(reader.value);
+    await persist();
   }
 
   async function loadTree() {
@@ -69,7 +97,9 @@ export const useMobile = defineStore("mobile", () => {
     order.value = {};
     favorites.value = [];
     root.value = id ? await mobileApi.vaultRoot(id) : null;
-    if (!id) return;
+    if (!id || !root.value) return;
+    // 笔记里的图片走 asset 协议，要先放行这个笔记库的目录
+    await api.allowAssets(root.value).catch((e) => console.warn("放行图片目录失败", e));
     const synced = (meta.value[id]?.lastSyncMs ?? 0) > 0;
     resetSync(synced ? "ok" : "never");
     await loadTree();
@@ -79,6 +109,9 @@ export const useMobile = defineStore("mobile", () => {
   async function init() {
     const prefs = await loadPrefs();
     meta.value = prefs.meta;
+    reader.value = prefs.reader;
+    recent.value = prefs.recent;
+    applyReader(reader.value);
     vaults.value = await mobileApi.listVaults();
     currentId.value = vaults.value.some((v) => v.id === prefs.current) ? prefs.current : (vaults.value[0]?.id ?? null);
     await openCurrent();
@@ -90,18 +123,23 @@ export const useMobile = defineStore("mobile", () => {
       const outcome = await mobileApi.sync(id, confirmed, (p) => {
         if (currentId.value === id) Object.assign(sync, { done: p.done, total: p.total, rel: p.rel });
       });
-      if (outcome.kind === "done" || outcome.report) {
+      const report = outcome.report;
+      const errors = report?.errors ?? [];
+      if (report) {
         const files = currentId.value === id ? (await loadTree(), countNotes(tree.value)) : (meta.value[id]?.files ?? 0);
         meta.value[id] = { lastSyncMs: Date.now(), files };
         await persist();
       }
       if (currentId.value !== id) return;
-      if (outcome.kind === "done") {
-        resetSync("ok");
-      } else {
+      if (outcome.kind === "needsConfirm") {
         resetSync("held");
         sync.removals = outcome.check.removals;
-        sync.message = outcome.check.guard ?? "";
+        sync.message = [outcome.check.guard ?? "", ...errors].filter(Boolean).join("\n");
+      } else if (errors.length) {
+        resetSync("fail");
+        sync.message = errors.join("\n");
+      } else {
+        resetSync("ok");
       }
     } catch (e) {
       if (currentId.value === id) {
@@ -168,7 +206,7 @@ export const useMobile = defineStore("mobile", () => {
   }
 
   return {
-    vaults, currentId, root, tree, order, favorites, meta, sync, current, homePage,
-    init, loadTree, runSync, confirmHeld, selectVault, addVault, updateVault, removeVault,
+    vaults, currentId, root, tree, order, favorites, meta, reader, recent, sync, current, homePage,
+    init, loadTree, runSync, confirmHeld, selectVault, addVault, updateVault, removeVault, setReader, rememberOpen,
   };
 });

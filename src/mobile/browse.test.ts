@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TreeNode } from "../lib/api";
-import { favoriteNotes, folderItems, recentNotes } from "./browse";
+import { favoriteNotes, folderItems, recentOpened } from "./browse";
 
 function note(path: string, modifiedMs = 0): TreeNode {
   const file = path.slice(path.lastIndexOf("/") + 1);
@@ -40,8 +40,17 @@ describe("favoriteNotes", () => {
   });
 });
 
-describe("recentNotes", () => {
-  it("所有笔记按修改时间倒序，不含文件夹", () => {
-    expect(names(recentNotes(tree))).toEqual(["产品规划", "会议记录", "同步设计", "周报", "随手记", "原子习惯"]);
+describe("recentOpened", () => {
+  it("只列出打开过的文件，新打开的在前，已经不存在的跳过", () => {
+    const opened = [
+      { path: "随手记.md", openedAt: 3 },
+      { path: "已删除.md", openedAt: 2 },
+      { path: "工作/周报.md", openedAt: 1 },
+    ];
+    expect(recentOpened(tree, opened).map((r) => [r.node.name, r.openedAt])).toEqual([
+      ["随手记", 3],
+      ["周报", 1],
+    ]);
+    expect(recentOpened(tree, [])).toEqual([]);
   });
 });

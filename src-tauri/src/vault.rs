@@ -1,3 +1,4 @@
+use crate::doctype;
 use serde::Serialize;
 use std::fs::{self, File};
 use std::io::Write;
@@ -97,9 +98,9 @@ fn scan_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, String> {
                 modified_ms,
                 created_ms,
             });
-        } else if file_type.is_file() && name.to_lowercase().ends_with(".md") {
+        } else if let (true, Some((stem, _))) = (file_type.is_file(), doctype::split(&name)) {
             nodes.push(TreeNode {
-                name: name[..name.len() - 3].to_string(),
+                name: stem.to_string(),
                 path: rel,
                 is_dir: false,
                 children: Vec::new(),
@@ -190,6 +191,17 @@ mod tests {
         assert_eq!(tree[0].children.len(), 1);
         assert_eq!(tree[0].children[0].path, "工作/周报.md");
         assert_eq!(tree[0].children[0].name, "周报");
+    }
+
+    #[test]
+    fn scan_lists_mind_maps_and_flowcharts_without_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        touch(&root.join("上线.flow.mmd"), "flowchart TD\n");
+        touch(&root.join("路线.mind.mmd"), "mindmap\n  路线\n");
+        let tree = scan(root).unwrap();
+        let got: Vec<_> = tree.iter().map(|n| (n.name.as_str(), n.path.as_str())).collect();
+        assert_eq!(got, vec![("上线", "上线.flow.mmd"), ("路线", "路线.mind.mmd")]);
     }
 
     #[test]

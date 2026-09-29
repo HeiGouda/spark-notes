@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import type { TreeNode } from "../lib/api";
@@ -22,9 +23,10 @@ vi.mock("./api", () => ({
   },
 }));
 vi.mock("../lib/api", () => ({
-  api: { scanVault: async () => m.tree, readConfig: async () => null },
+  api: { scanVault: async () => m.tree, readConfig: async () => null, allowAssets: async () => {} },
 }));
-vi.mock("./prefs", () => ({
+vi.mock("./prefs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prefs")>()),
   loadPrefs: async () => structuredClone(m.prefs),
   savePrefs: async (p: MobilePrefs) => void m.saved.push(JSON.parse(JSON.stringify(p))),
 }));
@@ -39,7 +41,8 @@ const done: SyncOutcome = { kind: "done", report: { downloaded: 1, localTrashed:
 beforeEach(() => {
   setActivePinia(createPinia());
   m.vaults = [vault("a"), vault("b")];
-  m.prefs = { current: "a", meta: { a: { lastSyncMs: 1, files: 1 }, b: { lastSyncMs: 1, files: 1 } } };
+  m.prefs = { current: "a", meta: { a: { lastSyncMs: 1, files: 1 }, b: { lastSyncMs: 1, files: 1 } }, reader: { theme: "light", size: "medium" }, recent: {} };
+  document.documentElement.className = "";
   m.saved = [];
   m.tree = [note("周报.md"), note("日记.md")];
   m.sync.mockReset();
@@ -58,6 +61,19 @@ describe("同步状态", () => {
     expect(lastSaved()?.meta.a.lastSyncMs).toBe(s.meta.a.lastSyncMs);
   });
 
+  it("有文件没下完时是 fail，并列出文件名，同时记下已同步时间", async () => {
+    m.sync.mockResolvedValue({
+      kind: "done",
+      report: { downloaded: 1, localTrashed: 0, skipped: 0, errors: ["图片.png：连接中断"] },
+    } satisfies SyncOutcome);
+    const s = useMobile();
+    await s.init();
+    await s.runSync();
+    expect(s.sync.state).toBe("fail");
+    expect(s.sync.message).toContain("图片.png");
+    expect(s.meta.a.lastSyncMs).toBeGreaterThan(1);
+  });
+
   it("失败后是 fail，并带上原因", async () => {
     m.sync.mockRejectedValue("读取远端目录失败：账号或密码不正确（HTTP 401）");
     const s = useMobile();
@@ -71,7 +87,7 @@ describe("同步状态", () => {
     const removals = Array.from({ length: 21 }, (_, i) => `旧${i}.md`);
     m.sync.mockResolvedValueOnce({
       kind: "needsConfirm",
-      check: { firstSync: false, downloads: 0, downloadBytes: 0, removals, guard: null, needsConfirm: true },
+      check: { firstSync: false, downloads: 0, downloadBytes: 0, missingSizes: 0, removals, guard: null, needsConfirm: true },
       report: { downloaded: 0, localTrashed: 0, skipped: 21, errors: [] },
     } satisfies SyncOutcome);
     const s = useMobile();
@@ -104,6 +120,44 @@ describe("切换笔记库", () => {
     expect(s.root).toBe("/data/b");
     expect(lastSaved()?.current).toBe("b");
     expect(m.sync).toHaveBeenCalledWith("b", [], expect.any(Function));
+  });
+});
+
+describe("阅读设置", () => {
+  it("打开时套用上次的主题和字号", async () => {
+    m.prefs.reader = { theme: "paper", size: "large" };
+    const s = useMobile();
+    await s.init();
+    expect(document.documentElement.classList.contains("paper")).toBe(true);
+    expect(document.documentElement.style.getPropertyValue("--read-size")).toBe("18px");
+    expect(s.reader).toEqual({ theme: "paper", size: "large" });
+  });
+
+  it("换主题时去掉旧主题，浅色不加类名，并记住选择", async () => {
+    const s = useMobile();
+    await s.init();
+    await s.setReader({ theme: "night" });
+    expect(document.documentElement.classList.contains("night")).toBe(true);
+    await s.setReader({ theme: "light", size: "xlarge" });
+    expect([...document.documentElement.classList].filter((c) => ["paper", "green", "night", "black"].includes(c))).toEqual([]);
+    expect(document.documentElement.style.getPropertyValue("--read-size")).toBe("20px");
+    expect(lastSaved()?.reader).toEqual({ theme: "light", size: "xlarge" });
+  });
+});
+
+describe("最近打开", () => {
+  it("记在当前笔记库最前面，再次打开排到最前，别的库不受影响", async () => {
+    const s = useMobile();
+    await s.init();
+    await s.rememberOpen("工作/周报.md");
+    await s.rememberOpen("日记.md");
+    await s.rememberOpen("工作/周报.md");
+    expect(s.recent.a.map((e) => e.path)).toEqual(["工作/周报.md", "日记.md"]);
+    await s.selectVault("b");
+    await s.rememberOpen("读书.md");
+    expect(s.recent.b.map((e) => e.path)).toEqual(["读书.md"]);
+    expect(s.recent.a.map((e) => e.path)).toEqual(["工作/周报.md", "日记.md"]);
+    expect(lastSaved()?.recent.a.map((e) => e.path)).toEqual(["工作/周报.md", "日记.md"]);
   });
 });
 

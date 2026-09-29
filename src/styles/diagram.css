@@ -1,0 +1,220 @@
+/* 思维导图与流程图（需求文档 5.18）；颜色全部取主题令牌，切换主题即随之变化 */
+
+.diagram-view { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--paper) }
+.diagram-editor { flex: 1; min-height: 0; display: flex; flex-direction: column }
+
+.diagram-bar { flex: none; display: flex; align-items: center; gap: 4px; height: 40px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--paper) }
+.dbtn { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--r-btn); background: transparent; color: var(--ink-2); font: 12.5px var(--f-ui); white-space: nowrap; cursor: pointer }
+.dbtn:hover:not(:disabled) { background: var(--hover); color: var(--ink) }
+.dbtn:disabled { opacity: .4; cursor: default }
+.dbtn.is-active { background: var(--accent-soft); color: var(--accent) }
+.dbtn.icon { width: 26px; padding: 0; justify-content: center; font-size: 15px }
+.dsep { width: 1px; height: 18px; margin: 0 4px; background: var(--line) }
+.dflex { flex: 1 }
+.dzoom { display: inline-flex; align-items: center }
+.dzoom-v { min-width: 42px; text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums }
+
+.diagram-work { flex: 1; min-height: 0; display: flex }
+.diagram-canvas { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; background-color: var(--paper); background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 20px 20px; cursor: default; outline: none }
+.diagram-canvas.is-dragging, .diagram-canvas.is-panning { cursor: grabbing }
+.diagram-canvas.is-pan-ready { cursor: grab }
+.diagram-canvas.is-pan-ready .mind-node, .diagram-canvas.is-pan-ready .flow-node, .diagram-canvas.is-pan-ready .flow-edge { cursor: inherit }
+.diagram-marquee { fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none }
+.diagram-canvas svg { display: block; user-select: none }
+
+/* 节点文字输入框：平时透明地放在选中的节点上承接键盘输入（包括输入法），编辑时显示出来 */
+.diagram-input { position: absolute; z-index: 2; box-sizing: border-box; margin: 0; border: 0; outline: none; resize: none; overflow: hidden; background: transparent; color: transparent; caret-color: transparent; font-family: var(--f-ui); opacity: 0; pointer-events: none; white-space: nowrap }
+.diagram-input.is-editing { opacity: 1; pointer-events: auto; color: var(--ink); caret-color: var(--accent); background: var(--paper); border-radius: 5px; box-shadow: 0 0 0 2px var(--accent), 0 4px 14px rgba(0, 0, 0, .12) }
+
+/* 思维导图：节点颜色由编辑器按配色方案和节点样式算好，放在 --n-* 变量里 */
+.mind-link { fill: none; stroke: var(--line-strong); stroke-width: 1.6 }
+.mind-link.is-bone { stroke-width: 2.2 }
+.mind-spine { fill: none; stroke-width: 3.2; stroke-linecap: round }
+.mind-bracket { fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round }
+.mind-node { cursor: pointer }
+.mind-box { fill: var(--n-fill); stroke: var(--n-stroke); stroke-width: 1.2 }
+.mind-box.is-plain { fill: transparent; stroke: none }
+.mind-box.is-summary { stroke-dasharray: 4 3 }
+.mind-underline { stroke: var(--n-line); stroke-width: 1.4 }
+.mind-text { font-family: var(--f-ui); fill: var(--n-text) }
+.mind-hit { fill: var(--hl); opacity: .8; pointer-events: none }
+.mind-focus { fill: none; stroke: var(--accent); stroke-width: 2 }
+.mind-focus.is-anchor { stroke-width: 2.6 }
+.diagram-canvas:not(.is-exporting) .mind-node.is-dragged { opacity: .4 }
+.diagram-canvas:not(.is-exporting) .mind-node.drop-child .mind-box { stroke: var(--accent); stroke-width: 2; fill: var(--accent-soft) }
+.diagram-canvas:not(.is-exporting) .mind-node.depth-0.drop-child .mind-box { fill: var(--n-fill) }
+.mind-drop-line { fill: var(--accent) }
+.mind-badge circle { fill: var(--paper); stroke: var(--line-strong); stroke-width: 1.2 }
+.mind-badge text { fill: var(--muted); font: 10.5px var(--f-ui) }
+.mind-badge:hover circle { stroke: var(--accent) }
+.mind-ghost { position: absolute; z-index: 3; padding: 3px 8px; border-radius: 4px; background: var(--accent); color: var(--paper); font-size: 12px; pointer-events: none; white-space: nowrap }
+
+/* 流程图 */
+.shape-ico { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.3 }
+.flow-node { cursor: pointer }
+.diagram-canvas.is-moving .flow-node { cursor: move }
+.flow-text-box { fill: transparent; stroke: none }
+.flow-node.is-text:hover .flow-text-box { stroke: var(--line-strong); stroke-dasharray: 3 3 }
+.diagram-canvas:not(.is-exporting) .flow-node.is-text.is-selected .flow-text-box { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3 }
+.diagram-canvas:not(.is-exporting) .flow-node.is-text.is-target .flow-text-box { stroke: var(--accent); fill: var(--accent-soft) }
+.flow-guide { stroke: #e0467c; stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none }
+.flow-t { font: 700 13px var(--f-ui) }
+.diagram-bar { position: relative }
+.flow-pop { position: absolute; z-index: 20; padding: 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--paper); box-shadow: 0 12px 32px rgba(0, 0, 0, .18) }
+.diagram-bar > .flow-shape-menu { top: 38px; left: 10px }
+.flow-pop-cap { margin: 0 2px 6px; font-size: 11.5px; color: var(--muted) }
+.flow-pop-grid { display: grid; grid-template-columns: repeat(5, 40px); gap: 4px }
+.flow-pop-cell { width: 40px; height: 34px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 4px; background: none; color: var(--ink-2); cursor: pointer }
+.flow-pop-cell:hover { background: var(--hover); border-color: var(--line-strong); color: var(--ink) }
+.flow-pop-cell svg { width: 28px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4 }
+.flow-shape { fill: var(--n-fill, var(--paper)); stroke: var(--n-stroke, var(--line-strong)); stroke-width: 1.3 }
+.diagram-canvas:not(.is-exporting) .flow-node.is-selected .flow-shape { stroke: var(--accent); stroke-width: 2 }
+.diagram-canvas:not(.is-exporting) .flow-node.is-target .flow-shape { stroke: var(--accent); stroke-width: 2; fill: var(--accent-soft) }
+.flow-text { fill: var(--n-text, var(--ink)); font-family: var(--f-ui) }
+.flow-hit { fill: var(--hl); opacity: .8; pointer-events: none }
+.flow-edge { cursor: pointer }
+.flow-edge-line { fill: none; stroke: var(--d-edge, var(--ink-2)); stroke-width: 1.4 }
+.flow-edge-hit { fill: none; stroke: transparent; stroke-width: 12 }
+.flow-edge.style-dotted .flow-edge-line { stroke-dasharray: 5 4 }
+.flow-edge.style-thick .flow-edge-line { stroke-width: 3.2 }
+.diagram-canvas:not(.is-exporting) .flow-edge.is-selected .flow-edge-line { stroke: var(--accent) }
+.flow-arrow { fill: var(--d-edge, var(--ink-2)) }
+.flow-arrow.on { fill: var(--accent) }
+.flow-label rect { fill: var(--paper); stroke: var(--line); stroke-width: 1 }
+.diagram-canvas:not(.is-exporting) .flow-edge.is-hit .flow-label rect { fill: var(--hl) }
+.flow-label text { fill: var(--d-edge, var(--ink-2)); font: 12px var(--f-ui) }
+.diagram-canvas:not(.is-exporting) .flow-edge.is-selected .flow-label rect { stroke: var(--accent) }
+.flow-handle { fill: var(--paper); stroke: var(--accent); stroke-width: 1.6; cursor: crosshair }
+.flow-handle:hover { fill: var(--accent) }
+.flow-seg { fill: var(--paper); stroke: var(--accent); stroke-width: 1.4 }
+.flow-seg:hover { fill: var(--accent) }
+.flow-seg.is-h { cursor: ns-resize }
+.flow-seg.is-v { cursor: ew-resize }
+.flow-edge.is-selected .flow-edge-hit { cursor: move }
+.flow-ghost { pointer-events: none }
+.flow-ghost-line { fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round }
+.flow-ghost-line.is-dotted { stroke-dasharray: 5 4 }
+.flow-ghost-dot { fill: var(--accent) }
+.flow-edge.is-rewiring { opacity: .25 }
+.flow-port { fill: var(--paper); stroke: var(--accent); stroke-width: 1.4; pointer-events: none }
+.flow-port.is-on { fill: var(--accent) }
+.diagram-canvas.is-connecting { cursor: crosshair }
+.flow-empty { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; text-align: center; pointer-events: none }
+.flow-empty-ai { pointer-events: auto; border: 1px solid var(--line-strong); background: var(--paper) }
+.flow-tip { position: absolute; z-index: 3; padding: 5px 9px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink-2); font-size: 12px; line-height: 1.6; pointer-events: none; white-space: nowrap }
+
+/* 图下方的反向链接：占用高度有限，内容多时滚动 */
+.diagram-backlinks { flex: none; max-height: 30%; overflow: auto; border-top: 1px solid var(--line); background: var(--paper) }
+.diagram-backlinks .backlinks { max-width: none; margin: 0; padding: 0 16px 8px }
+.diagram-backlinks .bl-inner { border-top: 0; padding-top: 8px }
+.diagram-backlinks .bl-item { margin: 0 -6px; padding: 6px }
+
+/* AI 生成思维导图的进度条 */
+.gen-bar { flex: none; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--accent-soft); color: var(--ink); font-size: 12.5px }
+.gen-bar.is-error { background: color-mix(in srgb, var(--danger) 10%, var(--paper)); color: var(--danger) }
+.gen-bar kbd { margin-left: 4px; font: 11px var(--f-code); color: var(--muted) }
+.gen-msg { flex: none }
+.gen-warn { flex: none; color: var(--warn, #a07000); font-size: 12px }
+.gen-input { flex: 1; min-width: 160px; height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink); font: 12.5px var(--f-ui); outline: none }
+.gen-input:focus { border-color: var(--accent) }
+.gen-input:disabled { opacity: .5 }
+.gen-sep { width: 1px; height: 18px; background: var(--line-strong) }
+.gen-spin { width: 12px; height: 12px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: gen-spin .8s linear infinite }
+@keyframes gen-spin { to { transform: rotate(360deg) } }
+
+/* 历史版本里的只读预览 */
+.diagram-preview { height: 100%; min-height: 320px; display: flex; flex-direction: column }
+.diagram-preview-bad { padding: 16px; color: var(--muted); font-size: 12.5px; line-height: 1.8 }
+
+/* 无法显示 */
+.diagram-issues { flex: 1; display: grid; place-items: center; padding: 24px; background: var(--paper) }
+.diagram-issues-box { width: min(480px, 100%); padding: 22px 26px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--paper) }
+.diagram-issues-box h3 { margin: 0 0 10px; font-size: 16px; color: var(--ink) }
+.diagram-issues-box ul { margin: 0 0 12px; padding-left: 18px; color: var(--ink-2); font-size: 13px; line-height: 1.8 }
+.diagram-issues-box li.more { list-style: none; margin-left: -18px; color: var(--muted) }
+.diagram-issues-box p { margin: 0 0 16px; color: var(--muted); font-size: 12.5px; line-height: 1.7 }
+.diagram-issues-actions { display: flex; gap: 8px }
+
+/* 工具栏的下拉：格式区、“画布”、形状、对齐 */
+.dmenu-wrap { position: relative; display: inline-flex }
+.dformat { display: inline-flex; align-items: center; gap: 2px }
+.dbtn.icon-dd { gap: 2px; padding: 0 5px }
+.dbtn.dsize { min-width: 52px; justify-content: space-between }
+.dcolor { display: inline-flex; flex-direction: column; align-items: center; width: 16px; line-height: 1 }
+.dcolor svg { width: 16px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.4 }
+.dcolor svg .f { fill: currentColor; stroke: none; opacity: .55 }
+.dcolor b { font: 700 12px/12px var(--f-ui) }
+.dcolor i { display: block; width: 16px; height: 4px; margin-top: 2px; border-radius: 1px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15) }
+.dpop { position: absolute; z-index: 25; top: calc(100% + 6px); left: 0; padding: 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--paper); color: var(--ink); box-shadow: 0 12px 32px rgba(0, 0, 0, .18); font-size: 12.5px }
+.dpop.dcanvas { left: auto; right: 0; width: 340px; max-height: calc(100vh - 140px); overflow: auto }
+.dpop .dp-pal { width: 200px }
+.dpop.dp-list { display: flex; flex-direction: column; min-width: 128px; padding: 4px 0 }
+.dp-item { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px; border: 0; background: none; color: var(--ink); font: 12.5px var(--f-ui); text-align: left; white-space: nowrap; cursor: pointer }
+.dp-item:hover:not(:disabled) { background: var(--hover) }
+.dp-item.on { color: var(--accent); font-weight: 600 }
+.dp-item:disabled { color: var(--muted); cursor: default }
+.dp-sep { height: 1px; margin: 4px 0; background: var(--line) }
+.dp-ico { width: 24px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.4 }
+.dp-ico .f { fill: currentColor; stroke: none }
+.dp-ico .ln-dotted { stroke-dasharray: 3 3 }
+.dp-ico .ln-thick { stroke-width: 3 }
+.dpop.dp-shapes { display: grid; grid-template-columns: repeat(5, 40px); gap: 4px; padding: 8px }
+.flow-pop-cell.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent) }
+
+.dp-label { margin: 12px 0 6px; font-weight: 600; font-size: 12px; color: var(--ink-2) }
+.dp-label:first-child { margin-top: 0 }
+.dp-note { margin-left: 4px; font-weight: 400; color: var(--muted) }
+.dpop button:disabled { cursor: default }
+
+.dp-structs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px }
+.dp-structs.six { grid-template-columns: repeat(6, 1fr) }
+.dp-structs.three { grid-template-columns: repeat(3, 1fr) }
+.dp-struct { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 0 4px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--paper); color: var(--muted); font: 10.5px var(--f-ui); cursor: pointer; white-space: nowrap }
+.dp-struct svg { width: 32px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.2 }
+.dp-struct svg .f { fill: currentColor; stroke: none }
+.dp-struct:hover:not(:disabled) { border-color: var(--accent) }
+.dp-struct.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent) }
+
+.dp-schemes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px }
+.dp-schemes.four { grid-template-columns: repeat(4, 1fr); gap: 5px }
+.dp-scheme { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--paper); color: var(--ink-2); font: 11px var(--f-ui); text-align: left; cursor: pointer; white-space: nowrap }
+.dp-scheme:hover:not(:disabled) { border-color: var(--accent) }
+.dp-scheme.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--ink) }
+.dp-sw { display: flex; gap: 2px; width: 100% }
+.dp-sw i { flex: 1; height: 9px; border-radius: 2px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08) }
+
+.dp-seg { flex: 1; display: flex; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden }
+.dp-seg button { flex: 1; height: 26px; padding: 0 4px; border: 0; border-left: 1px solid var(--line-strong); background: var(--paper); color: var(--ink-2); font: 12px var(--f-ui); white-space: nowrap; cursor: pointer }
+.dp-seg button:first-child { border-left: 0 }
+.dp-seg button:hover:not(:disabled):not(.on) { background: var(--hover) }
+.dp-seg button.on { background: var(--accent); color: var(--paper) }
+
+.dp-pal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px }
+.dp-c { height: 22px; padding: 0; border: 1px solid rgba(0, 0, 0, .12); border-radius: 4px; cursor: pointer }
+.dp-c.on { outline: 2px solid var(--accent); outline-offset: 1px }
+.dp-c.none { background: linear-gradient(135deg, var(--paper) 45%, var(--danger) 45%, var(--danger) 55%, var(--paper) 55%) }
+.dp-c.more { background: conic-gradient(#e44, #ec4, #4c6, #4cd, #46e, #c4d, #e44) }
+.dp-picker { position: absolute; width: 0; height: 0; padding: 0; border: 0; opacity: 0; pointer-events: none }
+
+/* 画布右下角的缩放控件 */
+.diagram-work { position: relative }
+.dzoom-float { position: absolute; z-index: 5; right: 14px; bottom: 12px; display: flex; align-items: center; gap: 1px; padding: 2px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--paper); box-shadow: 0 2px 10px rgba(0, 0, 0, .08) }
+.dzoom-float .dzoom-v { min-width: 50px; justify-content: center; font-variant-numeric: tabular-nums; color: var(--ink-2) }
+
+/* 格式刷 */
+.diagram-canvas.is-painting, .diagram-canvas.is-painting .mind-node, .diagram-canvas.is-painting .flow-node { cursor: copy }
+
+/* 思维导图：拖动时将要放入的位置 */
+.mind-preview rect { fill: color-mix(in srgb, var(--accent) 7%, transparent); stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3 }
+.mind-preview text { fill: var(--accent); font: 12px var(--f-ui) }
+
+/* 流程图：快速延伸箭头、调整大小的手柄、从下拉拖出的图形 */
+.flow-arrow-btn { cursor: pointer }
+.flow-arrow-btn .flow-arrow-hit { fill: transparent }
+.flow-arrow-btn path { fill: var(--accent); opacity: .55; transition: opacity .12s }
+.flow-arrow-btn:hover path { opacity: 1 }
+.flow-corner { fill: var(--paper); stroke: var(--accent); stroke-width: 1.4 }
+.flow-corner.is-nw, .flow-corner.is-se { cursor: nwse-resize }
+.flow-corner.is-ne, .flow-corner.is-sw { cursor: nesw-resize }
+.flow-drag-ghost { position: fixed; z-index: 50; width: 44px; height: 34px; display: grid; place-items: center; border: 1px dashed var(--accent); border-radius: 5px; background: var(--paper); color: var(--accent); pointer-events: none }
+.flow-drag-ghost svg { width: 28px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4 }

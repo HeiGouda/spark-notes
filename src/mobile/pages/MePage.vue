@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import Icon from "../Icon.vue";
+import ReaderSettings from "../ReaderSettings.vue";
 import { timeLabel } from "../browse";
 import { useMobile } from "../store";
 import { go, open } from "../nav";
@@ -40,6 +41,8 @@ function status(id: string) {
         <span class="ic"><Icon name="plus" :size="20" /></span>
         <span class="main"><div class="name">添加笔记库</div></span>
       </button>
+      <div class="sec">阅读</div>
+      <ReaderSettings />
       <div class="sec">关于</div>
       <div class="row">
         <span class="ic"><Icon name="info" :size="20" /></span>
