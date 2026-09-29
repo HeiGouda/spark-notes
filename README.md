@@ -10,7 +10,7 @@
 
 Windows 64 位安装包在 [Releases](https://github.com/HeiGouda/spark-notes/releases/latest)，下载后直接安装。安装包未签名，若 Windows 提示“Windows 已保护你的电脑”，点“更多信息”，再点“仍要运行”。macOS 安装包尚未提供。
 
-安卓只读版是桌面 Spark 的同伴：只从 WebDAV 下载笔记，在手机上查看，不编辑，也不写回云端。正式包是 arm64 签名 APK（`com.spark.app`，0.1.0）。签名密钥不在仓库里，丢了就不能覆盖升级已安装的正式版。这个 APK 还没有放到 GitHub 或 Gitee 的 Releases。
+安卓只读版是桌面 Spark 的同伴：只从 WebDAV 下载笔记，在手机上查看，不编辑，也不写回云端。签名 APK 在 Gitee 的 [Releases](https://gitee.com/auricular-zhong/spark-notes/releases)（`Spark_0.1.0_android.apk`，包名 `com.spark.app`，支持 arm64、armv7、x86 和 x86_64）。签名密钥不在仓库里，丢了就不能覆盖升级已安装的正式版。
 
 ## 技术栈
 
