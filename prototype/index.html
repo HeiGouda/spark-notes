@@ -1,0 +1,1498 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spark · 低保真原型</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{display:flex;flex-direction:column;background:#2A2C30;font-family:var(--f-ui);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit}
+ul{list-style:none}
+
+/* ---------- 原型切换条（不属于产品界面） ---------- */
+.proto-bar{flex:none;display:flex;align-items:center;gap:14px;padding:8px 16px;background:#202225;color:#D8DADE;font:13px/1.4 "Segoe UI","Microsoft YaHei UI",sans-serif;border-bottom:1px solid #000}
+.proto-bar strong{font-weight:600;color:#fff}
+.proto-switch{display:flex;gap:4px;background:#2E3136;padding:3px;border-radius:7px}
+.proto-switch button{border:0;background:transparent;color:#AEB2BA;padding:5px 12px;border-radius:5px;cursor:pointer;white-space:nowrap}
+.proto-bar strong{white-space:nowrap}
+.proto-switch button[aria-selected="true"]{background:#4A4E56;color:#fff}
+.proto-switch button:focus-visible{outline:2px solid #7AA2FF;outline-offset:1px}
+.proto-desc{color:#9CA0A8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- 主题令牌 ---------- */
+.theme-a{
+  --chrome:#F3F4F7;--sidebar:#F3F4F7;--paper:#FFFFFF;
+  --ink:#1E2330;--ink-2:#454C5C;--muted:#7A8191;
+  --line:#E1E4EA;--line-strong:#CDD2DB;--hover:rgba(30,35,48,.06);
+  --accent:#3446A8;--accent-soft:#E9ECF9;--hl:#FFF0A3;
+  --code-bg:#F6F7FA;--code-line:#E6E9EF;
+  --tk-k:#3446A8;--tk-s:#2F7D4F;--tk-f:#8E47AE;--tk-c:#8D94A3;--tk-t:#B35C1E;
+  --ok:#3E9B6A;--danger:#C42B1C;--danger-strong:#C42B1C;
+  --md-code:#C2255C;--md-quote:#2B7BD6;--md-task:#2F9E5B;--md-link:#0E8A96;--md-tag:#7C4DCC;
+  --md-mix:10%;--md-mix-block:6%;--md-task-on:#FFFFFF;
+  --f-ui:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;
+  --f-body:"Segoe UI","Microsoft YaHei",sans-serif;
+  --f-title:"Segoe UI Variable Display","Segoe UI","Microsoft YaHei",sans-serif;
+  --f-code:"Cascadia Code","JetBrains Mono",Consolas,monospace;
+  --r-btn:4px;--r-row:4px;--r-code:6px;
+  --tb-h:36px;--doc-w:780px;
+}
+/* 其余主题只替换配色，布局、字体、尺寸沿用浅色 */
+/* 纸张：米黄底 + 赭红强调 */
+.theme-a.paper{
+  --chrome:#ECE4D4;--sidebar:#ECE4D4;--paper:#F6F0E4;
+  --ink:#2E2A24;--ink-2:#554D42;--muted:#8A8072;
+  --line:#DFD5C3;--line-strong:#CCBEA7;--hover:rgba(70,50,20,.07);
+  --accent:#A0452B;--accent-soft:#EFDCCB;--hl:#F3DD8C;
+  --code-bg:#EFE8DA;--code-line:#DFD5C3;
+  --tk-k:#A0452B;--tk-s:#5E7A2E;--tk-f:#8A4F7D;--tk-c:#9A8F7E;--tk-t:#B0661A;
+  --ok:#4E8A4A;--danger:#B8321F;--danger-strong:#B8321F;
+  --md-code:#B8305E;--md-quote:#3A72B8;--md-task:#3F8F4E;--md-link:#1C7F86;--md-tag:#7A4FA8;
+  --md-mix-block:9%;
+}
+/* 护眼：豆沙绿底 + 墨绿强调 */
+.theme-a.green{
+  --chrome:#DAE5D5;--sidebar:#DAE5D5;--paper:#E6EFE2;
+  --ink:#1F2B22;--ink-2:#3F4E43;--muted:#6E7D71;
+  --line:#CCDAC7;--line-strong:#B7C8B1;--hover:rgba(30,60,35,.07);
+  --accent:#2E6B4A;--accent-soft:#D0E3D0;--hl:#EDE59A;
+  --code-bg:#DCE8D7;--code-line:#C9D8C3;
+  --tk-k:#2E6B4A;--tk-s:#8A5A1E;--tk-f:#3F5FA0;--tk-c:#7E8E80;--tk-t:#A5552A;
+  --ok:#2F8452;--danger:#B3361F;--danger-strong:#B3361F;
+  --md-code:#B02A5B;--md-quote:#2F6CB5;--md-task:#2D8A4E;--md-link:#127A86;--md-tag:#7449B0;
+  --md-mix-block:9%;
+}
+/* 夜读：深蓝灰 + 琥珀强调 */
+.theme-a.night{
+  --chrome:#15181E;--sidebar:#15181E;--paper:#1B1F27;
+  --ink:#D9DCE3;--ink-2:#B3B8C3;--muted:#767E8C;
+  --line:#262B35;--line-strong:#353B47;--hover:rgba(255,255,255,.05);
+  --accent:#D9A55B;--accent-soft:rgba(217,165,91,.13);--hl:rgba(217,165,91,.30);
+  --code-bg:#14171D;--code-line:#232833;
+  --tk-k:#D9A55B;--tk-s:#9CC28F;--tk-f:#8FB4E6;--tk-c:#5F6775;--tk-t:#D98C7A;
+  --ok:#6FBF8B;--danger:#E07A6B;--danger-strong:#C9503F;
+  --md-code:#E77FA3;--md-quote:#6FA8E8;--md-task:#6FBF8B;--md-link:#5BC0C9;--md-tag:#B394E8;
+  --md-mix:16%;--md-mix-block:10%;--md-task-on:var(--paper);
+  color-scheme:dark;
+}
+/* 纯黑：更深的夜读，强调色不变 */
+.theme-a.black{
+  --chrome:#0D0D0F;--sidebar:#0D0D0F;--paper:#000000;
+  --ink:#E4E4E7;--ink-2:#B8B8BE;--muted:#7A7A82;
+  --line:#1E1E22;--line-strong:#2C2C32;--hover:rgba(255,255,255,.06);
+  --accent:#D9A55B;--accent-soft:rgba(217,165,91,.14);--hl:rgba(217,165,91,.32);
+  --code-bg:#0E0E10;--code-line:#1E1E22;
+  --tk-k:#D9A55B;--tk-s:#9CC28F;--tk-f:#8FB4E6;--tk-c:#62626B;--tk-t:#D98C7A;
+  --ok:#6FBF8B;--danger:#E07A6B;--danger-strong:#C9503F;
+  --md-code:#F08AAE;--md-quote:#79B2F0;--md-task:#74C893;--md-link:#62CAD2;--md-tag:#BB9EF0;
+  --md-mix:16%;--md-mix-block:10%;--md-task-on:var(--paper);
+  color-scheme:dark;
+}
+
+/* ---------- 通用结构 ---------- */
+.app{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--chrome);color:var(--ink);position:relative}
+.ico{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.ico-sm{width:14px;height:14px}
+.btn{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border:0;background:transparent;color:var(--ink-2);border-radius:var(--r-btn);cursor:pointer}
+.btn:hover{background:var(--hover);color:var(--ink)}
+.btn:focus-visible,.tab:focus-visible,.row:focus-visible,.hsel:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.btn.is-active{color:var(--accent);background:var(--accent-soft)}
+.btn-wide{width:auto;padding:0 6px}
+
+/* 标题栏 */
+.titlebar{flex:none;height:var(--tb-h);display:flex;align-items:stretch;user-select:none}
+.tb-left{flex:none;width:251px;display:flex;align-items:center;gap:2px;padding:0 8px}
+.tb-logo{width:20px;height:20px;border-radius:5px;flex:none;margin-right:4px;pointer-events:none}
+.tabs{display:flex;align-items:stretch;flex:0 1 auto;min-width:0;overflow:hidden}
+.tab{display:flex;align-items:center;gap:8px;flex:1 1 160px;width:160px;max-width:160px;min-width:0;overflow:hidden;padding:0 8px 0 12px;border:0;background:transparent;font-size:12.5px;color:var(--muted);cursor:pointer}
+.tab .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab.is-preview .name{font-style:italic}
+.tab .x{display:inline-flex;width:18px;height:18px;align-items:center;justify-content:center;border-radius:4px;opacity:0}
+.tab:hover .x,.tab.is-active .x{opacity:.7}
+.tab .x:hover{background:var(--hover);opacity:1}
+.tab.is-active{color:var(--ink)}
+.tab-add{align-self:center;flex:none;margin-left:4px}
+.tb-drag{flex:1 1 auto;min-width:0}
+.tb-right{display:flex;align-items:center;gap:2px;padding:0 6px}
+.sync{position:relative}
+.sync .dot{position:absolute;right:5px;bottom:5px;width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 2px var(--chrome)}
+.win{display:flex}
+.win button{width:46px;border:0;background:transparent;color:var(--ink-2);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.win button:hover{background:var(--hover)}
+.win button.close:hover{background:var(--danger-strong);color:#fff}
+
+/* 主体 */
+.body{flex:1;min-height:0;display:flex}
+.sidebar{flex:none;width:252px;display:flex;flex-direction:column;background:var(--sidebar);border-right:1px solid var(--line);min-height:0}
+.views{display:flex;gap:2px;padding:8px 8px 6px}
+.tree-head{display:flex;align-items:center;gap:2px;padding:4px 6px 4px 12px}
+.vault{flex:1;display:flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:var(--ink-2);letter-spacing:.02em}
+.tree-head .btn{width:24px;height:24px}
+.tree{flex:1;overflow:auto;padding:2px 6px 12px;font-size:13px}
+.row{display:flex;align-items:center;gap:6px;height:28px;padding:0 8px 0 calc(6px + var(--d,0) * 16px);border-radius:var(--r-row);color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.row:hover{background:var(--hover)}
+.row .chev{color:var(--muted);width:14px;height:14px}
+.row .spacer{width:14px;flex:none}
+.row .ico{color:var(--muted)}
+.row .star{margin-left:auto;color:var(--accent)}
+.row.is-active{background:var(--accent-soft);color:var(--ink);font-weight:500}
+.row.is-active .ico{color:var(--accent)}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--paper);position:relative}
+
+/* 格式工具栏 */
+.toolbar{flex:none;display:flex;align-items:center;gap:1px;height:40px;padding:0 10px;border-bottom:1px solid var(--line);overflow:hidden}
+.sep{flex:none;width:1px;height:18px;background:var(--line);margin:0 6px}
+.tb-spacer{flex:1}
+.g{font:600 14px/1 var(--f-ui)}
+.g-i{font:italic 600 15px/1 Georgia,serif}
+.g-s{text-decoration:line-through}
+.g-h{padding:1px 3px;border-radius:2px;background:var(--hl);color:var(--ink)}
+.g-sm{font:600 11px/1 var(--f-code);letter-spacing:-.04em;white-space:nowrap}
+.hsel{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:28px;min-width:76px;padding:0 6px 0 10px;border:1px solid var(--line);border-radius:var(--r-btn);background:transparent;color:var(--ink-2);font-size:12.5px;cursor:pointer}
+.hsel:hover{border-color:var(--line-strong)}
+
+/* 正文 */
+.editor{flex:1;overflow:auto;position:relative}
+.doc{position:relative;max-width:var(--doc-w);margin:0 auto;padding:44px 56px 20px;font-family:var(--f-body);font-size:15px;line-height:1.78;color:var(--ink)}
+.doc-title{font-family:var(--f-title);font-size:28px;font-weight:600;line-height:1.3;margin-bottom:10px;letter-spacing:.01em}
+.doc-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:30px;font-size:12px;color:var(--muted)}
+.chip{padding:1px 9px;border-radius:999px;background:color-mix(in srgb,var(--md-tag) var(--md-mix),transparent);color:var(--md-tag);line-height:20px}
+.doc-meta .date{margin-left:6px}
+.doc h2{position:relative;font-size:19px;font-weight:600;line-height:1.5;margin:30px 0 8px}
+.doc p{margin:0 0 12px}
+.doc strong{font-weight:650}
+.doc mark{background:var(--hl);color:inherit;padding:0 2px;border-radius:2px}
+/* Markdown 元素：每类元素在各主题里固定一个色系（--md-*），只调深浅 */
+.doc code{font-family:var(--f-code);font-size:.86em;color:var(--md-code);background:color-mix(in srgb,var(--md-code) var(--md-mix),transparent);padding:1px 5px;border-radius:4px}
+.wikilink{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+.extlink{color:var(--md-link);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--md-link) 35%,transparent)}
+.tag-inline{color:var(--md-tag);background:color-mix(in srgb,var(--md-tag) var(--md-mix),transparent);padding:0 4px;border-radius:3px}
+.doc ul.list{list-style:disc;margin:0 0 14px;padding-left:24px}
+.doc ul.list li::marker{color:var(--accent)}
+.tasks{margin:0 0 14px}
+.tasks li{display:flex;gap:10px;align-items:flex-start;padding:1px 0}
+.cb{flex:none;width:16px;height:16px;margin-top:5px;border:1.5px solid color-mix(in srgb,var(--md-task) 55%,transparent);border-radius:4px;display:grid;place-items:center}
+.cb.on{background:var(--md-task);border-color:var(--md-task);color:var(--md-task-on)}
+.cb svg{width:11px;height:11px;stroke:currentColor;stroke-width:3;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.tasks li.done>span{color:var(--muted);text-decoration:line-through}
+.doc blockquote{margin:0 0 14px;padding:6px 12px 6px 14px;border-left:3px solid var(--md-quote);border-radius:0 6px 6px 0;background:color-mix(in srgb,var(--md-quote) var(--md-mix-block),transparent);color:var(--ink-2)}
+.caret{display:inline-block;width:2px;height:1.15em;margin-left:1px;vertical-align:-3px;background:var(--accent);animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* 代码块 */
+.codeblock{margin:6px 0 20px;border:1px solid var(--code-line);border-radius:var(--r-code);background:var(--code-bg);overflow:hidden}
+.cb-head{display:flex;align-items:center;justify-content:space-between;padding:5px 6px 0 10px;font:12px/1 var(--f-ui);color:var(--muted)}
+.lang{display:inline-flex;align-items:center;gap:4px;padding:4px 6px;border:0;border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;font:12px var(--f-code)}
+.lang:hover{background:var(--hover)}
+.copy{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border:0;border-radius:4px;background:transparent;color:var(--muted);font-size:12px;cursor:pointer}
+.copy:hover{background:var(--hover);color:var(--ink)}
+.codeblock pre{margin:0;padding:6px 0 14px;overflow:auto;font:13px/1.7 var(--f-code);color:var(--ink);counter-reset:ln;tab-size:4}
+.codeblock .l{display:block;padding:0 16px}
+.k{color:var(--tk-k)}.s{color:var(--tk-s)}.f{color:var(--tk-f)}.c{color:var(--tk-c);font-style:italic}.t{color:var(--tk-t)}
+
+/* 反向链接 */
+.backlinks{max-width:var(--doc-w);margin:0 auto;padding:8px 56px 56px}
+.bl-inner{border-top:1px solid var(--line);padding-top:14px}
+.bl-head{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:8px}
+.bl-count{font-weight:500;padding:0 6px;border-radius:999px;background:var(--hover)}
+.bl-item{display:block;padding:8px 10px;margin:0 -10px;border-radius:var(--r-row);color:inherit;text-decoration:none}
+.bl-item:hover{background:var(--hover)}
+.bl-title{font-size:13px;font-weight:600;color:var(--ink-2)}
+.bl-snip{font-size:12.5px;color:var(--muted);margin-top:2px}
+.bl-snip b{font-weight:500;color:var(--accent)}
+
+/* 状态栏 */
+.statusbar{flex:none;height:26px;display:flex;align-items:center;padding:0 6px;font-size:12px;color:var(--muted);border-top:1px solid var(--line);background:var(--chrome);user-select:none}
+.sb{display:flex;align-items:center;gap:6px;height:100%;padding:0 10px}
+.sb-flex{flex:1}
+.sb .ok{color:var(--ok)}
+
+/* 滚动条 */
+.tree::-webkit-scrollbar,.editor::-webkit-scrollbar{width:10px}
+.tree::-webkit-scrollbar-thumb,.editor::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:10px;border:3px solid transparent;background-clip:content-box}
+
+/* ========== 风格 A：靛青 · 紧凑工具型 ========== */
+.theme-a .titlebar{border-bottom:1px solid var(--line)}
+.theme-a .tab{border-right:1px solid var(--line)}
+.theme-a .tabs{border-left:1px solid var(--line)}
+.theme-a .tab.is-active{background:var(--paper);box-shadow:inset 0 2px 0 var(--accent);margin-bottom:-1px}
+.theme-a .row.is-active{border-radius:0 var(--r-row) var(--r-row) 0;box-shadow:inset 2px 0 0 var(--accent)}
+.theme-a .doc h2::before{content:attr(data-h);position:absolute;left:-30px;top:50%;transform:translateY(-50%);font:600 10px/1 var(--f-code);color:var(--muted);opacity:.75}
+.theme-a .codeblock pre{padding-left:0}
+.theme-a .codeblock .l{padding-left:0}
+.theme-a .codeblock .l::before{content:counter(ln);counter-increment:ln;display:inline-block;width:40px;padding-right:14px;text-align:right;color:var(--muted);opacity:.55}
+.theme-a .chip{border-radius:3px}
+
+/* 版本控制视图 */
+#side-files,.scm{flex:1;min-height:0;display:flex;flex-direction:column}
+[hidden]{display:none!important}
+.views .btn{position:relative}
+.view-badge{position:absolute;right:1px;top:1px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--accent);color:var(--paper);font:600 9px/14px var(--f-ui);text-align:center}
+.sync .dot.git-dirty{background:var(--accent)}
+.scm-head{display:flex;align-items:center;gap:6px;padding:4px 8px 6px 12px;font-size:12px;color:var(--ink-2)}
+.scm-branch{display:inline-flex;align-items:center;gap:4px;font-weight:600}
+.scm-ahead{font:11px var(--f-code);color:var(--muted)}
+.scm-flex{flex:1}
+.scm-mini{display:inline-flex;align-items:center;gap:3px;height:24px;padding:0 7px;border:1px solid var(--line-strong);border-radius:var(--r-btn);background:var(--paper);color:var(--ink-2);font-size:12px;cursor:pointer}
+.scm-mini:hover{border-color:var(--accent);color:var(--accent)}
+.scm-commit{display:flex;flex-direction:column;gap:6px;padding:2px 10px 10px}
+.scm-commit textarea{resize:vertical;min-height:44px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:var(--r-btn);background:var(--paper);color:var(--ink);font:12.5px/1.5 var(--f-ui);outline:none}
+.scm-commit textarea:focus{border-color:var(--accent)}
+.scm-btn{height:28px;border:0;border-radius:var(--r-btn);background:var(--accent);color:var(--paper);font-size:12.5px;font-weight:600;cursor:pointer}
+.scm-btn:hover{filter:brightness(1.08)}
+.scm-section{display:flex;align-items:center;gap:6px;padding:6px 12px 4px;font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+.scm-list,.scm-log{padding:0 6px 8px;font-size:13px}
+.scm-list .row{gap:8px}
+.st{flex:none;width:16px;font:700 11px/1 var(--f-code);text-align:center}
+.st-m{color:var(--accent)}.st-a{color:var(--ok)}.st-d{color:var(--danger)}
+.name.deleted{text-decoration:line-through;color:var(--muted)}
+.scm-dir{margin-left:auto;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+.scm-log li{display:flex;gap:10px;padding:5px 8px;border-radius:var(--r-row)}
+.scm-log li:hover{background:var(--hover)}
+.log-dot{flex:none;width:8px;height:8px;margin-top:5px;border-radius:50%;border:2px solid var(--line-strong)}
+.log-dot.is-local{border-color:var(--accent);background:var(--accent)}
+.log-msg{font-size:12.5px;color:var(--ink-2);line-height:1.45}
+.log-meta{font-size:11px;color:var(--muted)}
+.scm-setrow{display:flex;justify-content:flex-end;padding:0 8px 4px}
+.scm-link{border:0;background:transparent;color:var(--muted);font-size:12px;cursor:pointer;padding:2px 4px;border-radius:4px}
+.scm-link:hover{color:var(--accent);background:var(--hover)}
+.scm-banner{margin:0 10px 8px;padding:8px 10px;border-radius:4px;background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--ink-2);font-size:12px;line-height:1.5}
+.scm.is-locked .scm-mini,.scm.is-locked textarea,.scm.is-locked .scm-btn{opacity:.4}
+.scm-empty{flex:1;display:flex;flex-direction:column;justify-content:center;gap:8px;padding:8px 16px 32px}
+.scm-empty h3{font-size:13px;font-weight:600;color:var(--ink)}
+.scm-empty p{font-size:12.5px;line-height:1.6;color:var(--muted)}
+.scm-empty .scm-btn{margin-top:4px}
+.scm-ext{color:var(--accent);font-size:12.5px}
+
+/* ========== M4 浮层（命令面板、快速打开、浮动格式条、斜杠菜单、查找替换、插入链接、快捷键、工具栏右键菜单） ========== */
+.ov{display:none!important}
+body[data-ov="palette"] .ov-palette,body[data-ov="quick"] .ov-quick,body[data-ov="slash"] .ov-slash,body[data-ov="tbmenu"] .ov-tbmenu{display:block!important}
+body[data-ov="float"] .ov-float,body[data-ov="link"] .ov-link{display:flex!important}
+.pop{position:absolute;z-index:40;background:var(--paper);border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.18);font-size:13px;color:var(--ink)}
+.kbd{display:inline-flex;gap:3px}
+.kbd span{padding:1px 6px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;background:var(--code-bg);font:11px/16px var(--f-code);color:var(--ink-2)}
+/* 命令面板 / 快速打开 */
+.palette{top:8px;left:50%;transform:translateX(-50%);width:560px;padding:6px}
+.palette input{width:100%;height:36px;padding:0 12px;border:1px solid var(--accent);border-radius:6px;background:var(--paper);color:var(--ink);font:14px var(--f-ui);outline:none}
+.pal-group{padding:8px 10px 4px;font-size:11px;font-weight:600;color:var(--muted)}
+.pal-row{display:flex;align-items:center;gap:10px;height:32px;padding:0 10px;border-radius:5px}
+.pal-row.on{background:var(--accent-soft)}
+.pal-row .ico{color:var(--muted)}
+.pal-row .pt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pal-row .pt b{color:var(--accent);font-weight:600}
+.pal-row .pc{font-size:11.5px;color:var(--muted)}
+.pal-foot{display:flex;gap:14px;padding:8px 10px 4px;border-top:1px solid var(--line);margin-top:6px;font-size:11.5px;color:var(--muted)}
+/* 浮动格式条 */
+.sel-anchor{position:relative}
+body[data-ov="float"] .sel-anchor mark,body[data-ov="link"] .sel-anchor mark{background:color-mix(in srgb,var(--accent) 22%,transparent)}
+.floatbar{bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:1px;padding:3px;white-space:nowrap}
+.floatbar .btn{width:28px;height:28px}
+/* 斜杠菜单 */
+.slash-line{position:relative;color:var(--ink)}
+.slash{top:calc(100% + 4px);left:0;width:260px;padding:4px;max-height:330px;overflow:hidden}
+.slash .pal-row{height:30px;gap:8px}
+.slash .ico-box{width:24px;height:24px;display:grid;place-items:center;border:1px solid var(--line);border-radius:4px;background:var(--code-bg);font:600 10px var(--f-code);color:var(--ink-2)}
+.slash .pc{margin-left:auto}
+/* 查找替换 */
+.findbar{top:48px;right:18px;width:420px;padding:8px;display:none}
+body[data-ov="find"] .findbar{display:grid}
+.findbar{grid-template-columns:22px 1fr auto;gap:6px 6px;align-items:center}
+.findbar input{height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:13px var(--f-ui);outline:none;min-width:0}
+.findbar input.focus{border-color:var(--accent)}
+.fb-tools{display:flex;align-items:center;gap:1px}
+.fb-tools .btn{width:26px;height:26px}
+.fb-count{font-size:11.5px;color:var(--muted);padding:0 6px;white-space:nowrap}
+.fb-opt{font:600 11px var(--f-code)}
+.fb-opt.on{color:var(--accent);background:var(--accent-soft)}
+.fb-txt{height:26px;padding:0 10px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);color:var(--ink-2);font-size:12px;cursor:pointer;white-space:nowrap}
+body[data-ov="find"] .fh{background:var(--hl);border-radius:2px}
+body[data-ov="find"] .fh.cur{outline:2px solid var(--accent);outline-offset:0}
+/* 插入链接 */
+.linkpop{top:calc(100% + 8px);left:0;display:flex;align-items:center;gap:6px;padding:8px;white-space:nowrap}
+.linkpop input{width:260px;height:28px;padding:0 8px;border:1px solid var(--accent);border-radius:4px;background:var(--paper);color:var(--ink);font:13px var(--f-code);outline:none}
+.btn-primary{height:28px;padding:0 12px;border:0;border-radius:4px;background:var(--accent);color:var(--paper);font-size:12.5px;font-weight:600;cursor:pointer}
+.linkpop .hint{font-size:11.5px;color:var(--muted)}
+/* 快捷键弹窗 */
+.mask{position:absolute;inset:0;z-index:45;background:rgba(10,12,18,.35);display:none}
+body[data-ov="keys"] .mask,body[data-ov="gitset"] .mask,body[data-ov="whoami"] .mask{display:grid;place-items:center}
+.mask>.pop{display:none!important}
+body[data-ov="keys"] .mask>.keys,body[data-ov="gitset"] .mask>.gitset,body[data-ov="whoami"] .mask>.whoami{display:flex!important}
+.keys{position:static;width:720px;max-height:560px;flex-direction:column}
+.keys-head{display:flex;align-items:center;gap:8px;padding:14px 16px 10px;border-bottom:1px solid var(--line)}
+.keys-head h3{font-size:15px;font-weight:600;margin-right:auto}
+.keys-head input{width:220px;height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:12.5px var(--f-ui);outline:none}
+.keys-body{overflow:auto;padding:4px 8px 10px}
+.keys table{width:100%;border-collapse:collapse;font-size:13px}
+.keys th{position:sticky;top:0;background:var(--paper);text-align:left;font-size:11.5px;font-weight:600;color:var(--muted);padding:8px 8px 6px}
+.keys td{padding:6px 8px;border-top:1px solid var(--line)}
+.keys tr.grp td{border-top:0;padding-top:12px;font-size:11.5px;font-weight:600;color:var(--muted)}
+.keys .scope{font-size:11.5px;color:var(--muted)}
+.keys .custom{font-size:11px;color:var(--accent)}
+.keys tr.rec td{background:var(--accent-soft)}
+.rec-box{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border:1px dashed var(--accent);border-radius:4px;color:var(--accent);font-size:12px}
+.conflict{display:flex;align-items:center;gap:8px;margin:6px 0 2px;padding:6px 8px;border-radius:4px;background:color-mix(in srgb,var(--danger) 10%,transparent);color:var(--ink-2);font-size:12px}
+.conflict .btn-primary{height:24px;padding:0 10px;font-size:12px}
+.reset{white-space:nowrap;border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:12px}
+/* Git 设置 / 填写提交身份（M6 并入设置页） */
+.gitset{position:static;width:440px;max-height:560px;flex-direction:column}
+.whoami{position:static;width:400px;flex-direction:column}
+.git-body{display:flex;flex-direction:column;gap:6px;padding:2px 16px 16px}
+.git-sec{padding:12px 0 2px;font-size:11.5px;font-weight:600;color:var(--muted)}
+.git-body label{font-size:12px;color:var(--ink-2)}
+.git-body input[type="text"]{height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:12.5px var(--f-ui);outline:none}
+.git-body input[type="text"]:focus,.git-num:focus{border-color:var(--accent)}
+.git-hint{font-size:12px;line-height:1.55;color:var(--muted)}
+.git-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink);cursor:pointer}
+.git-check input{accent-color:var(--accent)}
+.git-row{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2)}
+.git-num{width:64px;height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:12.5px var(--f-ui);outline:none}
+.git-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+/* 工具栏右键菜单 */
+.tbmenu{top:44px;left:360px;width:300px;padding:4px}
+.tb-grid{display:grid;grid-template-columns:1fr 1fr}
+.tbmenu .pal-row{height:26px;gap:8px;font-size:12.5px}
+.tbmenu .mk{width:14px;color:var(--accent)}
+.tbmenu .sepl{height:1px;margin:4px 6px;background:var(--line)}
+.proto-select{height:28px;padding:0 8px;border-radius:6px;border:1px solid #3A3E45;background:#2E3136;color:#D8DADE;font:13px "Segoe UI","Microsoft YaHei UI",sans-serif}
+
+/* ========== 一键整理、AI（M8）与 AI 对话（M9） ========== */
+.btn-ai{width:auto;gap:1px;padding:0 3px 0 6px}
+.btn-ai .ai-t{font:700 11.5px/1 var(--f-ui);letter-spacing:.03em}
+body[data-ov="aimenu"] .btn-ai{color:var(--accent);background:var(--accent-soft)}
+body[data-ov="aimenu"] .ov-aimenu{display:block!important}
+.aimenu{top:38px;right:76px;width:208px;padding:4px}
+.aimenu .pal-row{height:30px;gap:8px}
+.aimenu .pal-row .ico{color:var(--ink-2)}
+.hint{font-size:11.5px;color:var(--muted)}
+.ai-mark{color:var(--accent)}
+/* /AI 指令输入 */
+body[data-ov="aiprompt"] .ov-aiprompt{display:block!important}
+.ai-box{margin:4px 0 16px;padding:8px;border:1px solid var(--accent);border-radius:8px;background:var(--paper);box-shadow:0 6px 20px rgba(0,0,0,.08);font-family:var(--f-ui)}
+.ai-input{display:flex;align-items:center;gap:8px}
+.ai-input input{flex:1;min-width:0;height:30px;padding:0 4px;border:0;background:transparent;color:var(--ink);font:13.5px var(--f-ui);outline:none}
+.ai-foot{display:flex;align-items:center;gap:12px;padding:6px 2px 0 26px;border-top:1px solid var(--line);margin-top:6px}
+.ai-foot .git-check{font-size:12px;color:var(--ink-2)}
+.ai-foot .hint{margin-left:auto}
+/* /AI 待确认区域 */
+body[data-ov="aigen"] .ov-aipend,body[data-ov="aidone"] .ov-aipend{display:block!important}
+.ai-pend{margin:4px 0 16px;border:1px dashed color-mix(in srgb,var(--accent) 55%,transparent);border-radius:8px;background:color-mix(in srgb,var(--accent) 4%,var(--paper))}
+.ai-pend-head{display:flex;align-items:center;gap:6px;padding:7px 12px 0;font:12px/1.4 var(--f-ui);color:var(--muted)}
+.ai-pend-head .q{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-state{margin-left:auto;white-space:nowrap}
+.ai-pend-body{padding:6px 12px 2px}
+.ai-pend-body p{margin:0 0 8px}
+.ai-pend-foot{display:flex;align-items:center;gap:6px;padding:6px 10px 8px;border-top:1px solid var(--line);font-family:var(--f-ui)}
+.ai-pend-foot .hint{margin-left:6px}
+.ai-pend .when-gen,.ai-pend .when-done{display:none}
+body[data-ov="aigen"] .ai-pend .when-gen,body[data-ov="aidone"] .ai-pend .when-done{display:inline-flex}
+body[data-ov="aidone"] .ai-pend .caret{display:none}
+/* 通用对话框（新增的对话框都挂在 .mask 下，由脚本按 data-dlg 显示） */
+.mask.is-on{display:grid;place-items:center}
+.mask>.pop.is-on{display:flex!important}
+.dlg{position:static;flex-direction:column;max-height:600px}
+.dlg-body{display:flex;flex-direction:column;gap:8px;padding:12px 16px 4px;overflow:auto;font-size:13px;line-height:1.65;color:var(--ink-2)}
+.dlg-actions{display:flex;align-items:center;gap:8px;padding:12px 16px 14px}
+.dlg-actions .flex{flex:1}
+.btn-danger{background:var(--danger-strong);color:#fff}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed}
+.ai-sent{font-size:12px;color:var(--muted)}
+.ai-result{padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--code-bg);color:var(--ink);font-family:var(--f-body);font-size:13.5px;line-height:1.75}
+.ai-result p{margin:0 0 6px}
+.ai-result ul{list-style:disc;padding-left:20px}
+/* AI 整理结构：左右对比 */
+.tidy{width:920px}
+.tidy-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tidy-col{border:1px solid var(--line);border-radius:6px;overflow:hidden;min-width:0}
+.tidy-col h4{padding:6px 10px;font-size:11.5px;font-weight:600;color:var(--muted);background:var(--code-bg);border-bottom:1px solid var(--line)}
+.tidy-col pre{margin:0;padding:6px 0;max-height:300px;overflow:auto;font:12px/1.75 var(--f-code);color:var(--ink);white-space:pre-wrap;word-break:break-all}
+.tidy-col .ln{display:block;padding:0 10px}
+.tidy-col .ln.del{background:color-mix(in srgb,var(--danger) 12%,transparent)}
+.tidy-col .ln.add{background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.tidy-col .ln.miss{background:color-mix(in srgb,var(--danger) 22%,transparent)}
+.tidy-col .ln.same{color:var(--muted)}
+.check{display:flex;align-items:center;gap:6px;padding:7px 10px;border-radius:5px;font-size:12.5px}
+.check.ok{background:color-mix(in srgb,var(--ok) 12%,transparent);color:var(--ink-2)}
+.check.ok .ico{color:var(--ok)}
+.check.bad{background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--ink)}
+.check.bad .ico{color:var(--danger)}
+.tidy .when-warn{display:none}
+.tidy.is-warn .when-warn{display:flex}
+.tidy.is-warn .when-ok{display:none}
+.tidy .ln.miss{display:none}
+.tidy.is-warn .ln.miss{display:block}
+.tidy.is-warn .ln.keep-ok{display:none}
+/* 设置页 */
+.settings{position:static;width:880px;height:560px;flex-direction:column}
+.settings-body{flex:1;min-height:0;display:flex}
+.settings-nav{flex:none;width:148px;padding:8px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:2px}
+.settings-tab{height:28px;padding:0 10px;border:0;border-radius:4px;background:transparent;color:var(--ink-2);font-size:13px;text-align:left;cursor:pointer}
+.settings-tab:hover{background:var(--hover)}
+.settings-tab.on{background:var(--accent-soft);color:var(--ink);font-weight:600}
+.settings-tab .new{margin-left:6px;font-size:10.5px;font-weight:600;color:var(--accent)}
+.set-main{flex:1;min-width:0;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.set-panel{display:none;flex-direction:column;gap:6px;padding:10px 16px 16px}
+.set-panel.is-on{display:flex}
+.set-panel .git-sec:first-child{padding-top:6px}
+.set-panel select,.set-panel input[type="text"],.set-panel input[type="password"]{height:30px;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:12.5px var(--f-ui);outline:none}
+.set-panel label{font-size:12px;color:var(--ink-2)}
+.model-table{display:flex;flex-direction:column;gap:4px}
+.mt-row{display:grid;grid-template-columns:1fr 130px 112px 26px;align-items:center;gap:6px}
+.mt-row input{height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:12.5px var(--f-code);outline:none;min-width:0}
+.mt-row input::placeholder{color:var(--muted)}
+.mt-row .btn{width:26px;height:26px}
+.mt-head{font-size:11.5px;font-weight:600;color:var(--muted)}
+.mt-src{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.mt-unknown{color:#C9832E}
+.mt-def{font-style:normal;padding:0 5px;border-radius:3px;background:var(--accent-soft);color:var(--accent);font-size:11px;line-height:18px}
+.mt-actions{display:flex;gap:6px;margin-top:2px}
+.set-panel textarea{padding:6px 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);color:var(--ink);font:12.5px/1.6 var(--f-code);outline:none;resize:vertical}
+.set-panel .git-check{font-size:13px;color:var(--ink);padding:3px 0}
+.set-panel .git-check .hint{margin-left:4px}
+/* 外观 · 主题色块：固定显示各主题自己的标题栏底色、正文底色和强调色，不随当前主题变化 */
+.sw{flex:none;position:relative;width:30px;height:18px;border-radius:4px;border:1px solid var(--line-strong);background:linear-gradient(90deg,var(--sw-chrome) 0 36%,var(--sw-paper) 36%)}
+.sw::after{content:"";position:absolute;right:4px;top:50%;width:8px;height:8px;margin-top:-4px;border-radius:50%;background:var(--sw-accent)}
+.sw-light{--sw-chrome:#F3F4F7;--sw-paper:#FFFFFF;--sw-accent:#3446A8}
+.sw-paper{--sw-chrome:#ECE4D4;--sw-paper:#F6F0E4;--sw-accent:#A0452B}
+.sw-green{--sw-chrome:#DAE5D5;--sw-paper:#E6EFE2;--sw-accent:#2E6B4A}
+.sw-night{--sw-chrome:#15181E;--sw-paper:#1B1F27;--sw-accent:#D9A55B}
+.sw-black{--sw-chrome:#0D0D0F;--sw-paper:#000000;--sw-accent:#D9A55B}
+.theme-sep{height:1px;margin:4px 0;background:var(--line)}
+.key-row{display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border:1px solid var(--line);border-radius:4px;background:var(--code-bg);font-size:12.5px;color:var(--ink-2)}
+.key-row .ico{color:var(--ok)}
+.key-row .flex{flex:1}
+.test-row{display:flex;align-items:center;gap:10px;margin-top:6px}
+.test-ok{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;color:var(--ok)}
+/* 一键整理后的状态栏提示 */
+.sb-tidy{display:none!important}
+body[data-ov="tidied"] .sb-tidy{display:flex!important;color:var(--ink-2)}
+body[data-ov="tidied"] .btn-tidy{color:var(--accent);background:var(--accent-soft)}
+/* 版本控制：AI 生成提交说明 */
+.scm-ai{align-self:flex-start}
+/* 左栏底部：AI 对话入口 */
+.sidebar{position:relative}
+.side-foot{flex:none;padding:6px;border-top:1px solid var(--line)}
+.side-foot .row{gap:8px;font-size:13px}
+.side-foot .row .ico{color:var(--accent)}
+/* AI 对话：左栏会话列表 */
+.chats{flex:1;min-height:0;display:flex;flex-direction:column}
+.chat-new{display:flex;align-items:center;justify-content:center;gap:6px;height:30px;margin:2px 10px 8px;border:1px solid var(--line-strong);border-radius:var(--r-btn);background:var(--paper);color:var(--ink);font-size:12.5px;cursor:pointer}
+.chat-new:hover{border-color:var(--accent);color:var(--accent)}
+.chat-list{flex:1;overflow:auto;padding:0 6px 12px;font-size:13px}
+.chat-group{padding:8px 8px 4px;font-size:11px;font-weight:600;color:var(--muted)}
+.chat-list .row{gap:8px}
+.chat-list .row .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.chat-list .row .more{width:22px;height:22px;opacity:0}
+.chat-list .row:hover .more,.chat-list .row.is-active .more{opacity:.75}
+body[data-ov="chatmenu"] .ov-chatmenu{display:block!important}
+.chat-menu{top:128px;left:196px;width:132px;padding:4px}
+.chat-menu .pal-row{height:28px;gap:8px}
+.chat-menu .danger{color:var(--danger)}
+/* AI 对话：主区域 */
+.chat{flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
+.chat-head{flex:none;display:flex;align-items:center;gap:8px;height:40px;padding:0 14px;border-bottom:1px solid var(--line)}
+.chat-title{font-size:13px;font-weight:600;color:var(--ink)}
+.model-sel{margin-left:auto;margin-right:6px;display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 4px 0 8px;border:0;border-radius:var(--r-btn);background:transparent;color:var(--ink-2);font:12px var(--f-code);cursor:pointer}
+.model-sel:hover{background:var(--hover)}
+body[data-ov="chatmodel"] .model-sel{color:var(--accent);background:var(--accent-soft)}
+body[data-ov="chatmodel"] .ov-chatmodel{display:block!important}
+.model-menu{bottom:62px;right:calc(max(48px, 50% - (var(--doc-w) - 96px) / 2) + 46px);width:250px;padding:4px}
+.model-menu .pal-row{height:30px;gap:8px;font-family:var(--f-code);font-size:12.5px}
+.model-menu .mk{width:14px;color:var(--accent)}
+.model-menu .pal-foot{font-family:var(--f-ui)}
+.chat-scroll{flex:1;min-height:0;overflow:auto}
+.chat-inner{max-width:var(--doc-w);margin:0 auto;padding:24px 48px 16px;display:flex;flex-direction:column;gap:20px}
+.msg-user{align-self:flex-end;max-width:80%;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.msg-user .bubble{padding:9px 14px;border-radius:14px 14px 4px 14px;background:var(--accent-soft);color:var(--ink);font-size:14px;line-height:1.7;white-space:pre-wrap}
+.msg-atts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.att-img{width:132px;height:88px;border-radius:8px;border:1px solid var(--line);background:linear-gradient(135deg,var(--accent-soft),var(--code-bg) 45%,var(--accent-soft));display:flex;align-items:flex-end;padding:4px 6px;font-size:10.5px;color:var(--muted)}
+.att-chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--code-bg);font-size:12px;color:var(--ink-2)}
+.att-chip .ico{color:var(--muted)}
+.att-chip.note .ico{color:var(--accent)}
+.att-chip small{color:var(--muted)}
+.msg-ai{display:flex;gap:12px}
+.msg-ai .avatar{flex:none;width:26px;height:26px;margin-top:2px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+.msg-ai .main-col{flex:1;min-width:0}
+.msg-ai .msg-body{font-family:var(--f-body);font-size:14.5px;line-height:1.78;color:var(--ink)}
+.msg-ai .msg-body p{margin:0 0 10px}
+.msg-ai .msg-body ol,.msg-ai .msg-body ul{margin:0 0 10px;padding-left:22px}
+.msg-ai .msg-body code{font-family:var(--f-code);font-size:.86em;color:var(--md-code);background:color-mix(in srgb,var(--md-code) var(--md-mix),transparent);padding:1px 5px;border-radius:4px}
+.msg-ai .msg-body table{border-collapse:collapse;margin:4px 0 12px;font-size:13.5px}
+.msg-ai .msg-body th,.msg-ai .msg-body td{border:1px solid var(--line-strong);padding:5px 10px;text-align:left}
+.msg-ai .msg-body th{background:var(--code-bg);font-weight:600}
+.msg-acts{display:flex;align-items:center;gap:2px;margin:2px 0 0 -8px}
+.msg-acts .btn{width:auto;height:26px;gap:4px;padding:0 8px;font-size:12px;color:var(--muted)}
+.msg-acts .btn:hover{color:var(--ink)}
+.msg-model{margin-left:6px;font:11px var(--f-code);color:var(--muted)}
+.msg-err{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:6px;background:color-mix(in srgb,var(--danger) 10%,transparent);font-size:13px;line-height:1.6;color:var(--ink)}
+.ctx-divider{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--muted)}
+.ctx-divider::before,.ctx-divider::after{content:"";flex:1;height:1px;background:var(--line)}
+.chat-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding-bottom:40px}
+.chat-empty h2{font:600 22px/1.3 var(--f-title);color:var(--ink)}
+.chat-empty p{font-size:12.5px;color:var(--muted)}
+.chat .when-gen,.chat .when-err,.chat .when-long{display:none}
+.chat.is-gen .when-gen,.chat.is-err .when-err{display:block}
+.chat.is-long .when-long{display:flex}
+.chat.is-gen .when-done,.chat.is-err .when-done{display:none}
+.chat.is-gen .send-btn{display:none}
+.chat:not(.is-gen) .stop-btn{display:none}
+/* 输入区 */
+.composer-wrap{flex:none;position:relative;padding:0 48px 10px}
+.composer{max-width:calc(var(--doc-w) - 96px);margin:0 auto;padding:8px 10px 6px;border:1px solid var(--line-strong);border-radius:14px;background:var(--paper);box-shadow:0 4px 16px rgba(0,0,0,.06)}
+.composer.focus{border-color:var(--accent)}
+.comp-atts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.comp-att{position:relative}
+.comp-att .x{position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:1px solid var(--line-strong);background:var(--paper);display:grid;place-items:center;color:var(--muted);cursor:pointer}
+.comp-att .x svg{width:10px;height:10px}
+.comp-att .att-img{width:64px;height:48px;padding:0}
+.composer textarea{display:block;width:100%;min-height:44px;max-height:180px;padding:2px 4px;border:0;outline:none;resize:none;background:transparent;color:var(--ink);font:14px/1.6 var(--f-ui)}
+.comp-bar{display:flex;align-items:center;gap:2px}
+.comp-bar .at{font:600 14px/1 var(--f-ui)}
+.comp-bar .hint{margin-left:8px}
+.send{width:32px;height:32px;border:0;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--paper);cursor:pointer}
+.send.disabled{opacity:.35;cursor:default}
+.ctx-meter{max-width:calc(var(--doc-w) - 96px);margin:6px auto 0;display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted)}
+.ctx-bar{position:relative;width:120px;height:4px;border-radius:2px;background:var(--line);overflow:hidden}
+.ctx-bar span{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--accent)}
+.ctx-meter.full .ctx-bar span{background:#C9832E}
+.ctx-meter .flex{flex:1}
+body[data-ov="chatmention"] .ov-chatmention{display:block!important}
+.mention{bottom:calc(100% - 2px);left:calc(50% - var(--doc-w) / 2 + 60px);width:320px;padding:4px}
+.mention .pal-row{height:30px;gap:8px}
+.small-dlg{width:420px}
+
+@media (prefers-reduced-motion:reduce){.caret{animation:none}}
+@media (max-width:900px){.sidebar{display:none}.tb-left{width:auto}.doc,.backlinks{padding-left:24px;padding-right:24px}}
+</style>
+</head>
+<body class="theme-a">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-14.3 4.9M4 12a8 8 0 0 1 14.3-4.9"/><path d="M19 3v4.5h-4.5M5 21v-4.5h4.5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+  <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+  <symbol id="i-max" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"/></symbol>
+  <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"/><path d="M12 10v6M9 13h6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3h7l4 4v13a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13.5 3v4h4"/></symbol>
+  <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M6.5 3h7l4 4v13a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M12 11v6M9 14h6"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.2 6.2a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.4"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.5 6 .7-4.4 4.1 1.2 6-5.4-3-5.4 3 1.2-6-4.4-4.1 6-.7z"/></symbol>
+  <symbol id="i-outline" viewBox="0 0 24 24"><path d="M4 6h16M8 12h12M12 18h8"/></symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24"><path d="M4 6h10M4 12h7M4 18h4M17 5v14M14 16l3 3 3-3"/></symbol>
+  <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M7 20l5-5 5 5M7 4l5 5 5-5"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5"/></symbol>
+  <symbol id="i-clear" viewBox="0 0 24 24"><path d="M5 5h14M12 5v6M10 19h4M4 20L20 4"/></symbol>
+  <symbol id="i-ul" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".9"/><circle cx="4.5" cy="12" r=".9"/><circle cx="4.5" cy="18" r=".9"/></symbol>
+  <symbol id="i-ol" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 4.5h1.5V9M3.5 9h3.5M3.8 14.5a1.5 1.5 0 0 1 2.7 1c0 1-3 1.8-3 3.5h3.2"/></symbol>
+  <symbol id="i-task" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="6" height="6" rx="1.2"/><path d="M5 7.6l1.2 1.2 2-2.2M13 7.5h7.5"/><rect x="3.5" y="13.5" width="6" height="6" rx="1.2"/><path d="M13 16.5h7.5"/></symbol>
+  <symbol id="i-indent" viewBox="0 0 24 24"><path d="M3 5h18M11 10h10M11 14h10M3 19h18M3 9l3.5 3L3 15"/></symbol>
+  <symbol id="i-outdent" viewBox="0 0 24 24"><path d="M3 5h18M11 10h10M11 14h10M3 19h18M7 9l-3.5 3L7 15"/></symbol>
+  <symbol id="i-quote" viewBox="0 0 24 24"><path d="M5 17c2.5-.5 4-2.3 4-5V7H4.5v5H9M15 17c2.5-.5 4-2.3 4-5V7h-4.5v5H19"/></symbol>
+  <symbol id="i-codeblock" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9.5 9.5L7 12l2.5 2.5M14.5 9.5L17 12l-2.5 2.5"/></symbol>
+  <symbol id="i-hr" viewBox="0 0 24 24"><path d="M3 12h18M7 7h10M7 17h10" opacity=".35"/><path d="M3 12h18"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3.2-3.2a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3.2 3.2a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9.5 9"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M3 15h18M9 4v16M15 4v16"/></symbol>
+  <symbol id="i-replace" viewBox="0 0 24 24"><path d="M4 8h12l-3-3M20 16H8l3 3"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><path d="M13 7l5 5-5 5M6 7l5 5-5 5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7.5v9M18 10c0 4-6 3.5-11 7"/></symbol>
+  <symbol id="i-pull" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-push" viewBox="0 0 24 24"><path d="M12 20V9M7 13.5l5-5 5 5M5 4h14"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-tidy" viewBox="0 0 24 24"><path d="M4 7h8M4 12h12M4 17h8"/><path d="M18 3.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M11 3.5l1.9 5.1 5.1 1.9-5.1 1.9-1.9 5.1-1.9-5.1-5.1-1.9 5.1-1.9z"/><path d="M18.5 15l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z"/></symbol>
+  <symbol id="i-summary" viewBox="0 0 24 24"><path d="M5 5h14M5 10h14M5 15h8"/><path d="M16 15.5l1.8 1.8 3.2-3.6"/></symbol>
+  <symbol id="i-structure" viewBox="0 0 24 24"><rect x="3.5" y="4" width="7" height="5" rx="1"/><rect x="13.5" y="10" width="7" height="4" rx="1"/><rect x="13.5" y="16" width="7" height="4" rx="1"/><path d="M7 9v9h6.5M7 12h6.5"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 5.5h15a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-4.5 3.5v-3.5h-1a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/></symbol>
+  <symbol id="i-insert" viewBox="0 0 24 24"><path d="M5 5h14M5 19h14M12 8v8M8.5 12.5L12 16l3.5-3.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M5 19h4L19 9l-4-4L5 15z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.2v.3"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="14" r="4"/><path d="M11 11.5L19 4M16 7l2.5 2.5M14 9l2 2"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></symbol>
+</svg>
+
+<div class="proto-bar">
+  <strong>Spark · 低保真原型</strong>
+  <div class="proto-switch" role="tablist" aria-label="选择主题">
+    <button role="tab" data-theme="light" aria-selected="true">浅色</button>
+    <button role="tab" data-theme="paper" aria-selected="false">纸张</button>
+    <button role="tab" data-theme="green" aria-selected="false">护眼</button>
+    <button role="tab" data-theme="night" aria-selected="false">夜读</button>
+    <button role="tab" data-theme="black" aria-selected="false">纯黑</button>
+  </div>
+  <select class="proto-select" id="ov-select" aria-label="浮层">
+    <option value="none">浮层：无</option>
+    <option value="palette">命令面板 Ctrl+Shift+P</option>
+    <option value="quick">快速打开 Ctrl+P</option>
+    <option value="float">浮动格式条（选中文字）</option>
+    <option value="slash">斜杠菜单（行首输入 /）</option>
+    <option value="find">查找与替换 Ctrl+H</option>
+    <option value="link">插入链接 Ctrl+K</option>
+    <option value="keys">快捷键设置</option>
+    <option value="tbmenu">工具栏右键菜单</option>
+    <option value="gitset">Git 设置</option>
+    <option value="whoami">填写提交身份</option>
+    <optgroup label="一键整理 / AI">
+      <option value="tidied">一键整理之后（状态栏提示）</option>
+      <option value="aimenu">AI 下拉菜单</option>
+      <option value="aiprompt">/AI 输入指令</option>
+      <option value="aigen">/AI 生成中</option>
+      <option value="aidone">/AI 待确认</option>
+      <option value="aisummary">总结当前笔记</option>
+      <option value="aitidy">AI 整理结构：核对通过</option>
+      <option value="aitidywarn">AI 整理结构：核对未通过</option>
+      <option value="ainocfg">尚未配置 AI</option>
+    </optgroup>
+    <optgroup label="设置页（新增部分）">
+      <option value="setai">设置 · AI</option>
+      <option value="seteditor">设置 · 编辑器 · 一键整理</option>
+      <option value="setlook">设置 · 外观 · 主题</option>
+    </optgroup>
+    <optgroup label="AI 对话">
+      <option value="chatmodel">切换模型</option>
+      <option value="chatmention">输入 @ 引用笔记</option>
+      <option value="chatmenu">会话的更多菜单</option>
+      <option value="chatdel">删除会话：确认</option>
+    </optgroup>
+  </select>
+  <select class="proto-select" id="scm-select" aria-label="版本控制状态">
+    <option value="scm">版本控制：已有仓库</option>
+    <option value="scminit">版本控制：未初始化</option>
+    <option value="scmnogit">版本控制：未安装 Git</option>
+    <option value="scmbusy">版本控制：合并中</option>
+  </select>
+  <select class="proto-select" id="chat-select" aria-label="AI 对话状态">
+    <option value="chat">AI 对话：已回复</option>
+    <option value="chatgen">AI 对话：生成中</option>
+    <option value="chaterr">AI 对话：模型不支持图片</option>
+    <option value="chatlong">AI 对话：超出上下文</option>
+    <option value="chatempty">AI 对话：新对话</option>
+  </select>
+  <div class="proto-switch side-switch" role="tablist" aria-label="左栏视图">
+    <button role="tab" data-side="files" aria-selected="true">左栏：文件</button>
+    <button role="tab" data-side="scm" aria-selected="false">左栏：版本控制</button>
+    <button role="tab" data-side="chat" aria-selected="false">AI 对话</button>
+  </div>
+  <span class="proto-desc" id="proto-desc"></span>
+</div>
+
+<div class="app">
+  <!-- 标题栏 -->
+  <header class="titlebar">
+    <div class="tb-left">
+      <img class="tb-logo" src="../public/logo.png" alt="Spark" width="20" height="20" draggable="false" />
+      <button class="btn" title="菜单"><svg class="ico"><use href="#i-menu"/></svg></button>
+      <button class="btn" title="显示/隐藏侧栏 (Ctrl+Shift+B)"><svg class="ico"><use href="#i-sidebar"/></svg></button>
+      <button class="btn" title="后退 (Alt+←)"><svg class="ico"><use href="#i-left"/></svg></button>
+      <button class="btn" title="前进 (Alt+→)" style="opacity:.4"><svg class="ico"><use href="#i-right"/></svg></button>
+    </div>
+    <div class="tabs" role="tablist">
+      <button class="tab is-active" role="tab" aria-selected="true"><span class="name" id="active-tab-name">WebDAV 同步设计</span><span class="x" title="关闭 (Ctrl+W)"><svg class="ico ico-sm"><use href="#i-close"/></svg></span></button>
+      <button class="tab" role="tab" aria-selected="false"><span class="name">编辑器选型</span><span class="x"><svg class="ico ico-sm"><use href="#i-close"/></svg></span></button>
+      <button class="tab is-preview" role="tab" aria-selected="false"><span class="name">2026-09 第 4 周</span><span class="x"><svg class="ico ico-sm"><use href="#i-close"/></svg></span></button>
+      <button class="btn tab-add" title="新建笔记 (Ctrl+N)"><svg class="ico ico-sm"><use href="#i-plus"/></svg></button>
+    </div>
+    <div class="tb-drag"></div>
+    <div class="tb-right">
+      <button class="btn sync" id="sync-btn" title="Git · main · 领先 1、落后 0 · 3 项未提交改动&#10;点击一键同步（先拉取再推送）"><svg class="ico"><use href="#i-sync"/></svg><span class="dot git-dirty"></span></button>
+      <button class="btn" title="全文搜索 (Ctrl+Shift+F)"><svg class="ico"><use href="#i-search"/></svg></button>
+      <button class="btn" id="night-toggle" title="切换到夜读"><svg class="ico"><use href="#i-moon"/></svg></button>
+      <button class="btn" title="设置 (Ctrl+,)"><svg class="ico"><use href="#i-settings"/></svg></button>
+    </div>
+    <div class="win">
+      <button title="最小化"><svg class="ico"><use href="#i-min"/></svg></button>
+      <button title="最大化"><svg class="ico"><use href="#i-max"/></svg></button>
+      <button class="close" title="关闭"><svg class="ico"><use href="#i-close"/></svg></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <!-- 左栏 -->
+    <aside class="sidebar">
+      <nav class="views" aria-label="侧栏视图">
+        <button class="btn is-active" title="文件"><svg class="ico"><use href="#i-folder"/></svg></button>
+        <button class="btn" title="搜索"><svg class="ico"><use href="#i-search"/></svg></button>
+        <button class="btn" title="标签"><svg class="ico"><use href="#i-tag"/></svg></button>
+        <button class="btn" title="收藏"><svg class="ico"><use href="#i-star"/></svg></button>
+        <button class="btn" title="大纲"><svg class="ico"><use href="#i-outline"/></svg></button>
+        <button class="btn" id="view-scm" title="版本控制"><svg class="ico"><use href="#i-git"/></svg><span class="view-badge">3</span></button>
+      </nav>
+      <div id="side-files">
+      <div class="tree-head">
+        <span class="vault">我的笔记库</span>
+        <button class="btn" title="新建笔记 (Ctrl+N)"><svg class="ico ico-sm"><use href="#i-file-plus"/></svg></button>
+        <button class="btn" title="新建文件夹 (Ctrl+Shift+N)"><svg class="ico ico-sm"><use href="#i-folder-plus"/></svg></button>
+        <button class="btn" title="排序方式"><svg class="ico ico-sm"><use href="#i-sort"/></svg></button>
+        <button class="btn" title="全部折叠"><svg class="ico ico-sm"><use href="#i-collapse"/></svg></button>
+      </div>
+      <ul class="tree" role="tree">
+        <li class="row" style="--d:0"><svg class="ico chev"><use href="#i-down"/></svg><svg class="ico"><use href="#i-folder"/></svg><span class="name">工作</span></li>
+        <li class="row" style="--d:1"><svg class="ico chev"><use href="#i-down"/></svg><svg class="ico"><use href="#i-folder"/></svg><span class="name">TT笔记</span></li>
+        <li class="row is-active" style="--d:2" tabindex="0"><span class="spacer"></span><svg class="ico"><use href="#i-file"/></svg><span class="name">WebDAV 同步设计</span><svg class="ico ico-sm star"><use href="#i-star"/></svg></li>
+        <li class="row" style="--d:2"><span class="spacer"></span><svg class="ico"><use href="#i-file"/></svg><span class="name">编辑器选型</span></li>
+        <li class="row" style="--d:2"><span class="spacer"></span><svg class="ico"><use href="#i-file"/></svg><span class="name">性能指标</span></li>
+        <li class="row" style="--d:1"><svg class="ico chev"><use href="#i-right"/></svg><svg class="ico"><use href="#i-folder"/></svg><span class="name">周报</span></li>
+        <li class="row" style="--d:1"><span class="spacer"></span><svg class="ico"><use href="#i-file"/></svg><span class="name">会议纪要</span></li>
+        <li class="row" style="--d:0"><svg class="ico chev"><use href="#i-down"/></svg><svg class="ico"><use href="#i-folder"/></svg><span class="name">学习</span></li>
+        <li class="row" style="--d:1"><svg class="ico chev"><use href="#i-right"/></svg><svg class="ico"><use href="#i-folder"/></svg><span class="name">Rust</span></li>
+        <li class="row" style="--d:1"><svg class="ico chev"><use href="#i-right"/></svg><svg class="ico"><use href="#i-folder"/></svg><span class="name">Vue 3</span></li>
+        <li class="row" style="--d:1"><span class="spacer"></span><svg class="ico"><use href="#i-file"/></svg><span class="name">SQLite FTS5 中文分词</span></li>
+        <li class="row" style="--d:0"><svg class="ico chev"><use href="#i-right"/></svg><svg class="ico"><use href="#i-folder"/></svg><span class="name">个人</span></li>
+        <li class="row" style="--d:0"><svg class="ico chev"><use href="#i-right"/></svg><svg class="ico"><use href="#i-folder"/></svg><span class="name">读书</span></li>
+        <li class="row" style="--d:0"><span class="spacer"></span><svg class="ico"><use href="#i-file"/></svg><span class="name">待整理</span></li>
+      </ul>
+      </div>
+
+      <!-- 版本控制视图（需求文档 5.14） -->
+      <div id="side-scm" class="scm" hidden>
+        <div class="scm-setrow"><button class="scm-link" type="button">Git 设置</button></div>
+        <div class="scm-banner" id="scm-banner" hidden>正在合并，提交、拉取和推送已暂停。请用外部 Git 工具完成或中止合并后再回到这里。</div>
+        <div class="scm-head">
+          <span class="scm-branch"><svg class="ico ico-sm"><use href="#i-git"/></svg>main</span>
+          <span class="scm-ahead" title="领先远程 1 个提交、落后 0 个">↑1 ↓0</span>
+          <span class="scm-flex"></span>
+          <button class="scm-mini" title="拉取（有未提交改动时先自动提交）"><svg class="ico ico-sm"><use href="#i-pull"/></svg>拉取</button>
+          <button class="scm-mini" title="推送到 origin/main"><svg class="ico ico-sm"><use href="#i-push"/></svg>推送</button>
+        </div>
+        <div class="scm-commit">
+          <textarea rows="2" placeholder="提交说明（Ctrl+Enter 提交）">完善同步规则与冲突处理</textarea>
+          <button class="scm-mini scm-ai" title="把本次改动的差异发给 AI，生成的说明填进上面的输入框"><svg class="ico ico-sm"><use href="#i-sparkle"/></svg>AI 生成说明</button>
+          <button class="scm-btn">提交全部 3 项改动</button>
+        </div>
+        <div class="scm-section"><svg class="ico ico-sm chev"><use href="#i-down"/></svg>改动<span class="bl-count">3</span></div>
+        <ul class="scm-list">
+          <li class="row" tabindex="0"><span class="st st-m" title="已修改">M</span><span class="name">WebDAV 同步设计</span><span class="scm-dir">工作/TT笔记</span></li>
+          <li class="row"><span class="st st-a" title="新增">A</span><span class="name">读书笔记</span><span class="scm-dir"></span></li>
+          <li class="row"><span class="st st-d" title="已删除">D</span><span class="name deleted">旧草稿</span><span class="scm-dir">个人</span></li>
+        </ul>
+        <div class="scm-section"><svg class="ico ico-sm chev"><use href="#i-down"/></svg>提交记录</div>
+        <ul class="scm-log">
+          <li><span class="log-dot is-local" title="尚未推送"></span><div><div class="log-msg">补充反向链接的说明</div><div class="log-meta">今天 16:40 · 尚未推送</div></div></li>
+          <li><span class="log-dot"></span><div><div class="log-msg">自动提交：修改 2 篇（周报、读书笔记）</div><div class="log-meta">今天 11:05</div></div></li>
+          <li><span class="log-dot"></span><div><div class="log-msg">整理工作目录结构</div><div class="log-meta">昨天 21:18</div></div></li>
+          <li><span class="log-dot"></span><div><div class="log-msg">初始化笔记库</div><div class="log-meta">9月20日</div></div></li>
+        </ul>
+      </div>
+
+      <div id="side-scminit" class="scm" hidden>
+        <div class="scm-empty">
+          <h3>还不是 Git 仓库</h3>
+          <p>初始化后可以在这里提交改动。远程地址、自动提交和提交身份在 Git 设置里填写。</p>
+          <button class="scm-btn" type="button">初始化仓库</button>
+          <button class="scm-link" type="button" style="align-self:flex-start">Git 设置</button>
+        </div>
+      </div>
+
+      <div id="side-scmnogit" class="scm" hidden>
+        <div class="scm-empty">
+          <h3>未检测到 Git</h3>
+          <p>安装 Git for Windows 后重新打开 Spark，就可以使用版本控制。笔记的编辑和搜索不受影响。</p>
+          <a class="scm-ext" href="https://git-scm.com/download/win">下载 Git for Windows</a>
+        </div>
+      </div>
+
+      <!-- AI 对话：会话列表 -->
+      <div id="side-chat" class="chats" hidden>
+        <div class="tree-head"><span class="vault">AI 对话</span></div>
+        <button class="chat-new" type="button"><svg class="ico ico-sm"><use href="#i-plus"/></svg>新对话</button>
+        <div class="chat-list">
+          <div class="chat-group">今天</div>
+          <div class="row is-active" tabindex="0" id="chat-row-active"><svg class="ico ico-sm"><use href="#i-chat"/></svg><span class="name">WebDAV 冲突处理怎么写</span><button class="btn more" title="更多"><svg class="ico ico-sm"><use href="#i-dots"/></svg></button></div>
+          <div class="row"><svg class="ico ico-sm"><use href="#i-chat"/></svg><span class="name">把会议纪要整理成周报</span><button class="btn more" title="更多"><svg class="ico ico-sm"><use href="#i-dots"/></svg></button></div>
+          <div class="chat-group">昨天</div>
+          <div class="row"><svg class="ico ico-sm"><use href="#i-chat"/></svg><span class="name">Rust 所有权的例子</span><button class="btn more" title="更多"><svg class="ico ico-sm"><use href="#i-dots"/></svg></button></div>
+          <div class="row"><svg class="ico ico-sm"><use href="#i-chat"/></svg><span class="name">这张截图里的报错是什么意思</span><button class="btn more" title="更多"><svg class="ico ico-sm"><use href="#i-dots"/></svg></button></div>
+          <div class="chat-group">更早</div>
+          <div class="row"><svg class="ico ico-sm"><use href="#i-chat"/></svg><span class="name">SQLite FTS5 中文分词方案对比</span><button class="btn more" title="更多"><svg class="ico ico-sm"><use href="#i-dots"/></svg></button></div>
+          <div class="row"><svg class="ico ico-sm"><use href="#i-chat"/></svg><span class="name">读书笔记模板</span><button class="btn more" title="更多"><svg class="ico ico-sm"><use href="#i-dots"/></svg></button></div>
+        </div>
+        <div class="ov ov-chatmenu pop chat-menu">
+          <div class="pal-row"><svg class="ico ico-sm"><use href="#i-edit"/></svg>重命名</div>
+          <div class="pal-row danger"><svg class="ico ico-sm"><use href="#i-trash"/></svg>删除</div>
+        </div>
+      </div>
+
+      <!-- 左栏底部：AI 对话入口 -->
+      <div class="side-foot">
+        <div class="row" id="foot-ai" title="AI 对话"><svg class="ico"><use href="#i-sparkle"/></svg><span class="name">AI 对话</span></div>
+      </div>
+    </aside>
+
+    <!-- 右栏 -->
+    <main class="main">
+      <!-- 查找与替换：停靠在编辑区右上角 -->
+      <div class="pop findbar">
+        <button class="btn" title="收起替换"><svg class="ico ico-sm"><use href="#i-down"/></svg></button>
+        <input class="focus" value="同步" aria-label="查找">
+        <div class="fb-tools"><span class="fb-count">2 / 7</span><button class="btn fb-opt" title="区分大小写">Aa</button><button class="btn fb-opt" title="正则表达式">.*</button><button class="btn" title="上一个 (Shift+Enter)"><svg class="ico ico-sm"><use href="#i-left"/></svg></button><button class="btn" title="下一个 (Enter)"><svg class="ico ico-sm"><use href="#i-right"/></svg></button><button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+        <span></span>
+        <input placeholder="替换为" aria-label="替换为">
+        <div class="fb-tools"><button class="fb-txt">替换</button><button class="fb-txt">全部替换</button></div>
+      </div>
+      <!-- AI 下拉菜单 -->
+      <div class="ov ov-aimenu pop aimenu">
+        <div class="pal-row on"><svg class="ico ico-sm"><use href="#i-summary"/></svg><span class="pt">总结当前笔记</span></div>
+        <div class="pal-row"><svg class="ico ico-sm"><use href="#i-structure"/></svg><span class="pt">AI 整理结构</span></div>
+      </div>
+      <!-- 工具栏右键菜单：勾选要显示的按钮 -->
+      <div class="ov ov-tbmenu pop tbmenu">
+        <div class="pal-group" style="padding-top:4px">显示的工具栏按钮（点击切换）</div>
+        <div class="tb-grid">
+          <div class="pal-row"><span class="mk">✓</span>撤销</div>
+          <div class="pal-row"><span class="mk">✓</span>重做</div>
+          <div class="pal-row"><span class="mk">✓</span>段落级别</div>
+          <div class="pal-row"><span class="mk">✓</span>加粗</div>
+          <div class="pal-row"><span class="mk">✓</span>斜体</div>
+          <div class="pal-row"><span class="mk">✓</span>删除线</div>
+          <div class="pal-row"><span class="mk">✓</span>高亮</div>
+          <div class="pal-row"><span class="mk">✓</span>行内代码</div>
+          <div class="pal-row"><span class="mk"></span>清除格式</div>
+          <div class="pal-row"><span class="mk">✓</span>无序列表</div>
+          <div class="pal-row"><span class="mk">✓</span>有序列表</div>
+          <div class="pal-row"><span class="mk">✓</span>任务列表</div>
+          <div class="pal-row"><span class="mk"></span>增加缩进</div>
+          <div class="pal-row"><span class="mk"></span>减少缩进</div>
+          <div class="pal-row"><span class="mk">✓</span>引用</div>
+          <div class="pal-row"><span class="mk">✓</span>代码块</div>
+          <div class="pal-row"><span class="mk">✓</span>分割线</div>
+          <div class="pal-row"><span class="mk">✓</span>链接</div>
+          <div class="pal-row"><span class="mk">✓</span>双向链接</div>
+          <div class="pal-row"><span class="mk">✓</span>图片</div>
+          <div class="pal-row"><span class="mk">✓</span>表格</div>
+          <div class="pal-row"><span class="mk"></span>脚注</div>
+          <div class="pal-row"><span class="mk">✓</span>一键整理</div>
+          <div class="pal-row"><span class="mk">✓</span>AI</div>
+          <div class="pal-row"><span class="mk">✓</span>查找</div>
+          <div class="pal-row"><span class="mk">✓</span>替换</div>
+        </div>
+        <div class="sepl"></div>
+        <div class="pal-row"><span class="mk"></span>恢复默认</div>
+      </div>
+      <div class="toolbar" role="toolbar" aria-label="格式">
+        <button class="btn" title="撤销 (Ctrl+Z)"><svg class="ico"><use href="#i-undo"/></svg></button>
+        <button class="btn" title="重做 (Ctrl+Y)"><svg class="ico"><use href="#i-redo"/></svg></button>
+        <span class="sep"></span>
+        <button class="hsel" title="段落级别 (Ctrl+0 ~ Ctrl+6)">正文<svg class="ico ico-sm"><use href="#i-down"/></svg></button>
+        <span class="sep"></span>
+        <button class="btn" title="加粗 (Ctrl+B)"><span class="g">B</span></button>
+        <button class="btn" title="斜体 (Ctrl+I)"><span class="g-i">I</span></button>
+        <button class="btn" title="删除线 (Ctrl+Shift+X)"><span class="g g-s">S</span></button>
+        <button class="btn" title="高亮 (Ctrl+Shift+H)"><span class="g g-h">H</span></button>
+        <button class="btn" title="行内代码 (Ctrl+E)"><svg class="ico"><use href="#i-code"/></svg></button>
+        <button class="btn" title="清除格式 (Ctrl+\)"><svg class="ico"><use href="#i-clear"/></svg></button>
+        <span class="sep"></span>
+        <button class="btn" title="无序列表 (Ctrl+Shift+8)"><svg class="ico"><use href="#i-ul"/></svg></button>
+        <button class="btn" title="有序列表 (Ctrl+Shift+7)"><svg class="ico"><use href="#i-ol"/></svg></button>
+        <button class="btn" title="任务列表 (Ctrl+Shift+9)"><svg class="ico"><use href="#i-task"/></svg></button>
+        <button class="btn" title="增加缩进 (Tab)"><svg class="ico"><use href="#i-indent"/></svg></button>
+        <button class="btn" title="减少缩进 (Shift+Tab)"><svg class="ico"><use href="#i-outdent"/></svg></button>
+        <span class="sep"></span>
+        <button class="btn" title="引用 (Ctrl+Shift+Q)"><svg class="ico"><use href="#i-quote"/></svg></button>
+        <button class="btn" title="代码块 (Ctrl+Shift+K)"><svg class="ico"><use href="#i-codeblock"/></svg></button>
+        <button class="btn" title="分割线"><svg class="ico"><use href="#i-hr"/></svg></button>
+        <span class="sep"></span>
+        <button class="btn" title="链接 (Ctrl+K)"><svg class="ico"><use href="#i-link"/></svg></button>
+        <button class="btn btn-wide" title="双向链接"><span class="g-sm">[[ ]]</span></button>
+        <button class="btn" title="图片 (Ctrl+Shift+I)"><svg class="ico"><use href="#i-image"/></svg></button>
+        <button class="btn" title="表格 (Ctrl+T)"><svg class="ico"><use href="#i-table"/></svg></button>
+        <button class="btn" title="脚注"><span class="g-sm">x¹</span></button>
+        <span class="tb-spacer"></span>
+        <button class="btn btn-tidy" title="一键整理 (Ctrl+Shift+L)"><svg class="ico"><use href="#i-tidy"/></svg></button>
+        <button class="btn btn-ai" title="AI"><span class="ai-t">AI</span><svg class="ico ico-sm"><use href="#i-down"/></svg></button>
+        <span class="sep"></span>
+        <button class="btn" title="查找 (Ctrl+F)"><svg class="ico"><use href="#i-search"/></svg></button>
+        <button class="btn" title="替换 (Ctrl+H)"><svg class="ico"><use href="#i-replace"/></svg></button>
+      </div>
+
+      <div class="editor">
+        <article class="doc" id="doc-note">
+          <h1 class="doc-title">WebDAV 同步设计</h1>
+          <div class="doc-meta"><span class="chip">工作</span><span class="chip">TT笔记</span><span class="date">创建于 2026-09-24</span></div>
+
+          <h2 data-h="H2">目标</h2>
+          <p>多台电脑之间保持笔记一致，<strong>绝不丢数据</strong>。服务器用坚果云，协议为 WebDAV，不自己写服务端。</p>
+          <p class="ov ov-slash slash-line">/<span class="caret"></span>
+            <span class="pop slash">
+              <span class="pal-row on"><span class="ico-box">H1</span>标题 1<span class="pc">Ctrl+1</span></span>
+              <span class="pal-row"><span class="ico-box">H2</span>标题 2<span class="pc">Ctrl+2</span></span>
+              <span class="pal-row"><span class="ico-box">H3</span>标题 3<span class="pc">Ctrl+3</span></span>
+              <span class="pal-row"><span class="ico-box">•</span>无序列表<span class="pc">Ctrl+Shift+8</span></span>
+              <span class="pal-row"><span class="ico-box">1.</span>有序列表<span class="pc">Ctrl+Shift+7</span></span>
+              <span class="pal-row"><span class="ico-box">☐</span>任务列表<span class="pc">Ctrl+Shift+9</span></span>
+              <span class="pal-row"><span class="ico-box">❝</span>引用<span class="pc">Ctrl+Shift+Q</span></span>
+              <span class="pal-row"><span class="ico-box">{ }</span>代码块<span class="pc">Ctrl+Shift+K</span></span>
+              <span class="pal-row"><span class="ico-box">⊞</span>表格<span class="pc">Ctrl+T</span></span>
+              <span class="pal-row"><span class="ico-box">AI</span>AI 指令</span>
+            </span>
+          </p>
+          <div class="ov ov-aiprompt ai-box">
+            <div class="ai-input">
+              <svg class="ico ico-sm ai-mark"><use href="#i-sparkle"/></svg>
+              <input value="根据上面的目标，续写一段“冲突处理”的说明" aria-label="AI 指令">
+              <button class="btn-primary">发送</button>
+            </div>
+            <div class="ai-foot">
+              <label class="git-check"><input type="checkbox" checked>附带当前笔记（约 1,286 字）</label>
+              <span class="hint">Enter 发送 · Esc 取消</span>
+            </div>
+          </div>
+          <div class="ov ov-aipend ai-pend">
+            <div class="ai-pend-head"><svg class="ico ico-sm ai-mark"><use href="#i-sparkle"/></svg><span class="q">根据上面的目标，续写一段“冲突处理”的说明</span><span class="ai-state when-gen">生成中…</span><span class="ai-state when-done">待确认</span></div>
+            <div class="ai-pend-body">
+              <p>当两台电脑在两次同步之间修改了同一篇笔记，就会产生冲突。处理原则只有一条：<strong>两份都保留</strong>。远端版本保存为原文件，本地版本另存为“笔记名 (冲突 电脑名 日期).md”，</p>
+              <p>同步图标和状态栏会提示有冲突，由我手动对比后合并<span class="caret"></span></p>
+            </div>
+            <div class="ai-pend-foot">
+              <button class="fb-txt when-gen">停止</button>
+              <button class="btn-primary when-done">接受</button>
+              <button class="fb-txt when-done">放弃</button>
+              <button class="fb-txt when-done">重新生成</button>
+              <span class="hint when-done">接受后可用 Ctrl+Z 撤销</span>
+            </div>
+          </div>
+
+          <h2 data-h="H2"><span class="fh">同步</span>规则</h2>
+          <ul class="tasks">
+            <li class="done"><span class="cb on"><svg><use href="#i-check"/></svg></span><span>只传输有变化的文件</span></li>
+            <li class="done"><span class="cb on"><svg><use href="#i-check"/></svg></span><span>冲突时两份都保留，由我手动合并</span></li>
+            <li><span class="cb"></span><span>网络中断后，下次同步自动续传</span></li>
+          </ul>
+          <blockquote>索引、历史版本、回收站只留在本机，不参与同步。</blockquote>
+          <ul class="list">
+            <li>基准状态保存在 <code>.spark/sync.db</code>，不上传</li>
+            <li>协议细节参考 <a class="extlink" href="#">坚果云 WebDAV 说明</a> <span class="tag-inline">#同步</span></li>
+          </ul>
+
+          <h2 data-h="H2">核心判断</h2>
+          <p>用上次<span class="fh cur">同步</span>时的状态作为基准，和本地、远端做<span class="sel-anchor"><mark>三方比较</mark><span class="ov ov-float pop floatbar">
+              <button class="btn" title="加粗 (Ctrl+B)"><span class="g">B</span></button>
+              <button class="btn" title="斜体 (Ctrl+I)"><span class="g-i">I</span></button>
+              <button class="btn" title="删除线 (Ctrl+Shift+X)"><span class="g g-s">S</span></button>
+              <button class="btn is-active" title="高亮 (Ctrl+Shift+H)"><span class="g g-h">H</span></button>
+              <button class="btn" title="行内代码 (Ctrl+E)"><svg class="ico"><use href="#i-code"/></svg></button>
+              <span class="sep"></span>
+              <button class="btn" title="链接 (Ctrl+K)"><svg class="ico"><use href="#i-link"/></svg></button>
+            </span><span class="ov ov-link pop linkpop">
+              <input value="https://docs.example.com/sync" aria-label="链接地址">
+              <button class="btn-primary">确定</button>
+              <span class="hint">Enter 确定 · Esc 取消</span>
+            </span></span>：</p>
+          <div class="codeblock">
+            <div class="cb-head">
+              <button class="lang" title="选择语言">rust<svg class="ico ico-sm"><use href="#i-down"/></svg></button>
+              <button class="copy" title="复制代码"><svg class="ico ico-sm"><use href="#i-copy"/></svg>复制</button>
+            </div>
+<pre><span class="l"><span class="c">/// 决定单个文件的同步动作</span></span><span class="l"><span class="k">fn</span> <span class="f">decide</span>(local: &amp;<span class="t">State</span>, remote: &amp;<span class="t">State</span>, base: &amp;<span class="t">State</span>) -&gt; <span class="t">Action</span> {</span><span class="l">    <span class="k">match</span> (local.<span class="f">changed_since</span>(base), remote.<span class="f">changed_since</span>(base)) {</span><span class="l">        (<span class="k">false</span>, <span class="k">false</span>) =&gt; <span class="t">Action</span>::Skip,</span><span class="l">        (<span class="k">true</span>,  <span class="k">false</span>) =&gt; <span class="t">Action</span>::Upload,</span><span class="l">        (<span class="k">false</span>, <span class="k">true</span>)  =&gt; <span class="t">Action</span>::Download,</span><span class="l">        (<span class="k">true</span>,  <span class="k">true</span>)  =&gt; <span class="t">Action</span>::KeepBoth, <span class="c">// 冲突：两份都保留</span></span><span class="l">    }</span><span class="l">}</span></pre>
+          </div>
+          <p class="is-current">远端文件用 <code>ETag</code> 判断是否变化，本地用内容哈希。相关笔记：<a class="wikilink" href="#">编辑器选型</a>、<a class="wikilink" href="#">性能指标</a><span class="caret"></span></p>
+        </article>
+
+        <section class="backlinks" id="note-backlinks" aria-label="反向链接">
+          <div class="bl-inner">
+            <div class="bl-head"><svg class="ico ico-sm"><use href="#i-down"/></svg>反向链接<span class="bl-count">2</span></div>
+            <a class="bl-item" href="#"><div class="bl-title">编辑器选型</div><div class="bl-snip">……保存后触发的自动同步见 <b>WebDAV 同步设计</b>，延迟 30 秒……</div></a>
+            <a class="bl-item" href="#"><div class="bl-title">2026-09 第 4 周</div><div class="bl-snip">……完成 <b>WebDAV 同步设计</b> 初稿，下周开始写冲突处理……</div></a>
+          </div>
+        </section>
+      </div>
+      <!-- AI 对话（标签页） -->
+      <section class="chat" id="chat-view" hidden>
+        <div class="chat-head">
+          <span class="chat-title" id="chat-title">WebDAV 冲突处理怎么写</span>
+        </div>
+
+        <div class="chat-scroll" id="chat-thread">
+          <div class="chat-inner">
+            <div class="ctx-divider when-long">更早的 12 条消息未发送给 AI（超出上下文上限）</div>
+            <div class="msg-user">
+              <div class="msg-atts"><span class="att-chip note"><svg class="ico ico-sm"><use href="#i-file"/></svg>WebDAV 同步设计</span></div>
+              <div class="bubble">参考这篇笔记，帮我写一段冲突处理的说明，要分情况讲。</div>
+            </div>
+            <div class="msg-ai">
+              <span class="avatar"><svg class="ico ico-sm"><use href="#i-sparkle"/></svg></span>
+              <div class="main-col">
+                <div class="msg-body">
+                  <p>冲突指两台电脑在两次同步之间修改了同一篇笔记。按下面三种情况处理：</p>
+                  <table>
+                    <thead><tr><th>情况</th><th>本地</th><th>远端</th><th>处理</th></tr></thead>
+                    <tbody>
+                      <tr><td>只有本地改了</td><td>已修改</td><td>未变</td><td>上传本地版本</td></tr>
+                      <tr><td>只有远端改了</td><td>未变</td><td>已修改</td><td>下载远端版本</td></tr>
+                      <tr><td>两边都改了</td><td>已修改</td><td>已修改</td><td>两份都保留</td></tr>
+                    </tbody>
+                  </table>
+                  <p>两边都改了时，远端版本保存为原文件，本地版本另存为 <code>笔记名 (冲突 电脑名 日期).md</code>，同步图标和状态栏会提示有冲突，由你手动对比后合并。</p>
+                </div>
+                <div class="msg-acts">
+                  <button class="btn" title="复制"><svg class="ico ico-sm"><use href="#i-copy"/></svg>复制</button>
+                  <button class="btn" title="插入到最近编辑的笔记的光标处"><svg class="ico ico-sm"><use href="#i-insert"/></svg>插入到笔记</button>
+                  <button class="btn" title="在当前文件夹新建一篇笔记"><svg class="ico ico-sm"><use href="#i-file-plus"/></svg>保存为新笔记</button>
+                </div>
+              </div>
+            </div>
+            <div class="msg-user">
+              <div class="msg-atts"><span class="att-img">同步失败截图.png</span></div>
+              <div class="bubble">这张截图里同步失败的原因是什么？</div>
+            </div>
+            <div class="msg-ai">
+              <span class="avatar"><svg class="ico ico-sm"><use href="#i-sparkle"/></svg></span>
+              <div class="main-col">
+                <div class="msg-body when-done">
+                  <p>截图里的错误是 <code>HTTP 401 Unauthorized</code>，说明 WebDAV 服务器拒绝了登录。常见原因：</p>
+                  <ol><li>坚果云需要使用“应用密码”，不能用网页登录密码；</li><li>用户名应填写注册时的邮箱。</li></ol>
+                  <p>在 设置 → 同步 里重新填写后，点“测试连接”确认。</p>
+                </div>
+                <div class="msg-body when-gen">
+                  <p>截图里的错误是 <code>HTTP 401 Unauthorized</code>，说明 WebDAV 服务器拒绝了登录。常见原因：</p>
+                  <p>1. 坚果云需要使用“应用<span class="caret"></span></p>
+                </div>
+                <div class="msg-err when-err">
+                  <span>请求失败（HTTP 400）：The model does not support image input。当前模型可能不支持图片，可以在右上角换成支持识图的模型后重新生成。</span>
+                  <button class="fb-txt">重新生成</button>
+                </div>
+                <div class="msg-acts when-done">
+                  <button class="btn" title="复制"><svg class="ico ico-sm"><use href="#i-copy"/></svg>复制</button>
+                  <button class="btn" title="插入到最近编辑的笔记的光标处"><svg class="ico ico-sm"><use href="#i-insert"/></svg>插入到笔记</button>
+                  <button class="btn" title="在当前文件夹新建一篇笔记"><svg class="ico ico-sm"><use href="#i-file-plus"/></svg>保存为新笔记</button>
+                  <button class="btn" title="重新生成这条回复"><svg class="ico ico-sm"><use href="#i-sync"/></svg>重新生成</button>
+                  <span class="msg-model" id="msg-model">qwen-vl-max</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="chat-empty" id="chat-empty" hidden>
+          <h2>有什么可以帮你的？</h2>
+          <p>只在你点击发送时，才把消息和附件发给 设置 → AI 里配置的服务商</p>
+        </div>
+
+        <div class="composer-wrap">
+          <div class="ov ov-chatmodel pop model-menu">
+            <div class="pal-row"><span class="mk"></span>qwen-plus</div>
+            <div class="pal-row"><span class="mk"></span>qwen-max</div>
+            <div class="pal-row on"><span class="mk">✓</span>qwen-vl-max</div>
+            <div class="pal-foot"><span>只影响这个对话；可选模型在 设置 → AI 里填写</span></div>
+          </div>
+          <div class="ov ov-chatmention pop mention">
+            <div class="pal-group">引用笔记</div>
+            <div class="pal-row on"><svg class="ico ico-sm"><use href="#i-file"/></svg><span class="pt"><b>性</b>能指标</span><span class="pc">工作/TT笔记</span></div>
+            <div class="pal-row"><svg class="ico ico-sm"><use href="#i-file"/></svg><span class="pt">SQLite FTS5 <b>性</b>能测试</span><span class="pc">学习</span></div>
+            <div class="pal-foot"><span>↑↓ 选择</span><span>Enter 引用</span><span>Esc 关闭</span></div>
+          </div>
+          <div class="composer focus" id="composer">
+            <div class="comp-atts" id="comp-atts">
+              <span class="comp-att"><span class="att-img"></span><span class="x" title="移除"><svg class="ico"><use href="#i-close"/></svg></span></span>
+              <span class="comp-att"><span class="att-chip"><svg class="ico ico-sm"><use href="#i-file"/></svg>同步日志.txt <small>3.2 KB</small></span><span class="x" title="移除"><svg class="ico"><use href="#i-close"/></svg></span></span>
+              <span class="comp-att"><span class="att-chip note"><svg class="ico ico-sm"><use href="#i-file"/></svg>性能指标</span><span class="x" title="移除"><svg class="ico"><use href="#i-close"/></svg></span></span>
+            </div>
+            <textarea rows="2" id="composer-text" placeholder="给 AI 发消息，输入 @ 引用笔记，可以粘贴或拖入图片和文件">对比一下日志和截图，看看是不是同一个问题</textarea>
+            <div class="comp-bar">
+              <button class="btn" title="添加图片或文件"><svg class="ico"><use href="#i-clip"/></svg></button>
+              <button class="btn" title="引用笔记（@）"><span class="at">@</span></button>
+              <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+              <button class="model-sel" id="model-sel" title="本次对话使用的模型">qwen-vl-max<svg class="ico ico-sm"><use href="#i-down"/></svg></button>
+              <button class="send send-btn" id="send-btn" title="发送 (Enter)"><svg class="ico"><use href="#i-send"/></svg></button>
+              <button class="send stop-btn" title="停止生成"><svg class="ico"><use href="#i-stop"/></svg></button>
+            </div>
+          </div>
+          <div class="ctx-meter" id="ctx-meter">
+            <span>上下文</span><span class="ctx-bar"><span id="ctx-fill" style="width:10%"></span></span><span id="ctx-text">约 12.3K / 131K tokens</span>
+            <span class="flex"></span><span>按字数估算，图片不计入</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 命令面板 -->
+  <div class="ov ov-palette pop palette" style="top:calc(var(--tb-h) + 8px)">
+    <input value="" placeholder="输入命令名称" aria-label="命令">
+    <div class="pal-group">最近使用</div>
+    <div class="pal-row on"><span class="pt">切换深浅主题</span><span class="pc">视图</span></div>
+    <div class="pal-row"><span class="pt">全文搜索</span><span class="pc">搜索</span><span class="kbd"><span>Ctrl</span><span>Shift</span><span>F</span></span></div>
+    <div class="pal-group">全部命令</div>
+    <div class="pal-row"><span class="pt">新建笔记</span><span class="pc">文件</span><span class="kbd"><span>Ctrl</span><span>N</span></span></div>
+    <div class="pal-row"><span class="pt">新建文件夹</span><span class="pc">文件</span><span class="kbd"><span>Ctrl</span><span>Shift</span><span>N</span></span></div>
+    <div class="pal-row"><span class="pt">显示/隐藏侧栏</span><span class="pc">视图</span><span class="kbd"><span>Ctrl</span><span>Shift</span><span>B</span></span></div>
+    <div class="pal-row"><span class="pt">关闭标签页</span><span class="pc">标签页</span><span class="kbd"><span>Ctrl</span><span>W</span></span></div>
+    <div class="pal-row"><span class="pt">快捷键设置</span><span class="pc">帮助</span></div>
+    <div class="pal-row"><span class="pt">Git 设置</span><span class="pc">版本控制</span></div>
+    <div class="pal-foot"><span>↑↓ 选择</span><span>Enter 执行</span><span>Esc 关闭</span></div>
+  </div>
+
+  <!-- 快速打开 -->
+  <div class="ov ov-quick pop palette" style="top:calc(var(--tb-h) + 8px)">
+    <input value="同步" placeholder="按笔记名搜索" aria-label="快速打开">
+    <div class="pal-row on"><svg class="ico ico-sm"><use href="#i-file"/></svg><span class="pt">WebDAV <b>同步</b>设计</span><span class="pc">工作/TT笔记</span></div>
+    <div class="pal-row"><svg class="ico ico-sm"><use href="#i-file"/></svg><span class="pt"><b>同步</b>冲突记录</span><span class="pc">个人</span></div>
+    <div class="pal-row"><svg class="ico ico-sm"><use href="#i-file"/></svg><span class="pt">坚果云<b>同步</b>配置</span><span class="pc">学习</span></div>
+    <div class="pal-foot"><span>↑↓ 选择</span><span>Enter 打开</span><span>Esc 关闭</span><span style="margin-left:auto">输入 &gt; 切换到命令面板</span></div>
+  </div>
+
+  <!-- 快捷键设置 -->
+  <div class="mask">
+    <div class="pop keys" role="dialog" aria-label="快捷键">
+      <div class="keys-head">
+        <h3>快捷键</h3>
+        <input placeholder="按命令名称或快捷键搜索">
+        <button class="fb-txt">导入</button><button class="fb-txt">导出</button><button class="fb-txt">全部恢复默认</button>
+        <button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="keys-body">
+        <table>
+          <thead><tr><th style="width:42%">命令</th><th>快捷键</th><th style="width:16%">作用范围</th><th style="width:84px"></th></tr></thead>
+          <tbody>
+            <tr class="grp"><td colspan="4">文件</td></tr>
+            <tr><td>新建笔记</td><td><span class="kbd"><span>Ctrl</span><span>N</span></span></td><td class="scope">全局</td><td></td></tr>
+            <tr><td>立即保存</td><td><span class="kbd"><span>Ctrl</span><span>S</span></span></td><td class="scope">全局</td><td></td></tr>
+            <tr class="grp"><td colspan="4">视图</td></tr>
+            <tr class="rec"><td>显示/隐藏侧栏</td><td><span class="rec-box">请按下组合键…　Esc 取消　Backspace 设为无</span></td><td class="scope">全局</td><td></td></tr>
+            <tr><td colspan="4" style="border-top:0;padding-top:0"><div class="conflict"><span><b>Ctrl+B</b> 已被“加粗”占用，覆盖后“加粗”的快捷键将变为“无”。</span><span style="margin-left:auto"></span><button class="btn-primary">覆盖</button><button class="fb-txt">取消</button></div></td></tr>
+            <tr><td>切换深浅主题</td><td><span class="kbd"><span>Ctrl</span><span>Alt</span><span>N</span></span> <span class="custom">已自定义</span></td><td class="scope">全局</td><td><button class="reset" title="恢复默认（无）">↺ 恢复</button></td></tr>
+            <tr class="grp"><td colspan="4">格式</td></tr>
+            <tr><td>加粗</td><td><span class="kbd"><span>Ctrl</span><span>B</span></span></td><td class="scope">编辑器</td><td></td></tr>
+            <tr><td>高亮</td><td><span class="kbd"><span>Ctrl</span><span>Shift</span><span>H</span></span></td><td class="scope">编辑器</td><td></td></tr>
+            <tr><td>脚注</td><td class="scope">无</td><td class="scope">编辑器</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pop gitset" role="dialog" aria-label="Git 设置">
+      <div class="keys-head">
+        <h3>Git 设置</h3>
+        <button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="git-body">
+        <div class="git-sec">远程仓库</div>
+        <label for="git-remote">地址</label>
+        <input id="git-remote" type="text" value="git@github.com:me/notes.git" spellcheck="false">
+        <p class="git-hint">设置 origin。不保存密码或密钥，沿用系统里已有的 SSH 和凭据管理器。</p>
+        <div class="git-sec">自动提交</div>
+        <label class="git-check"><input type="checkbox" checked>停止编辑后自动提交</label>
+        <div class="git-row">等待 <input class="git-num" type="text" value="5" inputmode="numeric" aria-label="等待分钟"> 分钟</div>
+        <p class="git-hint">退出时如有未提交改动也会提交。拉取和推送只在点击时进行。</p>
+        <div class="git-sec">本仓库的用户名和邮箱</div>
+        <label for="git-name">用户名</label>
+        <input id="git-name" type="text" value="笔记作者">
+        <label for="git-mail">邮箱</label>
+        <input id="git-mail" type="text" value="notes@example.com" spellcheck="false">
+        <p class="git-hint">只写入这个笔记库，不修改电脑上的全局 Git 配置。</p>
+        <div class="git-actions"><button class="btn-primary" type="button">保存</button></div>
+      </div>
+    </div>
+    <div class="pop whoami" role="dialog" aria-label="填写提交身份">
+      <div class="keys-head">
+        <h3>填写提交身份</h3>
+        <button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="git-body">
+        <p class="git-hint">这次提交需要用户名和邮箱。只会写入这个笔记库，不会改全局 Git 配置。</p>
+        <label for="who-name">用户名</label>
+        <input id="who-name" type="text" value="" placeholder="笔记作者">
+        <label for="who-mail">邮箱</label>
+        <input id="who-mail" type="text" value="" placeholder="notes@example.com" spellcheck="false">
+        <div class="git-actions"><button class="fb-txt" type="button">取消</button><button class="btn-primary" type="button">保存并提交</button></div>
+      </div>
+    </div>
+
+    <!-- 总结当前笔记 -->
+    <div class="pop dlg" data-dlg="aisummary" role="dialog" aria-label="总结当前笔记" style="width:520px">
+      <div class="keys-head"><h3>总结当前笔记</h3><button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+      <div class="dlg-body">
+        <p class="ai-sent">已发送：当前笔记“WebDAV 同步设计”，约 1,286 字</p>
+        <div class="ai-result">
+          <p>这篇笔记设计了 Spark 基于 WebDAV 的多端同步方案，核心目标是不丢数据。</p>
+          <ul>
+            <li>以上次同步时的状态为基准，与本地、远端做三方比较，只传输有变化的文件</li>
+            <li>两端都修改时两份都保留，由用户手动合并</li>
+            <li>索引、历史版本和回收站只留在本机，不参与同步</li>
+          </ul>
+        </div>
+      </div>
+      <div class="dlg-actions"><button class="fb-txt">重新生成</button><span class="flex"></span><button class="fb-txt">复制</button><button class="btn-primary">插入到笔记开头</button></div>
+    </div>
+
+    <!-- AI 整理结构：左右对比 -->
+    <div class="pop dlg tidy" data-dlg="aitidy aitidywarn" role="dialog" aria-label="AI 整理结构">
+      <div class="keys-head"><h3>AI 整理结构</h3><span class="hint">已发送：当前笔记，约 1,286 字</span><button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+      <div class="dlg-body">
+        <div class="tidy-cols">
+          <div class="tidy-col"><h4>原文</h4><pre><span class="ln same">## 目标</span><span class="ln del">多台电脑之间保持笔记一致，**绝不丢数据**。服务器用坚果云，协议为 WebDAV，不自己写服务端。</span><span class="ln same">## 同步规则</span><span class="ln same">- [x] 只传输有变化的文件</span><span class="ln del">- [x] 冲突时两份都保留，由我手动合并</span><span class="ln same">- [ ] 网络中断后，下次同步自动续传</span><span class="ln del">&gt; 索引、历史版本、回收站只留在本机，不参与同步。</span><span class="ln same">## 核心判断</span><span class="ln same">用上次同步时的状态作为基准，和本地、远端做三方比较：</span><span class="ln same">```rust …（代码块 11 行）```</span><span class="ln same">远端文件用 `ETag` 判断是否变化，本地用内容哈希。</span><span class="ln same">相关笔记：[[编辑器选型]]、[[性能指标]]</span></pre></div>
+          <div class="tidy-col"><h4>整理后</h4><pre><span class="ln same">## 目标</span><span class="ln add">- 多台电脑之间保持笔记一致，**绝不丢数据**</span><span class="ln add">- 服务器用坚果云，协议为 WebDAV，不自己写服务端</span><span class="ln same">## 同步规则</span><span class="ln add">### 传输</span><span class="ln same">- [x] 只传输有变化的文件</span><span class="ln same">- [ ] 网络中断后，下次同步自动续传</span><span class="ln add">### 冲突</span><span class="ln add">- [x] 冲突时两份都保留，由我手动合并</span><span class="ln add">### 同步范围</span><span class="ln add">&gt; 索引、历史版本、回收站只留在本机，不参与同步。</span><span class="ln same">## 核心判断</span><span class="ln same">用上次同步时的状态作为基准，和本地、远端做三方比较：</span><span class="ln same">```rust …（代码块 11 行）```</span><span class="ln same">远端文件用 `ETag` 判断是否变化，本地用内容哈希。</span><span class="ln same keep-ok">相关笔记：[[编辑器选型]]、[[性能指标]]</span><span class="ln miss">相关笔记：[[编辑器选型]]</span></pre></div>
+        </div>
+        <div class="check ok when-ok"><svg class="ico ico-sm"><use href="#i-check"/></svg>核对通过：Front Matter、2 个双向链接、1 个代码块与原文一致</div>
+        <div class="check bad when-warn"><svg class="ico ico-sm"><use href="#i-alert"/></svg>核对未通过：双向链接由 2 个变成 1 个，缺少 [[性能指标]]。不能替换，可以重新生成或放弃。</div>
+      </div>
+      <div class="dlg-actions">
+        <span class="hint">替换前会存一份历史快照，替换后可用 Ctrl+Z 撤销</span><span class="flex"></span>
+        <button class="fb-txt">放弃</button><button class="fb-txt">重新生成</button>
+        <button class="btn-primary when-ok">替换</button><button class="btn-primary when-warn" disabled>替换</button>
+      </div>
+    </div>
+
+    <!-- 尚未配置 AI -->
+    <div class="pop dlg small-dlg" data-dlg="ainocfg" role="dialog" aria-label="尚未配置 AI">
+      <div class="keys-head"><h3>尚未配置 AI</h3><button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+      <div class="dlg-body"><p>在设置里填写接口地址、API Key 和模型名后，就可以使用 AI 功能。</p></div>
+      <div class="dlg-actions"><span class="flex"></span><button class="fb-txt">取消</button><button class="btn-primary">打开设置</button></div>
+    </div>
+
+    <!-- 设置页：布局同已实现的设置页，只画出本次新增的内容 -->
+    <div class="pop settings" data-dlg="setai seteditor setlook" role="dialog" aria-label="设置">
+      <div class="keys-head"><h3>设置</h3><button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+      <div class="settings-body">
+      <nav class="settings-nav">
+        <button class="settings-tab">通用</button>
+        <button class="settings-tab" data-set="setlook">外观</button>
+        <button class="settings-tab" data-set="seteditor">编辑器</button>
+        <button class="settings-tab">同步</button>
+        <button class="settings-tab">历史与回收站</button>
+        <button class="settings-tab">快捷键</button>
+        <button class="settings-tab" data-set="setai">AI<span class="new">新增</span></button>
+      </nav>
+      <div class="set-main">
+
+        <div class="set-panel" data-panel="setai">
+          <p class="git-hint">只在你点击 AI 功能时才发送内容，后台不会自动发送任何笔记。支持所有 OpenAI 兼容接口。</p>
+          <div class="git-sec">服务商</div>
+          <select aria-label="服务商预设">
+            <option>DeepSeek</option><option selected>通义千问</option><option>Kimi</option><option>智谱</option><option>硅基流动</option><option>OpenRouter</option><option>Ollama（本机）</option><option>LM Studio（本机）</option><option>自定义</option>
+          </select>
+          <p class="git-hint">预设只负责填好接口地址，可以再修改。</p>
+          <label for="ai-url">接口地址</label>
+          <input id="ai-url" type="text" value="https://dashscope.aliyuncs.com/compatible-mode/v1" spellcheck="false">
+          <label>API Key</label>
+          <div class="key-row"><svg class="ico ico-sm"><use href="#i-key"/></svg><span class="flex">已保存到 Windows 凭据管理器</span><button class="scm-link">修改</button><button class="scm-link">清除</button></div>
+          <label>模型</label>
+          <div class="model-table">
+            <div class="mt-row mt-head"><span>模型名</span><span>上下文（tokens）</span><span>来源</span><span></span></div>
+            <div class="mt-row"><input type="text" value="qwen-plus" spellcheck="false"><input type="text" placeholder="1,000,000"><span class="mt-src">内置<em class="mt-def">默认</em></span><button class="btn" title="移除"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+            <div class="mt-row"><input type="text" value="qwen-max" spellcheck="false"><input type="text" placeholder="32,768"><span class="mt-src">内置</span><button class="btn" title="移除"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+            <div class="mt-row"><input type="text" value="qwen-vl-max" spellcheck="false"><input type="text" value="131,072"><span class="mt-src">手动填写</span><button class="btn" title="移除"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+            <div class="mt-row"><input type="text" value="my-finetune-v2" spellcheck="false"><input type="text" placeholder="128,000"><span class="mt-src mt-unknown">未知，按 128K</span><button class="btn" title="移除"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+          </div>
+          <div class="mt-actions"><button class="fb-txt">添加模型</button><button class="fb-txt" title="从服务商的模型列表接口读取上下文长度（部分服务商支持）">从服务商读取</button></div>
+          <p class="git-hint">第一个是默认模型，AI 指令、总结、整理结构、提交说明都用它；AI 对话里可以临时切换。上下文长度留空时依次使用服务商返回的值、内置表，都没有时按 128K；手动填写的值优先。发送图片需要支持识图的模型。</p>
+          <div class="test-row"><button class="fb-txt">测试连接</button><span class="test-ok"><svg class="ico ico-sm"><use href="#i-check"/></svg>连接成功，模型在 0.8 秒内开始回复</span></div>
+        </div>
+
+        <div class="set-panel" data-panel="seteditor">
+          <div class="git-sec">一键整理（Ctrl+Shift+L）</div>
+          <p class="git-hint">有选中文字时只整理选中部分。代码、链接地址和 Front Matter 不会改动，整理后可用 Ctrl+Z 撤销。</p>
+          <label class="git-check"><input type="checkbox" checked>中文与英文、数字之间加空格</label>
+          <label class="git-check"><input type="checkbox" checked>中文句子里的半角标点改为全角<span class="hint">, → ，</span></label>
+          <label class="git-check"><input type="checkbox" checked>全角英文和数字改为半角<span class="hint">ＡＢＣ１２３ → ABC123</span></label>
+          <label class="git-check"><input type="checkbox" checked>合并连续的空行</label>
+          <label class="git-check"><input type="checkbox" checked>去掉行尾空格</label>
+          <label class="git-check"><input type="checkbox">修正标题跳级<span class="hint">H1 下面直接是 H3 时改为 H2，会改变结构</span></label>
+        </div>
+
+        <div class="set-panel" data-panel="setlook">
+          <div class="git-sec">主题</div>
+          <label class="git-check"><input type="radio" name="p-theme" value="light"><span class="sw sw-light"></span>浅色</label>
+          <label class="git-check"><input type="radio" name="p-theme" value="paper"><span class="sw sw-paper"></span>纸张</label>
+          <label class="git-check"><input type="radio" name="p-theme" value="green"><span class="sw sw-green"></span>护眼</label>
+          <div class="theme-sep"></div>
+          <label class="git-check"><input type="radio" name="p-theme" value="night"><span class="sw sw-night"></span>夜读</label>
+          <label class="git-check"><input type="radio" name="p-theme" value="black"><span class="sw sw-black"></span>纯黑</label>
+          <p class="git-hint">标题栏的月亮 / 太阳按钮在上次使用的浅色主题和深色主题之间切换。</p>
+        </div>
+
+      </div>
+      </div>
+    </div>
+
+    <!-- 删除会话 -->
+    <div class="pop dlg small-dlg" data-dlg="chatdel" role="dialog" aria-label="删除会话">
+      <div class="keys-head"><h3>删除这个对话？</h3><button class="btn" title="关闭 (Esc)"><svg class="ico ico-sm"><use href="#i-close"/></svg></button></div>
+      <div class="dlg-body"><p>“WebDAV 冲突处理怎么写”的全部消息和附件会从这台电脑上删除，无法恢复。已经插入或保存到笔记里的内容不受影响。</p></div>
+      <div class="dlg-actions"><span class="flex"></span><button class="fb-txt">取消</button><button class="btn-primary btn-danger">删除</button></div>
+    </div>
+  </div>
+
+  <!-- 状态栏 -->
+  <footer class="statusbar">
+    <span class="sb">字数 1,286</span>
+    <span class="sb">行 24，列 38</span>
+    <span class="sb-flex"></span>
+    <span class="sb sb-tidy">已整理 17 处：中英文空格 12 处、标点 5 处 · Ctrl+Z 撤销</span>
+    <span class="sb"><svg class="ico ico-sm ok"><use href="#i-check"/></svg>已保存 15:02</span>
+  </footer>
+</div>
+
+<script>
+const descs = {
+  light: '定稿风格 A：冷灰 + 靛青，信息密度高；标题左侧显示级别，代码块带行号',
+  paper: '纸张：米黄底 + 赭红强调，偏暖，适合长时间阅读；布局与浅色完全相同',
+  green: '护眼：浅豆沙绿底 + 墨绿强调；布局与浅色完全相同',
+  night: '夜读：布局与浅色完全相同，只替换为深蓝灰 + 琥珀配色；点标题栏右侧月亮/太阳图标在上次的浅色与深色主题之间切换',
+  black: '纯黑：接近纯黑的底色，强调色沿用夜读的琥珀色，对比度更高'
+};
+const themeNames = { light: '浅色', paper: '纸张', green: '护眼', night: '夜读', black: '纯黑' };
+const darkThemes = ['night', 'black'];
+const sideDescs = {
+  files: '',
+  scm: '　｜　版本控制：分支与领先/落后、拉取/推送、改动列表、提交说明、提交记录；有未提交改动时同步图标带圆点，点击一键同步',
+  scminit: '　｜　还不是仓库：点“初始化仓库”后才启用，不自动 git init。未配置时点标题栏同步图标打开 Git 设置',
+  scmnogit: '　｜　未检测到 Git：只在版本控制视图提示安装，其他功能不受影响',
+  scmbusy: '　｜　分离 HEAD、合并中或变基中：同一条横幅，暂停提交、拉取和推送',
+  chat: '　｜　AI 对话：点左栏底部进入，左栏变为会话列表，右侧打开“AI 对话”标签页；回复可复制、插入到笔记、保存为新笔记，最后一条可重新生成',
+  chatgen: '　｜　生成中：回复逐字显示，发送按钮变为停止',
+  chaterr: '　｜　请求失败：显示服务商返回的原因；发了图片时提示可能是模型不支持识图，可切换模型后重新生成',
+  chatlong: '　｜　超出上下文：按当前模型的上下文长度（减去给回复预留的部分）只发送最近的消息，更早的消息上方显示分隔线；进度条满格变色。每个会话的上下文互不共享',
+  chatempty: '　｜　新对话：空白页，输入第一条消息后用它自动命名会话'
+};
+const ovDescs = {
+  gitset: '　｜　Git 设置（独立弹窗，M6 并入设置页）：远程地址、自动提交、本仓库用户名和邮箱',
+  whoami: '　｜　首次提交缺少用户名或邮箱时出现，只写入 git config --local',
+  tidied: '　｜　一键整理（Ctrl+Shift+L）：按规则整理，不联网；状态栏提示改了多少处，Ctrl+Z 一次撤销',
+  aimenu: '　｜　工具栏 AI 下拉：总结当前笔记、AI 整理结构；两者也是命令，可在命令面板执行、可设快捷键',
+  aiprompt: '　｜　斜杠菜单选“AI 指令”后，在当前位置输入指令；默认附带当前笔记，取消勾选则只发送指令',
+  aigen: '　｜　回答逐字流进待确认区域，可随时停止；停止或取消不会写入笔记',
+  aidone: '　｜　生成完成：接受（算一步操作，可撤销）、放弃（不留痕迹）、重新生成',
+  aisummary: '　｜　总结只在弹窗里显示，可复制或插入到笔记开头（插成引用块）',
+  aitidy: '　｜　AI 整理结构：左右对比，确认后才替换；程序核对 Front Matter、双向链接、图片与附件、代码块是否一致',
+  aitidywarn: '　｜　核对未通过：标红说明缺了什么，“替换”不可用，只能重新生成或放弃',
+  ainocfg: '　｜　未配置 AI 时点任何 AI 功能都先出现这个提示',
+  setai: '　｜　“AI”分类：模型列表带上下文长度（手填 > 服务商返回 > 内置表 > 128K），第一个为默认。API Key 存系统凭据库',
+  seteditor: '　｜　“编辑器”分类里原有的字体、字号等设置不变，在下方新增“一键整理”一节（此处只画新增部分）',
+  chatmodel: '　｜　切换模型：只影响当前对话，列表来自 设置 → AI 的可选模型',
+  chatmention: '　｜　输入 @ 按笔记名模糊搜索，回车把笔记作为附件引用，发送时附上笔记正文',
+  chatmenu: '　｜　会话右侧的“更多”：重命名、删除（删除前确认）',
+  chatdel: '　｜　删除会话只删这台电脑上的记录，已插入或保存到笔记的内容不受影响',
+  setlook: '　｜　“外观”分类：五套主题按浅色 / 深色分组，色块显示该主题的标题栏底色、正文底色和强调色；此处只画主题一节'
+};
+const setTitles = { setai: 'AI', seteditor: '编辑器', setlook: '外观' };
+const noteOverlays = ['float', 'slash', 'find', 'link', 'aiprompt', 'aigen', 'aidone', 'tidied', 'aisummary', 'aitidy', 'aitidywarn', 'aimenu', 'tbmenu'];
+const chatOverlays = ['chatmodel', 'chatmention', 'chatmenu', 'chatdel'];
+const buttons = document.querySelectorAll('.proto-switch button[data-theme]');
+const sideButtons = document.querySelectorAll('.proto-switch button[data-side]');
+const toggle = document.getElementById('night-toggle');
+const viewButtons = document.querySelectorAll('.views .btn');
+let theme = 'light', side = 'files', ov = 'none';
+let lastLight = 'light', lastDark = 'night';
+const ovSelect = document.getElementById('ov-select');
+const scmSelect = document.getElementById('scm-select');
+const chatSelect = document.getElementById('chat-select');
+function render() {
+  if (side.startsWith('chat') && noteOverlays.includes(ov)) side = 'files';
+  if (chatOverlays.includes(ov) && !side.startsWith('chat')) side = 'chat';
+  document.body.dataset.ov = ov;
+  ovSelect.value = ov;
+  const dark = darkThemes.includes(theme);
+  if (dark) lastDark = theme; else lastLight = theme;
+  const scmOn = side.startsWith('scm');
+  const chatOn = side.startsWith('chat');
+  document.body.className = 'theme-a' + (theme === 'light' ? '' : ' ' + theme);
+  buttons.forEach(b => b.setAttribute('aria-selected', String(b.dataset.theme === theme)));
+  document.querySelectorAll('input[name="p-theme"]').forEach(r => { r.checked = r.value === theme; });
+  sideButtons.forEach(b => b.setAttribute('aria-selected', String(b.dataset.side === 'files' ? side === 'files' : b.dataset.side === 'scm' ? scmOn : chatOn)));
+  /* AI 对话 */
+  document.getElementById('side-chat').hidden = !chatOn;
+  document.getElementById('foot-ai').classList.toggle('is-active', chatOn);
+  if (chatOn) chatSelect.value = side;
+  const empty = side === 'chatempty';
+  const chat = document.getElementById('chat-view');
+  chat.hidden = !chatOn;
+  chat.className = 'chat' + (side === 'chatgen' ? ' is-gen' : '') + (side === 'chaterr' ? ' is-err' : '') + (side === 'chatlong' ? ' is-long' : '');
+  document.querySelector('.main .toolbar').hidden = chatOn;
+  document.querySelector('.main .editor').hidden = chatOn;
+  document.getElementById('chat-thread').hidden = empty;
+  document.getElementById('chat-empty').hidden = !empty;
+  document.getElementById('chat-title').textContent = empty ? '新对话' : 'WebDAV 冲突处理怎么写';
+  document.getElementById('chat-row-active').classList.toggle('is-active', !empty);
+  document.getElementById('comp-atts').hidden = empty;
+  document.getElementById('composer-text').value = empty ? '' : (ov === 'chatmention' ? '顺便对比一下 @性' : '对比一下日志和截图，看看是不是同一个问题');
+  document.getElementById('send-btn').classList.toggle('disabled', empty);
+  const model = { chaterr: 'qwen-plus', chatempty: 'qwen-plus', chatlong: 'qwen-max' }[side] || 'qwen-vl-max';
+  document.getElementById('model-sel').firstChild.textContent = model;
+  document.getElementById('msg-model').textContent = model;
+  document.querySelectorAll('.model-menu .pal-row').forEach(r => {
+    const on = r.textContent.trim().replace('✓', '') === model;
+    r.classList.toggle('on', on);
+    r.querySelector('.mk').textContent = on ? '✓' : '';
+  });
+  const meter = document.getElementById('ctx-meter');
+  const [fill, text] = empty ? [0, '0 / 1M tokens'] : side === 'chatlong' ? [100, '约 29.5K / 32K tokens · 更早的消息不再发送'] : side === 'chaterr' ? [1, '约 12.3K / 1M tokens'] : [10, '约 12.3K / 131K tokens'];
+  meter.classList.toggle('full', side === 'chatlong');
+  document.getElementById('ctx-fill').style.width = fill + '%';
+  document.getElementById('ctx-text').textContent = text;
+  document.getElementById('active-tab-name').textContent = chatOn ? 'AI 对话' : 'WebDAV 同步设计';
+  document.getElementById('doc-note').hidden = false;
+  document.getElementById('note-backlinks').hidden = false;
+  /* 对话框 */
+  const mask = document.querySelector('.mask');
+  let modal = ['keys', 'gitset', 'whoami'].includes(ov);
+  mask.querySelectorAll('.pop[data-dlg]').forEach(d => {
+    const on = d.dataset.dlg.split(' ').includes(ov);
+    d.classList.toggle('is-on', on);
+    if (on) modal = true;
+  });
+  mask.classList.toggle('is-on', modal);
+  document.querySelector('.tidy').classList.toggle('is-warn', ov === 'aitidywarn');
+  if (setTitles[ov]) {
+    document.querySelectorAll('.settings-tab').forEach(r => r.classList.toggle('on', r.dataset.set === ov));
+    document.querySelectorAll('.set-panel').forEach(p => p.classList.toggle('is-on', p.dataset.panel === ov));
+  }
+  toggle.title = '切换到' + themeNames[dark ? lastLight : lastDark];
+  toggle.querySelector('use').setAttribute('href', dark ? '#i-sun' : '#i-moon');
+  document.getElementById('side-files').hidden = side !== 'files';
+  const scm = document.getElementById('side-scm');
+  scm.hidden = side !== 'scm' && side !== 'scmbusy';
+  scm.classList.toggle('is-locked', side === 'scmbusy');
+  document.getElementById('scm-banner').hidden = side !== 'scmbusy';
+  document.getElementById('side-scminit').hidden = side !== 'scminit';
+  document.getElementById('side-scmnogit').hidden = side !== 'scmnogit';
+  document.querySelector('#view-scm .view-badge').hidden = side === 'scminit' || side === 'scmnogit';
+  document.querySelector('.sync .dot').hidden = side === 'scminit' || side === 'scmnogit';
+  if (scmOn) scmSelect.value = side;
+  viewButtons.forEach((b, i) => b.classList.toggle('is-active', scmOn ? b.id === 'view-scm' : chatOn ? false : i === 0));
+  document.getElementById('proto-desc').textContent = descs[theme] + (sideDescs[side] || '') + (ovDescs[ov] || '');
+  history.replaceState(null, '', '#' + theme + '-' + side + '-' + ov);
+}
+ovSelect.addEventListener('change', () => { ov = ovSelect.value; render(); });
+scmSelect.addEventListener('change', () => { side = scmSelect.value; render(); });
+chatSelect.addEventListener('change', () => { side = chatSelect.value; render(); });
+buttons.forEach(b => b.addEventListener('click', () => { theme = b.dataset.theme; render(); }));
+sideButtons.forEach(b => b.addEventListener('click', () => {
+  side = b.dataset.side === 'files' ? 'files' : b.dataset.side === 'scm' ? scmSelect.value : chatSelect.value;
+  render();
+}));
+document.getElementById('foot-ai').addEventListener('click', () => { side = chatSelect.value; render(); });
+toggle.addEventListener('click', () => { theme = darkThemes.includes(theme) ? lastLight : lastDark; render(); });
+document.querySelectorAll('input[name="p-theme"]').forEach(r => r.addEventListener('change', () => { theme = r.value; render(); }));
+viewButtons[0].addEventListener('click', () => { side = 'files'; render(); });
+document.getElementById('view-scm').addEventListener('click', () => { side = scmSelect.value; render(); });
+document.getElementById('sync-btn').addEventListener('click', () => {
+  if (side === 'scminit' || side === 'scmnogit') ov = 'gitset';
+  else side = 'scm';
+  render();
+});
+const [h1, h2, h3] = location.hash.slice(1).split('-');
+if (descs[h1]) theme = h1;
+if (sideDescs[h2] !== undefined) side = h2;
+if (h3 && [...ovSelect.options].some(o => o.value === h3)) ov = h3;
+render();
+</script>
+</body>
+</html>

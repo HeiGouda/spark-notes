@@ -1,0 +1,14 @@
+[Unit]
+Description=Notes cabinet
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+Environment=TZ=Asia/Shanghai
+ExecStart=/usr/bin/python3 /opt/notes-cabinet/server.py
+Restart=on-failure
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+	# spark-webdav
+	@files path /files /files/*
+	handle @files {
+		reverse_proxy 127.0.0.1:8083
+	}
+	@webdav path /dav /dav/*
+	handle @webdav {
+		@enter {
+			method GET HEAD
+			path /dav /dav/
+		}
+		redir @enter /files/ 302
+		reverse_proxy 127.0.0.1:8082
+	}
+	# /spark-webdav

@@ -1,0 +1,75 @@
+/* 与 prototype/index.html 的 .theme-a 及 .paper / .green / .night / .black 保持一致 */
+:root {
+  --chrome: #F3F4F7; --sidebar: #F3F4F7; --paper: #FFFFFF;
+  --ink: #1E2330; --ink-2: #454C5C; --muted: #7A8191;
+  --line: #E1E4EA; --line-strong: #CDD2DB; --hover: rgba(30, 35, 48, .06);
+  --accent: #3446A8; --accent-soft: #E9ECF9; --hl: #FFF0A3;
+  --code-bg: #F6F7FA; --code-line: #E6E9EF;
+  --tk-k: #3446A8; --tk-s: #2F7D4F; --tk-f: #8E47AE; --tk-c: #8D94A3; --tk-t: #B35C1E;
+  --ok: #3E9B6A; --danger: #C42B1C; --danger-strong: #C42B1C;
+  /* 正文元素：每类元素在各主题里固定一个色系，只调深浅 */
+  --md-code: #C2255C; --md-quote: #2B7BD6; --md-task: #2F9E5B; --md-link: #0E8A96; --md-tag: #7C4DCC;
+  --md-mix: 10%; --md-mix-block: 6%; --md-task-on: #FFFFFF;
+  --f-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --f-body: "Segoe UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --f-title: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --f-code: "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", Menlo, monospace;
+  --r-btn: 4px; --r-row: 4px; --r-code: 6px;
+  --tb-h: 36px; --doc-w: 780px; --sidebar-w: 252px;
+  color-scheme: light;
+}
+
+/* 其余主题只替换配色，布局、字体、尺寸沿用浅色 */
+/* 纸张：米黄底 + 赭红强调 */
+:root.paper {
+  --chrome: #ECE4D4; --sidebar: #ECE4D4; --paper: #F6F0E4;
+  --ink: #2E2A24; --ink-2: #554D42; --muted: #8A8072;
+  --line: #DFD5C3; --line-strong: #CCBEA7; --hover: rgba(70, 50, 20, .07);
+  --accent: #A0452B; --accent-soft: #EFDCCB; --hl: #F3DD8C;
+  --code-bg: #EFE8DA; --code-line: #DFD5C3;
+  --tk-k: #A0452B; --tk-s: #5E7A2E; --tk-f: #8A4F7D; --tk-c: #9A8F7E; --tk-t: #B0661A;
+  --ok: #4E8A4A; --danger: #B8321F; --danger-strong: #B8321F;
+  --md-code: #B8305E; --md-quote: #3A72B8; --md-task: #3F8F4E; --md-link: #1C7F86; --md-tag: #7A4FA8;
+  --md-mix-block: 9%;
+}
+
+/* 护眼：豆沙绿底 + 墨绿强调 */
+:root.green {
+  --chrome: #DAE5D5; --sidebar: #DAE5D5; --paper: #E6EFE2;
+  --ink: #1F2B22; --ink-2: #3F4E43; --muted: #6E7D71;
+  --line: #CCDAC7; --line-strong: #B7C8B1; --hover: rgba(30, 60, 35, .07);
+  --accent: #2E6B4A; --accent-soft: #D0E3D0; --hl: #EDE59A;
+  --code-bg: #DCE8D7; --code-line: #C9D8C3;
+  --tk-k: #2E6B4A; --tk-s: #8A5A1E; --tk-f: #3F5FA0; --tk-c: #7E8E80; --tk-t: #A5552A;
+  --ok: #2F8452; --danger: #B3361F; --danger-strong: #B3361F;
+  --md-code: #B02A5B; --md-quote: #2F6CB5; --md-task: #2D8A4E; --md-link: #127A86; --md-tag: #7449B0;
+  --md-mix-block: 9%;
+}
+
+/* 夜读：深蓝灰 + 琥珀强调 */
+:root.night {
+  --chrome: #15181E; --sidebar: #15181E; --paper: #1B1F27;
+  --ink: #D9DCE3; --ink-2: #B3B8C3; --muted: #767E8C;
+  --line: #262B35; --line-strong: #353B47; --hover: rgba(255, 255, 255, .05);
+  --accent: #D9A55B; --accent-soft: rgba(217, 165, 91, .13); --hl: rgba(217, 165, 91, .30);
+  --code-bg: #14171D; --code-line: #232833;
+  --tk-k: #D9A55B; --tk-s: #9CC28F; --tk-f: #8FB4E6; --tk-c: #5F6775; --tk-t: #D98C7A;
+  --ok: #6FBF8B; --danger: #E07A6B; --danger-strong: #C9503F;
+  --md-code: #E77FA3; --md-quote: #6FA8E8; --md-task: #6FBF8B; --md-link: #5BC0C9; --md-tag: #B394E8;
+  --md-mix: 16%; --md-mix-block: 10%; --md-task-on: var(--paper);
+  color-scheme: dark;
+}
+
+/* 纯黑：更深的夜读，强调色不变 */
+:root.black {
+  --chrome: #0D0D0F; --sidebar: #0D0D0F; --paper: #000000;
+  --ink: #E4E4E7; --ink-2: #B8B8BE; --muted: #7A7A82;
+  --line: #1E1E22; --line-strong: #2C2C32; --hover: rgba(255, 255, 255, .06);
+  --accent: #D9A55B; --accent-soft: rgba(217, 165, 91, .14); --hl: rgba(217, 165, 91, .32);
+  --code-bg: #0E0E10; --code-line: #1E1E22;
+  --tk-k: #D9A55B; --tk-s: #9CC28F; --tk-f: #8FB4E6; --tk-c: #62626B; --tk-t: #D98C7A;
+  --ok: #6FBF8B; --danger: #E07A6B; --danger-strong: #C9503F;
+  --md-code: #F08AAE; --md-quote: #79B2F0; --md-task: #74C893; --md-link: #62CAD2; --md-tag: #BB9EF0;
+  --md-mix: 16%; --md-mix-block: 10%; --md-task-on: var(--paper);
+  color-scheme: dark;
+}

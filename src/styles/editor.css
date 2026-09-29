@@ -1,0 +1,154 @@
+/* 正文与编辑器样式，对应 prototype/index.html 中 .doc / .codeblock 等规则 */
+.editor { flex: 1; overflow: auto; position: relative }
+.doc { position: relative; max-width: var(--doc-w); margin: 0 auto; padding: 44px 56px 20px; font-family: var(--doc-font, var(--f-body)); font-size: var(--doc-size, 15px); line-height: var(--doc-lh, 1.78); color: var(--ink) }
+.doc-title { font-family: var(--f-title); font-size: 28px; font-weight: 600; line-height: 1.3; margin-bottom: 10px; letter-spacing: .01em; word-break: break-word; outline: none; border-radius: 3px }
+.doc-title:focus { box-shadow: 0 2px 0 var(--accent-soft) }
+.doc-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 30px; font-size: 12px; color: var(--muted) }
+.chip { padding: 1px 9px; border-radius: 3px; background: color-mix(in srgb, var(--md-tag) var(--md-mix), transparent); color: var(--md-tag); line-height: 20px }
+.doc-meta .date { margin-left: 6px }
+.doc-meta .date:first-child { margin-left: 0 }
+
+.pm { outline: none; min-height: 200px; white-space: pre-wrap; word-wrap: break-word }
+.pm h1, .pm h2, .pm h3, .pm h4, .pm h5, .pm h6 { position: relative; font-weight: 600; line-height: 1.5; margin: 30px 0 8px }
+.pm h1 { font-size: 24px }
+.pm h2 { font-size: 19px }
+.pm h3 { font-size: 17px }
+.pm h4, .pm h5, .pm h6 { font-size: 15px }
+.pm h1::before, .pm h2::before, .pm h3::before, .pm h4::before, .pm h5::before, .pm h6::before { position: absolute; left: -30px; top: 50%; transform: translateY(-50%); font: 600 10px/1 var(--f-code); color: var(--muted); opacity: .75; pointer-events: none }
+.pm h1::before { content: "H1" }
+.pm h2::before { content: "H2" }
+.pm h3::before { content: "H3" }
+.pm h4::before { content: "H4" }
+.pm h5::before { content: "H5" }
+.pm h6::before { content: "H6" }
+.pm > :first-child { margin-top: 0 }
+.pm p { margin: 0 0 12px }
+
+/* 斜杠菜单“AI 指令”：输入框与待确认区域（需求文档 5.16） */
+.ai-block { margin: 4px 0 16px; font-family: var(--f-ui); white-space: normal; user-select: text }
+.ai-box { padding: 8px; border: 1px solid var(--accent); border-radius: 8px; background: var(--paper); box-shadow: 0 6px 20px rgba(0, 0, 0, .08) }
+.ai-input { display: flex; align-items: center; gap: 8px }
+.ai-input input { flex: 1; min-width: 0; height: 30px; padding: 0 4px; border: 0; background: transparent; color: var(--ink); font: 13.5px var(--f-ui); outline: none }
+.ai-mark { color: var(--accent) }
+.ai-foot { display: flex; align-items: center; gap: 12px; margin-top: 6px; padding: 6px 2px 0 22px; border-top: 1px solid var(--line) }
+.ai-foot .git-check { font-size: 12px; color: var(--ink-2) }
+.ai-block .hint { margin-left: auto; font-size: 11.5px; color: var(--muted) }
+.ai-pend { border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 4%, var(--paper)) }
+.ai-pend-head { display: flex; align-items: center; gap: 6px; padding: 7px 12px 0; font-size: 12px; line-height: 1.4; color: var(--muted) }
+.ai-pend-head .q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.ai-state { margin-left: auto; white-space: nowrap }
+.ai-pend-body { padding: 6px 12px 8px; font-family: var(--doc-font, var(--f-body)); font-size: var(--doc-size, 15px); line-height: var(--doc-lh, 1.78); color: var(--ink); white-space: pre-wrap }
+.ai-pend-foot { display: flex; align-items: center; gap: 6px; padding: 6px 10px 8px; border-top: 1px solid var(--line) }
+.ai-pend-foot .hint { margin-left: 6px }
+.pm strong { font-weight: 650 }
+.pm mark { background: var(--hl); color: inherit; padding: 0 2px; border-radius: 2px }
+.pm a { color: var(--md-link); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--md-link) 35%, transparent) }
+.pm :not(pre) > code { font-family: var(--f-code); font-size: .86em; color: var(--md-code); background: color-mix(in srgb, var(--md-code) var(--md-mix), transparent); padding: 1px 5px; border-radius: 4px }
+.pm blockquote { margin: 0 0 14px; padding: 6px 12px 6px 14px; border-left: 3px solid var(--md-quote); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--md-quote) var(--md-mix-block), transparent); color: var(--ink-2) }
+.pm blockquote > p:last-child { margin-bottom: 0 }
+.pm hr { border: 0; border-top: 1px solid var(--line-strong); margin: 20px 0 }
+.pm img { max-width: 100%; vertical-align: bottom }
+.pm .img-frame { position: relative; display: inline-block; max-width: 100%; line-height: 0; vertical-align: bottom }
+.pm .img-frame.is-selected { outline: 2px solid var(--accent); outline-offset: 2px }
+.pm .img-tools { display: none; position: absolute; left: 4px; top: 4px; z-index: 2; gap: 4px }
+.pm .img-frame.is-selected .img-tools { display: flex }
+.pm .img-zoom { height: 22px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink-2); font: 12px var(--f-ui); cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, .12) }
+.pm .img-zoom:hover { border-color: var(--accent); color: var(--accent) }
+.pm .img-resize { display: none; position: absolute; right: 4px; bottom: 4px; width: 12px; height: 12px; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 2px; background: var(--paper); cursor: nwse-resize }
+.pm .img-frame.is-selected .img-resize { display: block }
+.pm img.is-broken { display: inline-block; min-width: 120px; min-height: 40px; padding: 8px 12px; border: 1px dashed var(--line-strong); border-radius: 4px; color: var(--muted); font-size: 12px }
+.pm ul, .pm ol { margin: 0 0 14px; padding-left: 24px }
+.pm ul { list-style: disc }
+.pm ol { list-style: decimal }
+.pm li > p { margin: 0 }
+.pm li { padding: 1px 0 }
+.pm li::marker { color: var(--accent) }
+
+/* 任务列表：与原型 .tasks / .cb 一致 */
+.pm li[data-item-type="task"] { list-style: none; position: relative; padding-left: 26px; margin-left: -24px }
+.pm li[data-item-type="task"]::before { content: ""; position: absolute; left: 0; top: 7px; width: 16px; height: 16px; box-sizing: border-box; border: 1.5px solid color-mix(in srgb, var(--md-task) 55%, transparent); border-radius: 4px; cursor: pointer }
+.pm li[data-item-type="task"][data-checked="true"]::before { background: var(--md-task); border-color: var(--md-task) }
+.pm li[data-item-type="task"][data-checked="true"]::after { content: ""; position: absolute; left: 5.5px; top: 9.5px; width: 4px; height: 8px; border: solid var(--md-task-on); border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); pointer-events: none }
+.pm li[data-item-type="task"][data-checked="true"] > p { color: var(--muted); text-decoration: line-through }
+
+/* 表格 */
+.pm table { border-collapse: collapse; margin: 0 0 16px; font-size: 14px }
+.pm th, .pm td { border: 1px solid var(--line-strong); padding: 6px 10px; min-width: 60px; vertical-align: top }
+.pm th { background: var(--code-bg); font-weight: 600 }
+.pm td > p, .pm th > p { margin: 0 }
+.pm .selectedCell { background: var(--accent-soft) }
+
+/* 代码块 */
+.codeblock { position: relative; margin: 6px 0 20px; border: 1px solid var(--code-line); border-radius: var(--r-code); background: var(--code-bg) }
+.cb-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 6px 0 10px; font: 12px/1 var(--f-ui); color: var(--muted); user-select: none }
+.lang { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; font: 12px var(--f-code) }
+.lang:hover { background: var(--hover) }
+.copy { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer }
+.copy:hover { background: var(--hover); color: var(--ink) }
+.cb-body { display: flex; overflow: auto; padding: 6px 0 14px }
+.cb-gutter { flex: none; width: 40px; padding-right: 14px; text-align: right; font: 13px/1.7 var(--f-code); color: var(--muted); opacity: .55; user-select: none; white-space: pre }
+.hide-gutters .cb-gutter { display: none }
+.cb-body pre { flex: 1; min-width: 0; margin: 0; font: 13px/1.7 var(--f-code); color: var(--ink); tab-size: 4; white-space: pre; padding-right: 16px }
+.cb-body pre code { font: inherit; white-space: pre; display: block; min-height: 1.7em }
+.lang-menu { top: 30px; left: 6px; width: 200px; max-height: 260px; display: flex; flex-direction: column; padding: 4px }
+.lang-menu input { flex: none; height: 26px; margin-bottom: 4px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink); font: 12px var(--f-code); outline: none }
+.lang-menu input:focus { border-color: var(--accent) }
+.lang-list { overflow: auto }
+.lang-list .menu-item { height: 24px; font: 12px var(--f-code) }
+.lang-list .menu-item.is-current { color: var(--accent) }
+
+/* Prism 语法高亮，颜色随主题令牌切换 */
+.token.keyword, .token.boolean, .token.important, .token.atrule, .token.tag { color: var(--tk-k) }
+.token.string, .token.char, .token.attr-value, .token.regex, .token.inserted, .token.selector, .token.url { color: var(--tk-s) }
+.token.function, .token.attr-name, .token.property { color: var(--tk-f) }
+.token.comment, .token.prolog, .token.doctype, .token.cdata { color: var(--tk-c); font-style: italic }
+.token.class-name, .token.builtin, .token.number, .token.constant, .token.symbol, .token.deleted, .token.namespace { color: var(--tk-t) }
+.token.bold { font-weight: 600 }
+.token.italic { font-style: italic }
+
+/* 查找命中 */
+.pm .find-hit { background: var(--hl); border-radius: 2px }
+.pm .find-cur { outline: 2px solid var(--accent); outline-offset: 0 }
+
+/* 脚注 */
+.pm sup[data-type="footnote_reference"] { color: var(--accent); font-size: .75em; padding: 0 1px; cursor: default }
+.pm sup[data-type="footnote_reference"]::before { content: "[" }
+.pm sup[data-type="footnote_reference"]::after { content: "]" }
+.pm dl[data-type="footnote_definition"] { display: flex; gap: 8px; margin: 0 0 6px; font-size: 13.5px; color: var(--ink-2) }
+.pm dl[data-type="footnote_definition"] dt { flex: none; color: var(--accent); font-size: 12px; min-width: 18px }
+.pm dl[data-type="footnote_definition"] dt::after { content: "." }
+.pm dl[data-type="footnote_definition"] dd { flex: 1; min-width: 0; margin: 0 }
+.pm dl[data-type="footnote_definition"] dd > p { margin: 0 }
+.pm dl[data-type="footnote_definition"]:first-of-type { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 20px }
+
+/* 双向链接与行内标签 */
+.pm .wikilink { color: var(--accent); border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); cursor: pointer }
+.pm .wikilink.ProseMirror-selectednode { outline: none; background: var(--accent-soft); border-radius: 2px }
+.pm .tag-inline { color: var(--md-tag); background: color-mix(in srgb, var(--md-tag) var(--md-mix), transparent); padding: 0 4px; border-radius: 3px }
+.chip { cursor: pointer; border: 0; font: inherit }
+span.chip { display: inline-flex; align-items: center; gap: 2px; padding-right: 4px; cursor: default }
+.chip-name, .chip-x { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer }
+.chip-x { width: 14px; border-radius: 2px; line-height: 14px; opacity: .55 }
+.chip-x:hover { opacity: 1; background: color-mix(in srgb, var(--md-tag) 18%, transparent) }
+.tag-add { padding: 1px 8px; border: 1px dashed var(--line-strong); border-radius: 3px; background: none; color: var(--muted); font: inherit; line-height: 18px; cursor: pointer }
+.tag-add:hover { border-color: var(--accent); color: var(--accent) }
+.tag-input { width: 160px; height: 22px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 3px; background: var(--paper); color: var(--ink); font: inherit; outline: none }
+.wiki-suggest { position: fixed; z-index: 60; width: 280px; max-height: 320px; overflow: auto }
+.wiki-suggest .menu-item { height: 28px }
+.wiki-suggest .hint { max-width: 120px; overflow: hidden; text-overflow: ellipsis }
+.wiki-suggest-empty { padding: 6px 10px; color: var(--muted); font-size: 12px }
+
+/* 反向链接（设计稿 .backlinks） */
+.backlinks { max-width: var(--doc-w); margin: 0 auto; padding: 8px 56px 56px }
+.bl-inner { border-top: 1px solid var(--line); padding-top: 14px }
+.bl-head { display: flex; align-items: center; gap: 6px; border: 0; background: transparent; font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 8px; cursor: pointer; padding: 0 }
+.bl-count { font-weight: 500; padding: 0 6px; border-radius: 999px; background: var(--hover) }
+.bl-item { display: block; padding: 8px 10px; margin: 0 -10px; border-radius: var(--r-row); color: inherit; text-decoration: none }
+.bl-item:hover { background: var(--hover) }
+.bl-title { font-size: 13px; font-weight: 600; color: var(--ink-2) }
+.bl-snip { font-size: 12.5px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.bl-snip b { font-weight: 500; color: var(--accent) }
+.bl-empty { font-size: 12.5px; color: var(--muted); padding: 4px 0 }
+
+.ProseMirror-gapcursor:after { border-top-color: var(--ink) }
+.pm ::selection { background: color-mix(in srgb, var(--accent) 22%, transparent) }
