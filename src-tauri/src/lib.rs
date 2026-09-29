@@ -6,8 +6,12 @@ mod git;
 mod history;
 mod webdav;
 mod index;
+#[cfg(any(test, target_os = "android"))]
+mod mobile;
 mod notes;
 mod secret;
+#[cfg(target_os = "android")]
+mod secret_android;
 mod vault;
 mod watch;
 
@@ -604,6 +608,8 @@ pub fn run() {
         .manage(IndexState::default())
         .manage(watch::WatchState::default())
         .manage(ai::AiState::default());
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(secret_android::init());
     #[cfg(target_os = "macos")]
     let builder = builder.menu(mac_menu).on_menu_event(|app, event| {
         use tauri::Emitter;
@@ -681,7 +687,25 @@ pub fn run() {
             chat_delete_image,
             chat_save_image,
             chat_import_image,
-            chat_image_data
+            chat_image_data,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_vault_list,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_vault_root,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_vault_add,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_vault_update,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_vault_remove,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_vault_test,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_sync_check,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_sync,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_network_metered
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

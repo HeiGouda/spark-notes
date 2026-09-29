@@ -1,4 +1,4 @@
-//! 密码、API Key 等凭据：Windows 存凭据管理器，macOS 存钥匙串
+//! 密码、API Key 等凭据：Windows 存凭据管理器，macOS 存钥匙串，安卓见 `secret_android`
 
 #[cfg(windows)]
 pub fn write_secret(account: &str, secret: &str) -> Result<(), String> {
@@ -83,17 +83,20 @@ pub fn delete_secret(account: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "android")]
+pub use crate::secret_android::{delete_secret, read_secret, write_secret};
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
 pub fn write_secret(_account: &str, _secret: &str) -> Result<(), String> {
     Err("当前系统不能保存凭据".into())
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
 pub fn read_secret(_account: &str) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
 pub fn delete_secret(_account: &str) -> Result<(), String> {
     Ok(())
 }
