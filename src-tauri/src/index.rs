@@ -1,9 +1,9 @@
 //! 搜索索引：`.ttnote/cache/index.db`（SQLite FTS5）。它只是缓存，删掉会自动重建，不参与同步。
 
-#[cfg(test)]
-use crate::notes::resolve_link;
 use crate::diagram_text;
 use crate::doctype::{self, DocKind};
+#[cfg(test)]
+use crate::notes::resolve_link;
 use crate::notes::{link_base, map_wikilinks, parse, parse_query, snippet, strip_md, tokenize, LinkIndex, Segment};
 use crate::vault::{atomic_write, rel_of};
 use rusqlite::{params, Connection};

@@ -1,0 +1,117 @@
+package com.spark.app
+
+import android.app.Activity
+import android.content.Context
+import android.net.ConnectivityManager
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import app.tauri.annotation.Command
+import app.tauri.annotation.InvokeArg
+import app.tauri.annotation.TauriPlugin
+import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSObject
+import app.tauri.plugin.Plugin
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+@InvokeArg
+class SecretAccountArgs {
+  lateinit var account: String
+}
+
+@InvokeArg
+class SecretWriteArgs {
+  lateinit var account: String
+  lateinit var secret: String
+}
+
+/**
+ * 密码用 AndroidKeyStore 里的 AES 密钥加密后存进应用私有的 SharedPreferences。
+ * 密钥不能导出，卸载应用时和密文一起消失。
+ */
+@TauriPlugin
+class SecretPlugin(private val activity: Activity) : Plugin(activity) {
+  private val prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+  private fun key(): SecretKey {
+    val store = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+    (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+    val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+    generator.init(
+      KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+        .build()
+    )
+    return generator.generateKey()
+  }
+
+  @Command
+  fun write(invoke: Invoke) {
+    val args = invoke.parseArgs(SecretWriteArgs::class.java)
+    try {
+      val cipher = Cipher.getInstance(TRANSFORM)
+      cipher.init(Cipher.ENCRYPT_MODE, key())
+      val sealed = cipher.iv + cipher.doFinal(args.secret.toByteArray(Charsets.UTF_8))
+      if (!prefs.edit().putString(args.account, Base64.encodeToString(sealed, Base64.NO_WRAP)).commit()) {
+        invoke.reject("写入存储失败")
+        return
+      }
+      invoke.resolve()
+    } catch (e: Exception) {
+      invoke.reject(e.message ?: e.toString())
+    }
+  }
+
+  @Command
+  fun read(invoke: Invoke) {
+    val args = invoke.parseArgs(SecretAccountArgs::class.java)
+    val result = JSObject()
+    val stored = prefs.getString(args.account, null)
+    if (stored == null) {
+      invoke.resolve(result)
+      return
+    }
+    try {
+      val sealed = Base64.decode(stored, Base64.NO_WRAP)
+      val cipher = Cipher.getInstance(TRANSFORM)
+      cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, sealed, 0, IV_BYTES))
+      result.put("secret", String(cipher.doFinal(sealed, IV_BYTES, sealed.size - IV_BYTES), Charsets.UTF_8))
+      invoke.resolve(result)
+    } catch (e: Exception) {
+      invoke.reject(e.message ?: e.toString())
+    }
+  }
+
+  @Command
+  fun remove(invoke: Invoke) {
+    val args = invoke.parseArgs(SecretAccountArgs::class.java)
+    if (!prefs.edit().remove(args.account).commit()) {
+      invoke.reject("写入存储失败")
+      return
+    }
+    invoke.resolve()
+  }
+
+  /** 当前网络按流量计费（通常是移动数据） */
+  @Command
+  fun isMetered(invoke: Invoke) {
+    val manager = activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val result = JSObject()
+    result.put("metered", manager.isActiveNetworkMetered)
+    invoke.resolve(result)
+  }
+
+  companion object {
+    private const val PREFS = "spark_secrets"
+    private const val KEYSTORE = "AndroidKeyStore"
+    private const val KEY_ALIAS = "spark-secrets"
+    private const val TRANSFORM = "AES/GCM/NoPadding"
+    private const val IV_BYTES = 12
+    private const val TAG_BITS = 128
+  }
+}

@@ -5,8 +5,11 @@ import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-export default defineConfig(() => ({
+export default defineConfig(({ mode }) => ({
   plugins: [vue()],
+
+  // 安卓只读版单独打包，桌面的 dist/ 里没有手机代码
+  build: mode === "mobile" ? { outDir: "dist-mobile", rolldownOptions: { input: "mobile.html" } } : undefined,
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

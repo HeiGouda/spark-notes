@@ -1101,6 +1101,9 @@ mod tests {
         assert!(should_sync("周报.assets/a.png"));
         assert!(should_sync(".ttnote/config/order.json"));
         assert!(should_sync("assets/a.png"));
+        assert!(should_sync("工作/上线流程.flow.mmd"));
+        assert!(should_sync("路线.mind.mmd"));
+        assert!(!should_sync("其他.mmd"));
         assert!(!should_sync(".ttnote/history/a.md"));
         assert!(!should_sync(".ttnote/trash/1/a.md"));
         assert!(!should_sync(".ttnote/cache/index.db"));
