@@ -44,13 +44,13 @@ Tauri 2（Rust）+ Vue 3 + TypeScript + Pinia，编辑器 Milkdown，代码高�
 
 ## 服务器 WebDAV
 
-在已经用 Caddy 提供 HTTPS 的 Ubuntu 上部署同步目录和浏览器里的笔记柜。密码只写进服务器的 `/etc/apache2/webdav.passwd`。
+在已经用 Caddy 提供 HTTPS 的 Ubuntu 上部署，不是 Docker。部署、多库、电脑和手机同步、笔记柜的回收站和账号，见 [docs/webdav.md](docs/webdav.md)。
 
 ```bash
 sudo DOMAIN=example.com WEBDAV_USER=账号 WEBDAV_PASSWORD=密码 ./deploy/webdav/install.sh
 ```
 
-软件里的同步地址填 `https://域名/dav`。浏览器打开同一地址进入笔记柜，可以查看和删除。笔记文件在服务器的 `/var/www/webdav`。
+软件和浏览器都用 `https://域名/dav`。多个库靠远端目录区分，例如 `spark/工作`。密码写在服务器的 `/var/lib/notes-cabinet/webdav.passwd`，不要放进这个仓库。
 
 ## 性能验收
 

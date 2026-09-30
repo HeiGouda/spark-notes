@@ -1,0 +1,121 @@
+"""笔记柜的路径、回收站和账号校验。不启动服务，也不调用 htpasswd。"""
+
+import importlib.util
+import json
+import tempfile
+import unittest
+from datetime import date
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("notes_cabinet", HERE / "notes-cabinet.py")
+cab = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cab)
+
+
+class CabinetTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_libraries_and_loose(self) -> None:
+        (self.root / "spark" / "工作").mkdir(parents=True)
+        (self.root / "spark" / "生活").mkdir()
+        (self.root / "spark" / "说明.txt").write_text("不是库", encoding="utf-8")
+        (self.root / "spark" / ".hidden").mkdir()
+        (self.root / "旧笔记.md").write_text("旧", encoding="utf-8")
+        (self.root / ".secret").write_text("no", encoding="utf-8")
+        self.assertEqual(cab.libraries(self.root), ["工作", "生活"])
+        self.assertEqual([p.name for p in cab.loose_entries(self.root)], ["旧笔记.md"])
+        with self.assertRaises(PermissionError):
+            cab.loose_target(self.root, "spark")
+        with self.assertRaises(PermissionError):
+            cab.loose_target(self.root, "../spark")
+
+    def test_child_rejects_dot_and_parent(self) -> None:
+        lib = self.root / "spark" / "工作"
+        lib.mkdir(parents=True)
+        (lib / ".spark-trash").mkdir()
+        with self.assertRaises(PermissionError):
+            cab.child_in(lib, ".spark-trash")
+        with self.assertRaises(PermissionError):
+            cab.child_in(lib, "../生活")
+
+    def test_trash_move_restore_and_conflict(self) -> None:
+        lib = self.root / "spark" / "工作"
+        (lib / "设计").mkdir(parents=True)
+        note = lib / "设计" / "旧.md"
+        note.write_text("正文", encoding="utf-8")
+        when = cab.datetime(2026, 9, 18, 15, 30, 0)
+        cab.move_to_trash(lib, note, when)
+        self.assertFalse(note.exists())
+        items = cab.trash_items(lib)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].rel, "设计/旧.md")
+        (lib / "设计" / "旧.md").write_text("新的", encoding="utf-8")
+        dest = cab.restore_item(lib, items[0])
+        self.assertEqual(dest.name, "旧 (恢复).md")
+        self.assertEqual(dest.read_text(encoding="utf-8"), "正文")
+        self.assertEqual((lib / "设计" / "旧.md").read_text(encoding="utf-8"), "新的")
+        self.assertEqual(cab.trash_items(lib), [])
+
+    def test_prune_uses_retention_and_keeps_boundary(self) -> None:
+        lib = self.root / "spark" / "工作"
+        cfg = lib / ".ttnote" / "config"
+        cfg.mkdir(parents=True)
+        (cfg / "retention.json").write_text(json.dumps({"trashDays": 2}), encoding="utf-8")
+        self.assertEqual(cab.trash_days(lib), 2)
+        old = lib / ".spark-trash" / "2026-09-01" / "120000"
+        old.mkdir(parents=True)
+        (old / "过期.md").write_text("x", encoding="utf-8")
+        edge = lib / ".spark-trash" / "2026-09-28" / "120000"
+        edge.mkdir(parents=True)
+        (edge / "边界.md").write_text("y", encoding="utf-8")
+        cab.prune_trash(lib, 2, date(2026, 9, 30))
+        self.assertFalse((lib / ".spark-trash" / "2026-09-01").exists())
+        self.assertTrue((lib / ".spark-trash" / "2026-09-28" / "120000" / "边界.md").exists())
+        label, soon = cab.left_label(2, date(2026, 9, 28), date(2026, 9, 30))
+        self.assertEqual(label, "即将清理")
+        self.assertTrue(soon)
+        cab.prune_trash(lib, 0, date(2026, 9, 30))
+        self.assertTrue((edge / "边界.md").exists())
+
+    def test_root_is_the_library_until_spark_exists(self) -> None:
+        folder = self.root / "课程"
+        folder.mkdir()
+        note = folder / "第一章.md"
+        note.write_text("正文", encoding="utf-8")
+        self.assertEqual(cab.shown_libraries(self.root), ["."])
+        self.assertEqual(cab.loose_entries(self.root), [])
+        lib = cab.library_dir(self.root, ".")
+        cab.move_to_trash(lib, note)
+        items = cab.trash_items(lib)
+        self.assertEqual([item.rel for item in items], ["课程/第一章.md"])
+        self.assertEqual(cab.lib_label(".")[0], "笔记库")
+
+    def test_account_rules(self) -> None:
+        existing = ["me", "phone"]
+        self.assertEqual(cab.account_add_error("me", "a", "a", existing), "已经有这个用户名")
+        self.assertEqual(cab.account_add_error("a b", "a", "a", existing), "用户名不能有空格或冒号")
+        self.assertEqual(cab.account_add_error("pad", "a", "b", existing), "两次密码不一致")
+        self.assertEqual(cab.account_add_error("pad", "a", "a", existing), "")
+        self.assertEqual(cab.account_pass_error("me", "me", "", "a", "a", existing, False), "请填写当前密码")
+        self.assertEqual(cab.account_pass_error("me", "me", "nope", "a", "a", existing, False), "当前密码不正确")
+        self.assertEqual(cab.account_pass_error("phone", "me", "", "a", "a", existing, False), "")
+        self.assertIn("正在登录", cab.account_drop_error("me", "me", existing))
+        self.assertIn("最后一个", cab.account_drop_error("only", "ghost", ["only"]))
+        self.assertEqual(cab.account_drop_error("phone", "me", existing), "")
+
+    def test_passwd_path_matches_deploy(self) -> None:
+        conf = (HERE / "webdav.conf").read_text(encoding="utf-8")
+        install = (HERE / "install.sh").read_text(encoding="utf-8")
+        self.assertIn(f"AuthUserFile {cab.PASSWD}", conf)
+        self.assertIn(cab.PASSWD, install)
+        self.assertNotIn("AuthUserFile /etc/apache2/webdav.passwd", conf)
+
+
+if __name__ == "__main__":
+    unittest.main()

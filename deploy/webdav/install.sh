@@ -1,7 +1,8 @@
 #!/bin/bash
 # 在已经用 Caddy 提供 HTTPS 的 Ubuntu 服务器上部署 WebDAV 和笔记柜。
 # Apache 只监听 127.0.0.1:8082，浏览器页面由 127.0.0.1:8083 提供。
-# 密码只写入 /etc/apache2/webdav.passwd，不要把密码放进这个仓库。
+# 密码只写入 /var/lib/notes-cabinet/webdav.passwd，不要把密码放进这个仓库。
+# 若还留着旧的 /etc/apache2/webdav.passwd，会挪到新位置。
 #
 # 在服务器上、本仓库目录中执行：
 #   sudo DOMAIN=example.com WEBDAV_USER=账号 WEBDAV_PASSWORD=密码 ./deploy/webdav/install.sh
@@ -40,16 +41,21 @@ apt-get update -qq
 apt-get install -y apache2 apache2-utils
 a2enmod dav dav_fs auth_basic authn_file alias authz_core authz_user headers
 
-mkdir -p /var/www/webdav /var/lock/apache2 /opt/notes-cabinet
+mkdir -p /var/www/webdav /var/lock/apache2 /opt/notes-cabinet /var/lib/notes-cabinet
 chown www-data:www-data /var/www/webdav /var/lock/apache2
 
-if [[ -f /etc/apache2/webdav.passwd ]]; then
-  htpasswd -b /etc/apache2/webdav.passwd "$WEBDAV_USER" "$WEBDAV_PASSWORD"
-else
-  htpasswd -bc /etc/apache2/webdav.passwd "$WEBDAV_USER" "$WEBDAV_PASSWORD"
+PASSWD=/var/lib/notes-cabinet/webdav.passwd
+if [[ -f /etc/apache2/webdav.passwd && ! -f "$PASSWD" ]]; then
+  mv /etc/apache2/webdav.passwd "$PASSWD"
 fi
-chgrp www-data /etc/apache2/webdav.passwd
-chmod 640 /etc/apache2/webdav.passwd
+if [[ -f "$PASSWD" ]]; then
+  htpasswd -b "$PASSWD" "$WEBDAV_USER" "$WEBDAV_PASSWORD"
+else
+  htpasswd -bc "$PASSWD" "$WEBDAV_USER" "$WEBDAV_PASSWORD"
+fi
+chown -R www-data:www-data /var/lib/notes-cabinet
+chmod 750 /var/lib/notes-cabinet
+chmod 640 "$PASSWD"
 
 printf '%s\n' "Listen 127.0.0.1:8082" > /etc/apache2/ports.conf
 sed "s/__DOMAIN__/${DOMAIN//\//\\/}/g" "$HERE/webdav.conf" > /etc/apache2/sites-available/webdav.conf
