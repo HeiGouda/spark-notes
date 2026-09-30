@@ -312,8 +312,7 @@ def loose_entries(root: Path) -> list[Path]:
         if not inside(root, resolved) or child.name.startswith(".") or child.name == SPARK:
             continue
         found.append(child)
-    found.sort(key=lambda p: (not p.is_dir(), p.name))
-    return found
+    return sort_children(found, "", load_order(root))
 
 
 def loose_target(root: Path, name: str) -> Path:
@@ -354,6 +353,79 @@ def human_size(n: int) -> str:
     if n < 1024 * 1024:
         return f"{n / 1024:.1f} KB"
     return f"{n / 1024 / 1024:.1f} MB"
+
+
+def display_name(filename: str) -> str:
+    lower = filename.lower()
+    for ext in (".mind.mmd", ".flow.mmd", ".md"):
+        if len(filename) > len(ext) and lower.endswith(ext):
+            return filename[: -len(ext)]
+    return filename
+
+
+def _han_start(text: str) -> bool:
+    for ch in text:
+        if ch.isspace():
+            continue
+        code = ord(ch)
+        return (
+            0x3400 <= code <= 0x4DBF
+            or 0x4E00 <= code <= 0x9FFF
+            or 0xF900 <= code <= 0xFAFF
+            or 0x20000 <= code <= 0x2A6DF
+        )
+    return False
+
+
+def name_key(filename: str) -> tuple:
+    """与电脑一致：数字、字母开头在汉字前；数字按数值比；其余不区分大小写。"""
+    shown = display_name(filename)
+    parts: list[tuple] = []
+    chunk: list[str] = []
+    digits = False
+
+    def flush() -> None:
+        nonlocal chunk, digits
+        if not chunk:
+            return
+        text = "".join(chunk)
+        parts.append((0, int(text)) if digits else (1, text.casefold()))
+        chunk = []
+
+    for ch in shown:
+        is_digit = ch.isdecimal() and ord(ch) < 128
+        if chunk and is_digit != digits:
+            flush()
+        digits = is_digit
+        chunk.append(ch)
+    flush()
+    return (1 if _han_start(shown) else 0, tuple(parts))
+
+
+def load_order(lib_root: Path) -> dict[str, list[str]]:
+    path = lib_root / ".ttnote" / "config" / "order.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    order: dict[str, list[str]] = {}
+    for key, value in data.items():
+        if isinstance(key, str) and isinstance(value, list):
+            order[key] = [item for item in value if isinstance(item, str)]
+    return order
+
+
+def sort_children(children: list[Path], rel: str, order: dict[str, list[str]]) -> list[Path]:
+    """文件夹在前。order.json 里列出的按该顺序，没列出的按名称排在后面。"""
+    rank = {name: i for i, name in enumerate(order.get(rel, []))}
+
+    def key(path: Path) -> tuple:
+        listed = rank.get(path.name)
+        return (0 if path.is_dir() else 1, listed if listed is not None else 10**9, name_key(path.name))
+
+    return sorted(children, key=key)
 
 
 def file_meta(path: Path) -> str:
@@ -707,7 +779,7 @@ def library_main(root: Path, lib: str, rel: str, query: str) -> str:
         if child.name.startswith(".") or (lib == ROOT_LIB and child.name == SPARK):
             continue
         children.append(child)
-    children.sort(key=lambda p: (not p.is_dir(), p.name))
+    children = sort_children(children, rel, load_order(lib_root))
     if query:
         children = [c for c in children if query in c.name]
     label, sub = lib_label(lib)

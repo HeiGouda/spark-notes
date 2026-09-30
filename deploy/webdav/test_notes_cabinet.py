@@ -96,6 +96,17 @@ class CabinetTest(unittest.TestCase):
         self.assertEqual([item.rel for item in items], ["课程/第一章.md"])
         self.assertEqual(cab.lib_label(".")[0], "笔记库")
 
+    def test_sort_matches_pc_custom_order(self) -> None:
+        base = self.root / "lib"
+        base.mkdir()
+        for name in ["随手记.md", "产品规划.md", "笔记10.md", "笔记2.md", "a.md"]:
+            (base / name).write_text("x", encoding="utf-8")
+        (base / "读书").mkdir()
+        (base / "工作").mkdir()
+        order = {"": ["随手记.md", "读书", "产品规划.md"]}
+        got = [p.name for p in cab.sort_children(list(base.iterdir()), "", order)]
+        self.assertEqual(got, ["读书", "工作", "随手记.md", "产品规划.md", "a.md", "笔记2.md", "笔记10.md"])
+
     def test_account_rules(self) -> None:
         existing = ["me", "phone"]
         self.assertEqual(cab.account_add_error("me", "a", "a", existing), "已经有这个用户名")
