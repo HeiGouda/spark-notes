@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>低保真原型：AI 模型列表 · 大纲样式 · AI 生成思维导图</title>
+<style>
+  :root { --ink: #222; --mid: #777; --line: #999; --soft: #e9e9e9; --bg: #fafafa; --note: #c0392b; --pick: #2f6fd6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fff; color: var(--ink); font: 13px/1.6 "Microsoft YaHei", "PingFang SC", sans-serif; }
+  header.page { padding: 24px 32px 8px; border-bottom: 1px dashed var(--line); }
+  header.page h1 { margin: 0 0 4px; font-size: 20px; }
+  header.page p { margin: 0; color: var(--mid); }
+  nav.toc { padding: 8px 32px; color: var(--mid); }
+  nav.toc a { color: var(--pick); margin-right: 16px; }
+  section.board { padding: 24px 32px 40px; border-bottom: 1px dashed var(--line); }
+  section.board > h2 { margin: 0 0 4px; font-size: 16px; }
+  section.board > .sub { margin: 0 0 16px; color: var(--mid); }
+  .row { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .cap { font-size: 12px; color: var(--mid); margin: 6px 0 0; }
+
+  /* 线框元素 */
+  .frame { border: 1.5px solid var(--ink); border-radius: 6px; background: #fff; }
+  .win { width: 760px; display: flex; min-height: 470px; }
+  .win .nav { width: 150px; border-right: 1.5px solid var(--ink); padding: 12px 8px; background: var(--bg); }
+  .win .nav div { padding: 4px 8px; border-radius: 4px; color: var(--mid); }
+  .win .nav div.on { background: var(--soft); color: var(--ink); font-weight: bold; }
+  .win .main { flex: 1; padding: 16px 20px; position: relative; }
+  .h { font-weight: bold; font-size: 14px; margin-bottom: 6px; }
+  .hint { color: var(--mid); font-size: 12px; }
+  .box { border: 1.2px solid var(--line); border-radius: 4px; padding: 4px 8px; background: #fff; min-height: 26px; }
+  .sel::after { content: " ▾"; color: var(--mid); float: right; }
+  .btn { display: inline-block; border: 1.2px solid var(--ink); border-radius: 4px; padding: 2px 10px; background: #fff; }
+  .btn.pri { background: var(--ink); color: #fff; }
+  .link { color: var(--pick); text-decoration: underline; margin-left: 8px; }
+  .muted { color: var(--mid); }
+  .badge { display: inline-block; font-size: 11px; border: 1px solid var(--ink); border-radius: 3px; padding: 0 4px; margin-left: 6px; }
+  .flex { display: flex; align-items: center; gap: 8px; }
+  .grow { flex: 1; }
+  table.wire { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  table.wire th, table.wire td { border-bottom: 1px solid var(--soft); padding: 6px 6px; text-align: left; }
+  table.wire th { color: var(--mid); font-weight: normal; border-bottom: 1.2px solid var(--line); }
+  .ph { display: inline-block; height: 8px; background: var(--soft); border-radius: 4px; vertical-align: middle; }
+
+  /* 标注 */
+  .n { display: inline-flex; width: 18px; height: 18px; border-radius: 50%; background: var(--note); color: #fff; font-size: 11px; align-items: center; justify-content: center; font-weight: bold; margin: 0 4px; vertical-align: middle; }
+  .notes { width: 340px; }
+  .notes ol { margin: 0; padding-left: 0; list-style: none; }
+  .notes li { margin: 0 0 8px; padding-left: 26px; position: relative; }
+  .notes li .n { position: absolute; left: 0; top: 2px; margin: 0; }
+  .ask { border: 1.5px dashed var(--note); border-radius: 6px; padding: 8px 12px; margin-top: 12px; color: var(--note); }
+  .ask b { color: var(--note); }
+
+  /* 弹窗 */
+  .dlg { width: 470px; }
+  .dlg .head { display: flex; align-items: center; border-bottom: 1.2px solid var(--ink); padding: 8px 12px; font-weight: bold; }
+  .dlg .head .x { margin-left: auto; color: var(--mid); font-weight: normal; }
+  .dlg .body { padding: 12px 14px; display: grid; gap: 4px; }
+  .dlg .body label { color: var(--mid); font-size: 12px; margin-top: 6px; }
+  .dlg .foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--soft); }
+  .seg { display: inline-flex; border: 1.2px solid var(--ink); border-radius: 4px; overflow: hidden; }
+  .seg span { padding: 1px 10px; border-left: 1px solid var(--line); }
+  .seg span:first-child { border-left: 0; }
+  .seg span.on { background: var(--ink); color: #fff; }
+  textarea.box { width: 100%; height: 96px; resize: none; font: inherit; color: var(--mid); }
+
+  /* 菜单 */
+  .menu { width: 220px; padding: 4px 0; }
+  .menu div { padding: 3px 14px; display: flex; }
+  .menu div em { margin-left: auto; color: var(--mid); font-style: normal; font-size: 11px; }
+  .menu hr { border: 0; border-top: 1px solid var(--soft); margin: 4px 0; }
+  .menu .new { outline: 2px solid var(--note); outline-offset: -2px; font-weight: bold; }
+
+  /* 大纲 */
+  .side { width: 250px; padding: 8px 0; min-height: 300px; }
+  .side .title { padding: 0 12px 6px; color: var(--mid); font-size: 12px; border-bottom: 1px solid var(--soft); margin-bottom: 4px; }
+  .ol-old div { padding: 3px 10px; display: flex; gap: 6px; color: #555; }
+  .ol-old div i { font-style: normal; font-size: 10px; color: var(--mid); width: 18px; }
+  .ol-old div.on { background: var(--soft); box-shadow: inset 2px 0 0 var(--ink); color: var(--ink); }
+  .ol-new { padding: 0 8px; }
+  .ol-new .it { position: relative; padding: 3px 8px 3px calc(8px + var(--d) * 16px); border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ol-new .it::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--d) * 16px - 2px); border-left: 1px solid var(--line); display: var(--g, block); }
+  .ol-new .l1 { font-size: 14px; font-weight: bold; --g: none; margin-top: 6px; }
+  .ol-new .l2 { font-size: 13px; font-weight: 600; }
+  .ol-new .l3 { font-size: 12.5px; color: #444; }
+  .ol-new .l4 { font-size: 12px; color: var(--mid); }
+  .ol-new .on { background: #dfe8f7; color: var(--ink); font-weight: bold; box-shadow: inset 3px 0 0 var(--pick); }
+  .ol-new .tw { color: var(--mid); display: inline-block; width: 12px; font-size: 10px; }
+
+  /* 画布 */
+  .canvas { width: 470px; height: 260px; position: relative; background:
+      radial-gradient(circle, #ddd 1px, transparent 1px) 0 0 / 16px 16px; }
+  .canvas .root { position: absolute; left: 40px; top: 112px; border: 1.5px solid var(--ink); border-radius: 6px; padding: 4px 14px; background: #fff; }
+  .canvas .empty { position: absolute; left: 50%; top: 50%; transform: translate(-30%, -50%); text-align: center; color: var(--mid); }
+  .canvas .empty .btn { margin-top: 8px; outline: 2px solid var(--note); outline-offset: 2px; }
+  .tool { border-bottom: 1.2px solid var(--ink); padding: 6px 10px; display: flex; gap: 6px; }
+  .tool span { border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; color: var(--mid); font-size: 12px; }
+
+  .editor { width: 470px; padding: 14px 18px; min-height: 260px; position: relative; }
+  .editor p { margin: 0 0 8px; color: #555; }
+  .editor mark { background: #cfe0fb; }
+  .editor .menu { position: absolute; left: 210px; top: 66px; box-shadow: 3px 3px 0 rgba(0,0,0,.08); }
+
+  table.data { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  table.data th, table.data td { border: 1px solid var(--line); padding: 4px 8px; vertical-align: top; text-align: left; }
+  table.data th { background: var(--bg); }
+  table.data code { font-family: Consolas, monospace; font-size: 12px; }
+  table.data tr.warn td { background: #fff4f2; }
+  table.data td.k { white-space: nowrap; }
+</style>
+</head>
+<body>
+<header class="page">
+  <h1>低保真原型：AI 模型列表 · 大纲样式 · AI 生成思维导图</h1>
+  <p>只表达布局、内容和交互，不代表最终配色和尺寸；最终样式沿用现有界面。红色编号对应右侧说明，红色虚线框是需要你确认的地方。</p>
+</header>
+<nav class="toc">
+  <a href="#ai-list">1. AI 设置：模型列表</a>
+  <a href="#ai-add">2. 添加 / 编辑模型</a>
+  <a href="#ai-presets">3. 预设服务商与模型</a>
+  <a href="#outline">4. 大纲样式</a>
+  <a href="#mindgen">5. AI 生成思维导图</a>
+</nav>
+
+<!-- ======================= 1. 模型列表 ======================= -->
+<section class="board" id="ai-list">
+  <h2>1. 设置 → AI：模型列表</h2>
+  <p class="sub">替换现在的“服务商 / 接口地址 / API Key / 模型表”整页表单。每个模型自带服务商、接口地址和 Key。</p>
+  <div class="row">
+    <div>
+      <div class="frame win">
+        <div class="nav">
+          <div>常规</div><div>编辑器</div><div>外观</div><div>同步</div><div>历史与回收站</div><div class="on">AI</div><div>快捷键</div>
+        </div>
+        <div class="main">
+          <div class="flex"><span class="h">AI</span><span class="grow"></span><span class="btn pri">+ 添加模型</span><span class="n">1</span></div>
+          <div class="hint">只在你点击 AI 功能时才发送内容，后台不会自动发送任何笔记。支持 OpenAI 兼容接口。</div>
+
+          <div style="margin-top:14px" class="flex"><span>默认模型</span><span class="n">2</span></div>
+          <div class="box sel" style="width:300px">DeepSeek V4 Pro（DeepSeek）</div>
+          <div class="hint">AI 指令、总结、整理结构、提交说明、生成思维导图和流程图都用默认模型；AI 对话里可以临时切换。</div>
+
+          <div style="margin-top:14px" class="flex"><span>已添加的模型</span><span class="n">3</span></div>
+          <table class="wire">
+            <tr><th>名称</th><th>服务商</th><th>模型</th><th>上下文</th><th style="width:96px"></th></tr>
+            <tr><td>DeepSeek V4 Pro<span class="badge">默认</span></td><td>DeepSeek</td><td class="muted">deepseek-v4-pro</td><td>128K <span class="muted">内置</span></td><td><span class="link">编辑</span><span class="link">删除</span></td></tr>
+            <tr><td>Qwen3.8 Max</td><td>通义千问</td><td class="muted">qwen3.8-max</td><td>1M <span class="muted">服务商</span></td><td><span class="link">编辑</span><span class="link">删除</span></td></tr>
+            <tr><td>Claude Opus 5.5</td><td>Anthropic Claude</td><td class="muted">claude-opus-5-5</td><td>1M <span class="muted">手动</span></td><td><span class="link">编辑</span><span class="link">删除</span></td></tr>
+            <tr><td>qwen3:8b</td><td>Ollama（本机）</td><td class="muted">qwen3:8b</td><td>128K <span class="muted">未知</span></td><td><span class="link">编辑</span><span class="link">删除</span></td></tr>
+          </table>
+          <div class="hint" style="margin-top:6px">上下文长度：手动填写 &gt; 服务商返回 &gt; 内置表 &gt; 128K。发送图片需要支持识图的模型。</div>
+        </div>
+      </div>
+      <p class="cap">图 1-a：已添加模型</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>右上角“添加模型”，弹出图 2 的对话框。</li>
+        <li><span class="n">2</span>“默认模型”下拉框，列出全部已添加的模型（名称 + 服务商）。列表里默认模型带“默认”标记。删除默认模型时自动改用列表第一个。</li>
+        <li><span class="n">3</span>每行：显示名称（没填时用模型名）、服务商、模型名、上下文和来源、编辑 / 删除。删除前确认；同一接口地址的最后一个模型被删除时，一并清除这个地址的 Key。</li>
+        <li><span class="n">4</span>原来页面上的“测试连接”“从服务商读取”移到添加 / 编辑对话框里。</li>
+        <li><span class="n">5</span>升级时自动迁移：原来的每个模型变成列表里的一项，沿用原来的服务商、接口地址和 Key；原来排第一的成为默认模型。</li>
+      </ol>
+      <div class="ask"><b>待确认 A：</b>列表是否需要拖动排序？（AI 对话的模型下拉框按列表顺序显示）。我的建议：先不做，按添加顺序。</div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:20px">
+    <div>
+      <div class="frame" style="width:560px;padding:16px 20px">
+        <div class="flex"><span class="h">AI</span><span class="grow"></span><span class="btn pri">+ 添加模型</span></div>
+        <div style="text-align:center;padding:40px 0;color:var(--mid)">
+          还没有添加模型<br>
+          <span class="btn" style="margin-top:8px">添加第一个模型</span>
+        </div>
+      </div>
+      <p class="cap">图 1-b：空状态（还没有模型时，AI 功能点击后仍弹出现有的“尚未配置 AI”提示，按钮改为“去添加模型”）</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 2. 添加 / 编辑 ======================= -->
+<section class="board" id="ai-add">
+  <h2>2. 添加 / 编辑模型对话框</h2>
+  <p class="sub">“编辑”打开同一个对话框，标题改为“编辑模型”，各字段已填好。</p>
+  <div class="row">
+    <div>
+      <div class="frame dlg">
+        <div class="head">添加模型<span class="x">✕</span></div>
+        <div class="body">
+          <label>服务商 <span class="n">1</span></label>
+          <div class="box sel">DeepSeek</div>
+          <label>接口地址 <span class="n">2</span></label>
+          <div class="box">https://api.deepseek.com/v1</div>
+          <label>API Key <span class="n">3</span></label>
+          <div class="box flex"><span>🔑 已保存（与同一接口地址的其他模型共用）</span><span class="grow"></span><span class="link">修改</span></div>
+          <label>模型 <span class="n">4</span></label>
+          <div class="flex"><div class="box sel grow">deepseek-v4-pro</div><span class="btn">从服务商读取</span></div>
+          <label>显示名称（可选） <span class="n">5</span></label>
+          <div class="box muted">DeepSeek V4 Pro</div>
+          <label>上下文长度（可选） <span class="n">6</span></label>
+          <div class="box muted" style="width:200px">自动：128K（内置）</div>
+        </div>
+        <div class="foot">
+          <span class="btn">测试连接</span><span class="muted">✓ 连接成功</span>
+          <span class="grow"></span><span class="btn">取消</span><span class="btn pri">保存</span>
+        </div>
+      </div>
+      <p class="cap">图 2-a：添加模型（这个接口地址已经保存过 Key）</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>服务商下拉：列出第 3 部分的预设，最后一项“自定义”。选中后自动填好接口地址，并把模型下拉换成该服务商的预设模型。</li>
+        <li><span class="n">2</span>接口地址可以改；“自定义”时为空，必须填写。</li>
+        <li><span class="n">3</span>API Key 按接口地址共用：这个地址已经保存过 Key 时显示“已保存”和“修改”；没有时显示密码输入框。本机服务（Ollama、LM Studio）可以不填。Key 只存系统凭据库。</li>
+        <li><span class="n">4</span>模型：可以从下拉中选择预设模型，也可以直接输入。“从服务商读取”调用服务商的模型列表接口，读到的模型并入下拉，能读到上下文长度的一并记下。</li>
+        <li><span class="n">5</span>显示名称：选预设模型时自动填上（如 DeepSeek V4 Pro），可以改；不填时显示模型名。</li>
+        <li><span class="n">6</span>上下文长度：留空表示自动，提示框里显示自动得出的值和来源。</li>
+        <li><span class="n">7</span>保存前校验：接口地址、模型名不能为空；同一接口地址下同一个模型不能重复添加。“测试连接”不是必须的。</li>
+      </ol>
+    </div>
+    <div>
+      <div class="frame dlg" style="width:360px">
+        <div class="head">添加模型<span class="x">✕</span></div>
+        <div class="body">
+          <label>服务商</label>
+          <div class="box sel">Kimi</div>
+          <label>接口地址</label>
+          <div class="box">https://api.moonshot.cn/v1</div>
+          <label>API Key</label>
+          <div class="box muted">sk-••••••••••••</div>
+          <label>模型</label>
+          <div class="frame" style="padding:2px 0">
+            <div style="padding:2px 8px;background:var(--soft)">kimi-k3　<span class="muted">Kimi K3</span></div>
+            <div style="padding:2px 8px">kimi-k2.7-code　<span class="muted">Kimi K2.7 Code</span></div>
+            <div style="padding:2px 8px">kimi-k2.6　<span class="muted">Kimi K2.6</span></div>
+            <div style="padding:2px 8px;border-top:1px solid var(--soft)" class="muted">从服务商读取到的其他模型…</div>
+          </div>
+        </div>
+      </div>
+      <p class="cap">图 2-b：还没有 Key；展开的模型下拉</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 3. 预设清单 ======================= -->
+<section class="board" id="ai-presets">
+  <h2>3. 预设服务商与模型（2026-10-08 按各家官方文档查证）</h2>
+  <p class="sub">只预设对话用的文本模型，每家 2~4 个当前主力。模型名会随厂商更新而变，所以下拉里仍可手动输入或“从服务商读取”。红底行有问题，需要你决定。</p>
+  <table class="data">
+    <tr><th>服务商</th><th>接口地址</th><th>预设模型（显示名称 → 模型名）</th><th>说明</th></tr>
+    <tr><td class="k">OpenAI</td><td><code>https://api.openai.com/v1</code></td><td>GPT-6 Astra → <code>gpt-6-astra</code><br>GPT-6.1 Sol → <code>gpt-6.1-sol</code><br>GPT-6 Luna → <code>gpt-6-luna</code></td><td>Chat Completions 可用（不含工具调用，本应用不需要）</td></tr>
+    <tr><td class="k">Anthropic Claude</td><td><code>https://api.anthropic.com/v1</code></td><td>Claude Opus 5.5 → <code>claude-opus-5-5</code><br>Claude Sonnet 5.5 → <code>claude-sonnet-5-5</code><br>Claude Haiku 4.5 → <code>claude-haiku-4-5</code><br>Claude Fable 5.1 → <code>claude-fable-5-1</code></td><td>官方 OpenAI 兼容层</td></tr>
+    <tr><td class="k">Google Gemini</td><td><code>https://generativelanguage.googleapis.com/v1beta/openai</code></td><td>Gemini 3.1 Pro → <code>gemini-3.1-pro-preview</code><br>Gemini 3.8 Flash → <code>gemini-3.8-flash</code><br>Gemini 3.5 Flash-Lite → <code>gemini-3.5-flash-lite</code></td><td>官方 OpenAI 兼容接口（beta）</td></tr>
+    <tr class="warn"><td class="k">xAI Grok</td><td><code>https://api.x.ai/v1</code></td><td>Grok 4.7 → <code>grok-4.7</code></td><td><b>Grok 4.7 只提供 Responses 接口</b>，本应用用的 Chat Completions 调不通。<b>待确认 B</b>：建议不预设 xAI</td></tr>
+    <tr><td class="k">Mistral</td><td><code>https://api.mistral.ai/v1</code></td><td>Mistral Large 4 → <code>mistral-large-4</code><br>Mistral Medium 3.5 → <code>mistral-medium-3-5</code></td><td>Large 4 目前是公开预览</td></tr>
+    <tr><td class="k">DeepSeek</td><td><code>https://api.deepseek.com/v1</code></td><td>DeepSeek V4 Pro → <code>deepseek-v4-pro</code><br>DeepSeek V4.1 Flash → <code>deepseek-flash</code></td><td><code>deepseek-chat</code>、<code>deepseek-reasoner</code> 已于 2026-07-24 停用</td></tr>
+    <tr><td class="k">通义千问</td><td><code>https://dashscope.aliyuncs.com/compatible-mode/v1</code></td><td>Qwen3.8 Max → <code>qwen3.8-max</code><br>Qwen3.7 Plus → <code>qwen3.7-plus</code><br>Qwen3.8 Flash → <code>qwen3.8-flash</code></td><td></td></tr>
+    <tr><td class="k">Kimi</td><td><code>https://api.moonshot.cn/v1</code></td><td>Kimi K3 → <code>kimi-k3</code><br>Kimi K2.7 Code → <code>kimi-k2.7-code</code><br>Kimi K2.6 → <code>kimi-k2.6</code></td><td><code>moonshot-v1</code> 系列已于 2026-08-31 下线</td></tr>
+    <tr><td class="k">智谱 GLM</td><td><code>https://open.bigmodel.cn/api/paas/v4</code></td><td>GLM-5.3 → <code>glm-5.3</code><br>GLM-5.3-Flash → <code>glm-5.3-flash</code><br>GLM-4.7-Flash（免费）→ <code>glm-4.7-flash</code></td><td></td></tr>
+    <tr class="warn"><td class="k">豆包（火山方舟）</td><td><code>https://ark.cn-beijing.volces.com/api/v3</code></td><td>Doubao Seed 2.1 Pro → <code>doubao-seed-2-1-pro-260628</code><br>Doubao Seed 2.1 Turbo → <code>doubao-seed-2-1-turbo-260628</code><br>Doubao Seed 2.0 Lite → <code>doubao-seed-2-0-lite-260428</code></td><td>模型名带日期后缀，9 月已有 2.1 Pro 新版（0915）。<b>待确认 C</b>：建议预设这几个，并在提示里写“以方舟控制台为准”</td></tr>
+    <tr><td class="k">文心（百度千帆）</td><td><code>https://qianfan.baidubce.com/v2</code></td><td>ERNIE 5.1 → <code>ernie-5.1</code><br>ERNIE 5.0 → <code>ernie-5.0</code><br>ERNIE 4.5 Turbo 128K → <code>ernie-4.5-turbo-128k</code></td><td>API Key 形如 <code>bce-v3/…</code></td></tr>
+    <tr class="warn"><td class="k">腾讯混元</td><td><code>https://tokenhub.tencentmaas.com/v1</code></td><td>Hy4 Preview → <code>hy4-preview</code><br>Hy3 → <code>hy3</code></td><td>原地址 <code>api.hunyuan.cloud.tencent.com</code> 已于 2026-09-30 停服，旧模型名全部下线，改用 TokenHub</td></tr>
+    <tr><td class="k">MiniMax</td><td><code>https://api.minimaxi.com/v1</code></td><td>MiniMax-M3 → <code>MiniMax-M3</code><br>MiniMax-M2.7 → <code>MiniMax-M2.7</code><br>MiniMax-M2.7 极速版 → <code>MiniMax-M2.7-highspeed</code></td><td>国内地址（注意是 minimaxi）</td></tr>
+    <tr><td class="k">阶跃星辰</td><td><code>https://api.stepfun.com/v1</code></td><td>Step 5 Preview → <code>step-5-preview</code><br>Step 3.7 Flash → <code>step-3.7-flash</code><br>Step 3.5 Flash → <code>step-3.5-flash</code></td><td></td></tr>
+    <tr><td class="k">硅基流动</td><td><code>https://api.siliconflow.cn/v1</code></td><td rowspan="2" class="muted">不预设模型：模型很多且常变，用“从服务商读取”</td><td rowspan="2">聚合平台</td></tr>
+    <tr><td class="k">OpenRouter</td><td><code>https://openrouter.ai/api/v1</code></td></tr>
+    <tr><td class="k">Ollama（本机）</td><td><code>http://localhost:11434/v1</code></td><td rowspan="2" class="muted">不预设模型：取决于本机下载了哪些，用“从服务商读取”</td><td rowspan="2">不需要 Key</td></tr>
+    <tr><td class="k">LM Studio（本机）</td><td><code>http://localhost:1234/v1</code></td></tr>
+    <tr><td class="k">自定义</td><td class="muted">自己填写</td><td class="muted">自己填写</td><td></td></tr>
+  </table>
+  <p class="cap">实现时同步更新内置上下文长度表（新模型名大多不在现在的表里）。</p>
+</section>
+
+<!-- ======================= 4. 大纲 ======================= -->
+<section class="board" id="outline">
+  <h2>4. 大纲样式</h2>
+  <p class="sub">左栏“大纲”视图。左边是现在的样子，右边是改后的样子。</p>
+  <div class="row">
+    <div>
+      <div class="frame side">
+        <div class="title">大纲</div>
+        <div class="ol-old">
+          <div><i>H1</i>马克思主义哲学</div>
+          <div style="padding-left:26px"><i>H2</i>哲学的基本问题</div>
+          <div style="padding-left:42px"><i>H3</i>思维和存在的关系</div>
+          <div style="padding-left:42px" class="on"><i>H3</i>两大阵营</div>
+          <div style="padding-left:26px"><i>H2</i>唯物辩证法</div>
+          <div style="padding-left:42px"><i>H3</i>联系和发展</div>
+          <div style="padding-left:58px"><i>H4</i>三大规律</div>
+          <div style="padding-left:26px"><i>H2</i>认识论</div>
+        </div>
+      </div>
+      <p class="cap">现在：靠 H1~H6 小标签和缩进区分，所有级别字号、粗细相同</p>
+    </div>
+    <div>
+      <div class="frame side">
+        <div class="title">大纲</div>
+        <div class="ol-new">
+          <div class="it l1" style="--d:0">马克思主义哲学 <span class="n">1</span></div>
+          <div class="it l2" style="--d:1">哲学的基本问题</div>
+          <div class="it l3" style="--d:2">思维和存在的关系</div>
+          <div class="it l3 on" style="--d:2">两大阵营 <span class="n">3</span></div>
+          <div class="it l2" style="--d:1">唯物辩证法</div>
+          <div class="it l3" style="--d:2">联系和发展</div>
+          <div class="it l4" style="--d:3">三大规律 <span class="n">2</span></div>
+          <div class="it l2" style="--d:1">认识论</div>
+        </div>
+      </div>
+      <p class="cap">改后</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>去掉 H1~H6 小标签。最浅的一级字号最大、加粗；往下逐级变小、变浅（第 4 级及以下样式相同）。最浅一级的各节之间留一点间距，分出大块。</li>
+        <li><span class="n">2</span>层级竖线：每一级缩进处画一条细竖线，看得出谁属于谁（类似 VS Code 的缩进参考线）。</li>
+        <li><span class="n">3</span>当前所在章节：强调色浅底 + 左侧 3px 强调色竖条 + 加粗，比现在明显；滚动时它保持在可见范围内。</li>
+        <li><span class="n">4</span>标题太长时单行省略，悬停显示全文（与现在一致）。点击跳转、回车跳转保持不变。</li>
+      </ol>
+      <div class="ask"><b>待确认 D：</b>要不要可折叠子标题（行首加 ▸ / ▾）？前面你选了不加，这里先按不加画。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 5. AI 生成思维导图 ======================= -->
+<section class="board" id="mindgen">
+  <h2>5. AI 生成思维导图</h2>
+  <p class="sub">三个入口打开同一个对话框（或直接带上选中的文字），生成过程沿用现有的草稿标签页：显示进度，可以停止、保留、丢弃、重新生成。</p>
+  <div class="row">
+    <div>
+      <div class="frame menu">
+        <div>新建笔记<em>Ctrl+N</em></div>
+        <div>新建思维导图</div>
+        <div>新建流程图</div>
+        <div>AI 生成流程图…</div>
+        <div class="new">AI 生成思维导图…</div>
+        <div>新建文件夹<em>Ctrl+Shift+N</em></div>
+        <hr>
+        <div class="muted">用 AI 生成思维导图（整篇笔记）</div>
+        <hr>
+        <div class="muted">重命名<em>F2</em></div>
+        <div class="muted">隐藏</div>
+        <div class="muted">删除<em>Delete</em></div>
+      </div>
+      <p class="cap">图 5-a：文件树右键菜单 / 标题栏“新建”下拉<br>（入口 ①，红框为新增；笔记上原有的“整篇笔记”生成保留）</p>
+    </div>
+    <div>
+      <div class="frame dlg">
+        <div class="head">AI 生成思维导图<span class="x">✕</span></div>
+        <div class="body">
+          <textarea class="box">写下主题和想展开的要点，例如：整理“马克思主义哲学”第一章，分基本问题、辩证法、认识论三部分，每部分列出核心概念。</textarea>
+          <div class="flex" style="margin-top:8px"><span class="muted">布局</span>
+            <span class="seg"><span class="on">自动</span><span>向右</span><span>向左</span><span>左右平衡</span></span>
+          </div>
+        </div>
+        <div class="foot">
+          <span class="muted">Ctrl+Enter 生成</span><span class="grow"></span><span class="btn">取消</span><span class="btn pri">生成</span>
+        </div>
+      </div>
+      <p class="cap">图 5-b：对话框（与“AI 生成流程图”同一布局；输入过长时在底部提示，生成按钮不可用）</p>
+    </div>
+  </div>
+  <div class="row" style="margin-top:22px">
+    <div>
+      <div class="frame editor">
+        <p>第一讲 马克思主义哲学是科学的世界观和方法论。</p>
+        <p><mark>哲学的基本问题是思维和存在的关系问题，包括两个方面：</mark></p>
+        <p><mark>一是思维和存在何者为第一性；二是思维和存在有没有同一性。</mark></p>
+        <p>根据对第一个方面的不同回答，哲学分为唯物主义和唯心主义两大阵营。</p>
+        <div class="frame menu">
+          <div>剪切</div><div>复制</div><div>粘贴</div><hr>
+          <div>用选中文字生成流程图</div>
+          <div class="new">用选中文字生成思维导图</div>
+        </div>
+      </div>
+      <p class="cap">图 5-c：笔记里选中文字后右键（入口 ②）。<br>打开对话框并预填选中的文字，生成到当前笔记所在文件夹。</p>
+    </div>
+    <div>
+      <div class="frame" style="width:470px">
+        <div class="tool"><span>主题</span><span>子主题</span><span>概要</span><span>布局 ▾</span><span>样式 ▾</span></div>
+        <div class="canvas">
+          <div class="root">未命名</div>
+          <div class="empty">选中主题按 Tab 添加子主题，或<br><span class="btn">✦ 用 AI 生成</span></div>
+        </div>
+      </div>
+      <p class="cap">图 5-d：新建的空白思维导图，只有以文件名命名的中心主题（入口 ③）。<br>点“用 AI 生成”打开同一个对话框，结果直接画进这个文件（与空白流程图的“用 AI 生成”一致）；<br>中心主题有了子主题后提示消失。</p>
+    </div>
+  </div>
+  <div class="ask" style="max-width:900px"><b>待确认 E：</b>布局只给“自动 / 向右 / 向左 / 左右平衡”四个，还是把现有的“向下”“鱼骨图”也放进来？我的建议：四个就够，生成后还能在画布的“布局”里换。</div>
+</section>
+</body>
+</html>

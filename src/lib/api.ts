@@ -8,6 +8,21 @@ export interface TreeNode {
   children: TreeNode[];
   modifiedMs: number | null;
   createdMs: number | null;
+  /** 表格簿（`.book` 文件夹）：isDir 为 true，name 不含后缀，children 是各张表（按表格簿里的顺序） */
+  book?: BookInfo;
+}
+
+export interface BookInfo {
+  /** 不能显示成表的项目（子文件夹、不认识的文件、嵌套的表格簿） */
+  unsupported: string[];
+  /** 顺序文件读取出错的说明，表仍按名称排序 */
+  warning: string | null;
+}
+
+export interface ScanResult {
+  nodes: TreeNode[];
+  /** 文件时间记录（`.ttnote/config/times.json`）读写失败：文件树照常显示，时间可能不准 */
+  warning: string | null;
 }
 
 export interface NoteFile {
@@ -120,7 +135,7 @@ export const api = {
   backlinks: (root: string, path: string) => invoke<Backlink[]>("link_backlinks", { root, path }),
   /** 改名 / 移动之后、刷新索引之前调用 */
   rewriteLinks: (root: string, from: string, to: string) => invoke<string[]>("link_rewrite", { root, from, to }),
-  scanVault: (root: string) => invoke<TreeNode[]>("vault_scan", { root }),
+  scanVault: (root: string) => invoke<ScanResult>("vault_scan", { root }),
   allowAssets: (root: string) => invoke<void>("vault_allow_assets", { root }),
   readNote: (root: string, path: string) => invoke<NoteFile>("note_read", { root, path }),
   writeNote: (root: string, path: string, content: string) =>
@@ -129,6 +144,14 @@ export const api = {
   createNote: (root: string, dir: string, name?: string, kind?: "note" | "mind" | "flow") =>
     invoke<string>("note_create", { root, dir, name, kind }),
   createFolder: (root: string, dir: string, name?: string) => invoke<string>("folder_create", { root, dir, name }),
+  /** 新建表格簿（`名称.book/`，里面有一张空笔记“表 1”），返回表格簿的相对路径 */
+  createBook: (root: string, dir: string, name?: string) => invoke<string>("book_create", { root, dir, name }),
+  /** 在表格簿末尾新建一张表；不给名称时叫“表 N” */
+  createSheet: (root: string, book: string, kind: "note" | "mind" | "flow", name?: string) =>
+    invoke<string>("sheet_create", { root, book, kind, name }),
+  duplicateSheet: (root: string, path: string) => invoke<string>("sheet_duplicate", { root, path }),
+  /** order 是表的文件名（含扩展名） */
+  setBookOrder: (root: string, book: string, order: string[]) => invoke<void>("book_set_order", { root, book, order }),
   rename: (root: string, path: string, name: string) => invoke<string>("entry_rename", { root, path, name }),
   move: (root: string, path: string, targetDir: string) => invoke<string>("entry_move", { root, path, targetDir }),
   trash: (root: string, path: string) => invoke<void>("entry_trash", { root, path }),
@@ -190,14 +213,18 @@ export const api = {
   importZip: (zipPath: string, dest: string) => invoke<number>("vault_import_zip", { zipPath, dest }),
   createVault: (parent: string, name: string) => invoke<string>("vault_create", { parent, name }),
   gitChangeDiff: (root: string, maxChars: number) => invoke<ChangeDiff>("git_change_diff", { root, maxChars }),
-  aiSaveKey: (key: string) => invoke<void>("ai_save_key", { key }),
-  aiHasKey: () => invoke<boolean>("ai_has_key"),
-  aiClearKey: () => invoke<void>("ai_clear_key"),
-  aiTest: (baseUrl: string, model: string) => invoke<number>("ai_test", { baseUrl, model }),
+  /** API Key 按接口地址保存，同一地址的模型共用 */
+  aiSaveKey: (baseUrl: string, key: string) => invoke<void>("ai_save_key", { baseUrl, key }),
+  aiHasKey: (baseUrl: string) => invoke<boolean>("ai_has_key", { baseUrl }),
+  aiClearKey: (baseUrl: string) => invoke<void>("ai_clear_key", { baseUrl }),
+  /** 把旧版本唯一的 Key 搬到原来的接口地址名下 */
+  aiMigrateKey: (baseUrl: string) => invoke<boolean>("ai_migrate_key", { baseUrl }),
+  /** key：添加模型时输入、还没保存的 Key；不传时用这个地址保存的 */
+  aiTest: (baseUrl: string, model: string, key?: string) => invoke<number>("ai_test", { baseUrl, model, key: key || null }),
   aiChat: (id: string, baseUrl: string, model: string, messages: ChatMessage[], onEvent: Channel<AiEvent>) =>
     invoke<void>("ai_chat", { id, baseUrl, model, messages, onEvent }),
   aiCancel: (id: string) => invoke<void>("ai_cancel", { id }),
-  aiListModels: (baseUrl: string) => invoke<ProviderModel[]>("ai_list_models", { baseUrl }),
+  aiListModels: (baseUrl: string, key?: string) => invoke<ProviderModel[]>("ai_list_models", { baseUrl, key: key || null }),
   chatList: () => invoke<ChatSummary[]>("chat_list"),
   chatRead: (id: string) => invoke<string>("chat_read", { id }),
   chatWrite: (id: string, json: string) => invoke<void>("chat_write", { id, json }),

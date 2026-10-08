@@ -5,7 +5,9 @@ import { api, isWithin, remapPath } from "../lib/api";
 import { docKind, docName, type DocKind } from "../lib/doctype";
 import { formatDate, joinFrontMatter, parseMeta, setFrontMatterTags, splitFrontMatter } from "../lib/frontmatter";
 import { applyEol, detectEol, toLf, type Eol } from "../lib/eol";
+import { bookOf, isBookPath } from "../lib/book";
 import { useVaultStore } from "./vault";
+import { useBookStore } from "./book";
 import { useNoticeStore } from "./notice";
 import { useEditorStore } from "./editor";
 import { useSearchStore } from "./search";
@@ -109,6 +111,8 @@ export const useTabsStore = defineStore("tabs", () => {
    * 已打开的笔记只激活，若以固定方式打开则同时固定。
    */
   async function open(path: string, opts: { preview?: boolean; record?: boolean } = {}): Promise<boolean> {
+    // 表格簿本身不是文件：打开它停在上次看的那张表（表格簿总是以固定标签页打开）
+    if (isBookPath(path)) return useBookStore().openBook(path);
     const preview = opts.preview ?? false;
     const existing = find(path);
     if (existing) {
@@ -314,6 +318,15 @@ export const useTabsStore = defineStore("tabs", () => {
     return true;
   }
 
+  /** 顶部标签页的分组键：同一个表格簿里的表合并成一项 */
+  const groupKey = (path: string) => bookOf(path) ?? path;
+
+  /** 关闭一项顶部标签页：普通标签页只关它自己，表格簿关闭里面所有打开的表 */
+  function closeGroup(path: string): Promise<boolean> {
+    const key = groupKey(path);
+    return closeMany(tabs.value.filter((t) => groupKey(t.path) === key).map((t) => t.path));
+  }
+
   const closeAll = () => closeMany(tabs.value.map((t) => t.path));
   const closeOthers = (path: string) => closeMany(tabs.value.filter((t) => t.path !== path).map((t) => t.path));
   function closeRight(path: string) {
@@ -325,11 +338,15 @@ export const useTabsStore = defineStore("tabs", () => {
     if (find(path)) setActive(path);
   }
 
+  /** 在顶部标签页之间切换；同一个表格簿的表算一项，到表格簿时停在它上次看的那张表 */
   function cycle(delta: number) {
-    const n = tabs.value.length;
+    const keys = [...new Set(tabs.value.map((t) => groupKey(t.path)))];
+    const n = keys.length;
     if (n < 2) return;
-    const idx = tabs.value.findIndex((t) => t.path === activePath.value);
-    setActive(tabs.value[(idx + delta + n) % n].path);
+    const idx = keys.indexOf(activePath.value ? groupKey(activePath.value) : "");
+    const key = keys[(idx + delta + n) % n];
+    if (isBookPath(key)) void useBookStore().openBook(key);
+    else setActive(key);
   }
 
   function reorder(from: number, to: number) {
@@ -451,7 +468,7 @@ export const useTabsStore = defineStore("tabs", () => {
 
   return {
     tabs, activePath, active, canBack, canForward, history, editedTick, savedTick,
-    open, openDraft, finalizeDraft, pin, update, setTags, save, saveActive, flushAll, flushUnder, close, closeAll, closeOthers, closeRight,
+    open, openDraft, finalizeDraft, pin, update, setTags, save, saveActive, flushAll, flushUnder, close, closeMany, closeGroup, groupKey, closeAll, closeOthers, closeRight,
     activate, cycle, reorder, back, forward, remap, reload, dropUnder, restore, resetHistory,
     pendingReveal, openAt, onExternalChange,
   };

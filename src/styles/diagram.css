@@ -101,6 +101,8 @@
 .diagram-canvas.is-connecting { cursor: crosshair }
 .flow-empty { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; text-align: center; pointer-events: none }
 .flow-empty-ai { pointer-events: auto; border: 1px solid var(--line-strong); background: var(--paper) }
+/* 新思维导图的中心主题在视图中间，提示放在它下方 */
+.mind-empty { top: 64%; z-index: 2 }
 .flow-tip { position: absolute; z-index: 3; padding: 5px 9px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink-2); font-size: 12px; line-height: 1.6; pointer-events: none; white-space: nowrap }
 
 /* 图下方的反向链接：占用高度有限，内容多时滚动 */

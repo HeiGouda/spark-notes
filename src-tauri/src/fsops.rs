@@ -1,6 +1,7 @@
 //! 笔记库内的文件操作：新建、重命名、移动、移入回收站、附件、笔记库配置。
 //! 笔记的附件目录 `笔记名.assets/` 始终跟随笔记一起重命名、移动和删除；思维导图和流程图没有附件目录。
 
+use crate::book;
 use crate::doctype::{self, DocKind};
 use crate::vault::{atomic_write, rel_of, resolve, resolve_dir};
 use serde::Serialize;
@@ -46,7 +47,7 @@ fn io_err(ctx: &str, path: &Path, e: std::io::Error) -> String {
 }
 
 /// 在目录下找一个不重名的路径：`名称.ext`、`名称 1.ext`、`名称 2.ext`……
-fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+pub(crate) fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     let first = dir.join(format!("{stem}{ext}"));
     if !first.exists() {
         return first;
@@ -106,6 +107,9 @@ pub fn create_folder(root: &Path, dir_rel: &str, name: Option<&str>) -> Result<S
     let stem = validate_name(name.unwrap_or("新建文件夹"))?;
     if stem.ends_with(".assets") {
         return Err("文件夹名不能以 .assets 结尾（该后缀保留给附件目录）".into());
+    }
+    if book::is_book_name(&stem) {
+        return Err("文件夹名不能以 .book 结尾（该后缀保留给表格簿）".into());
     }
     let path = unique_path(&dir, &stem, "");
     fs::create_dir(&path).map_err(|e| io_err("新建文件夹失败", &path, e))?;
@@ -174,6 +178,15 @@ pub fn rename_entry(root: &Path, rel: &str, new_name: &str) -> Result<String, St
         if name.ends_with(".assets") {
             return Err("文件夹名不能以 .assets 结尾（该后缀保留给附件目录）".into());
         }
+        let src_is_book = src.file_name().is_some_and(|n| book::is_book_name(&n.to_string_lossy()));
+        // 表格簿改名时保留 .book 后缀，用户输入的名称不带也行；普通文件夹不能改成 .book 结尾
+        let name = if src_is_book {
+            format!("{}{}", book::book_stem(&name), book::EXT)
+        } else if book::is_book_name(&name) {
+            return Err("文件夹名不能以 .book 结尾（该后缀保留给表格簿）".into());
+        } else {
+            name
+        };
         let dst = parent.join(&name);
         if dst == src {
             return Ok(rel.to_string());
@@ -515,6 +528,19 @@ mod tests {
         assert!(rename_entry(root, "a.md", "b").unwrap_err().contains("已存在"));
         assert_eq!(rename_entry(root, "a.md", "A").unwrap(), "A.md");
         assert_eq!(fs::read_to_string(root.join("A.md")).unwrap(), "a");
+    }
+
+    #[test]
+    fn book_suffix_is_reserved_for_books() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        assert!(create_folder(root, "", Some("x.book")).unwrap_err().contains(".book"));
+        let folder = create_folder(root, "", Some("夹")).unwrap();
+        assert!(rename_entry(root, &folder, "夹.book").unwrap_err().contains(".book"));
+        let book = book::create_book(root, "", Some("簿")).unwrap();
+        assert_eq!(rename_entry(root, &book, "新簿").unwrap(), "新簿.book");
+        assert_eq!(rename_entry(root, "新簿.book", "再改.book").unwrap(), "再改.book");
+        assert!(root.join("再改.book/.book.json").is_file());
     }
 
     #[test]

@@ -317,7 +317,7 @@ export const useWebdavStore = defineStore("webdav", () => {
       failed.value = report.errors[0] ?? "";
       if (report.errors.length) useNoticeStore().report(direction === "upload" ? "上传未完成" : "同步未完成", report.errors[0]);
       else useNoticeStore().inform(text);
-      if (report.downloaded || report.localTrashed) await useVaultStore().refresh();
+      await afterRun(report);
     } catch (e) {
       if (root() !== path) return;
       failed.value = e instanceof Error ? e.message : String(e);
@@ -326,6 +326,17 @@ export const useWebdavStore = defineStore("webdav", () => {
       busy.value = "";
     }
     if (report) await check();
+  }
+
+  /**
+   * 同步期间文件时间只读不记；下载或上传过（上传时 times.json 可能与云端合并）之后重新扫描，
+   * 并重新读取同步下来的排序、自定义顺序和收藏（`.ttnote/` 不在文件监听范围内）。
+   */
+  async function afterRun(report: SyncReport) {
+    if (!report.downloaded && !report.localTrashed && !report.uploaded) return;
+    const vault = useVaultStore();
+    await vault.refresh();
+    await vault.reloadConfig();
   }
 
   function scheduleAfterSave() {
@@ -348,6 +359,7 @@ export const useWebdavStore = defineStore("webdav", () => {
       failed.value = report.errors[0] ?? "";
       lastAutoError = "";
       if (report.errors.length) useNoticeStore().report("自动上传未完成", report.errors[0]);
+      await afterRun(report);
     } catch (e) {
       if (root() !== path) return;
       const msg = e instanceof Error ? e.message : String(e);

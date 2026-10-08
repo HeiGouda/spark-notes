@@ -4,6 +4,7 @@ import Icon from "./Icon.vue";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore, nameOf } from "../stores/tabs";
 import { DOC_ICON, docKind } from "../lib/doctype";
+import { bookName, isBookPath } from "../lib/book";
 import { useContextMenuStore } from "../stores/contextMenu";
 import { useUiStore } from "../stores/ui";
 
@@ -14,8 +15,20 @@ const ui = useUiStore();
 const dragFrom = ref<number | null>(null);
 const dropAt = ref<number | null>(null);
 
+/** 表格簿在磁盘上是文件夹，但收藏里和文件一样直接打开 */
 function isDir(path: string) {
-  return vault.node(path)?.isDir ?? false;
+  const n = vault.node(path);
+  return !!n?.isDir && !n.book;
+}
+
+function iconOf(path: string) {
+  if (vault.node(path)?.book) return "book";
+  return isDir(path) ? "folder" : DOC_ICON[docKind(path) ?? "note"];
+}
+
+function labelOf(path: string) {
+  if (isBookPath(path)) return bookName(path);
+  return isDir(path) ? path.split("/").pop() : nameOf(path);
 }
 
 function open(path: string, pin = false) {
@@ -62,8 +75,8 @@ function onDrop(i: number) {
         @dragend="dragFrom = dropAt = null"
       >
         <span class="spacer" />
-        <Icon :name="isDir(p) ? 'folder' : DOC_ICON[docKind(p) ?? 'note']" />
-        <span class="name">{{ isDir(p) ? p.split("/").pop() : nameOf(p) }}</span>
+        <Icon :name="iconOf(p)" />
+        <span class="name">{{ labelOf(p) }}</span>
         <Icon class="star" name="star" sm />
       </li>
     </ul>

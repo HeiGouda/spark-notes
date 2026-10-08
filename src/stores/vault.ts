@@ -2,15 +2,22 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { api, baseName, dirOf, isWithin, remapPath, type TreeNode } from "../lib/api";
-import { sortTree, type CustomOrder } from "../lib/treeSort";
+import { filterHidden, parseSortConfig, sortTree, type CustomOrder, type SortConfig } from "../lib/treeSort";
 import { DOC_LABEL, docKind, type DocKind } from "../lib/doctype";
+import { bookOf, isBookPath, outsideBook } from "../lib/book";
 import { useSettingsStore, type SortKey } from "./settings";
+import { useBookStore } from "./book";
 import { useNoticeStore } from "./notice";
 import { useTabsStore } from "./tabs";
 import { useSearchStore } from "./search";
+import { useUiStore } from "./ui";
 
 const ORDER_FILE = "order.json";
 const FAVORITES_FILE = "favorites.json";
+const SORT_FILE = "sort.json";
+
+/** 同步的对象是笔记库：没有打开笔记库时点同步给出的提示 */
+export const NEED_VAULT_FOR_SYNC = "需要先新建或打开一个笔记库才能同步";
 
 function findNode(nodes: TreeNode[], path: string): TreeNode | null {
   for (const n of nodes) {
@@ -31,6 +38,7 @@ export const useVaultStore = defineStore("vault", () => {
   const selected = ref<string | null>(null);
   /** 正在就地改名的项 */
   const renaming = ref<string | null>(null);
+  /** 排序方式（`.ttnote/config/sort.json`，随笔记库同步，手机和笔记柜也按它排） */
   const sortKey = ref<SortKey>("name");
   const sortDesc = ref(false);
   /** 自定义排序（`.ttnote/config/order.json`，随笔记库同步）：文件夹相对路径 → 子项名称顺序 */
@@ -38,6 +46,8 @@ export const useVaultStore = defineStore("vault", () => {
   /** 收藏（`.ttnote/config/favorites.json`，随笔记库同步），保持用户排列的顺序 */
   const favoriteList = ref<string[]>([]);
   const favorites = computed(() => new Set(favoriteList.value));
+  /** 文件树中隐藏的项（本机设置，不随笔记库同步），按隐藏的先后排列 */
+  const hidden = ref<string[]>([]);
   const loadError = ref<string | null>(null);
   /** 正在打开 / 切换笔记库，期间不记录会话，避免把旧库的标签页清空 */
   const switching = ref(false);
@@ -48,7 +58,8 @@ export const useVaultStore = defineStore("vault", () => {
     return parts[parts.length - 1] ?? root.value;
   });
 
-  const sortedTree = computed(() => sortTree(tree.value, sortKey.value, sortDesc.value, customOrder.value));
+  /** 文件树显示的内容：排序并去掉隐藏的项 */
+  const sortedTree = computed(() => sortTree(filterHidden(tree.value, new Set(hidden.value)), sortKey.value, sortDesc.value, customOrder.value));
 
   /** 笔记和图的相对路径，用于快速打开 */
   const docPaths = computed(() => {
@@ -57,6 +68,17 @@ export const useVaultStore = defineStore("vault", () => {
     walk(tree.value);
     return out;
   });
+
+  /** 所有表格簿的相对路径 */
+  const bookPaths = computed(() => {
+    const out: string[] = [];
+    const walk = (nodes: TreeNode[]) => nodes.forEach((n) => (n.book ? out.push(n.path) : n.isDir && walk(n.children)));
+    walk(tree.value);
+    return out;
+  });
+
+  /** 双向链接能指向的所有路径：笔记、图和表格簿 */
+  const linkPaths = computed(() => [...docPaths.value, ...bookPaths.value]);
 
   /** 所有笔记的相对路径，用于双向链接补全 */
   const notePaths = computed(() => docPaths.value.filter((p) => docKind(p) === "note"));
@@ -81,6 +103,67 @@ export const useVaultStore = defineStore("vault", () => {
       await api.writeConfig(root.value, ORDER_FILE, JSON.stringify(customOrder.value, null, 2) + "\n");
     } catch (e) {
       notice().report("保存自定义排序失败", e);
+    }
+  }
+
+  /** 读取排序方式。还没有 sort.json 时（旧版本建的笔记库）把本机的设置写进去，手机和笔记柜随之一致 */
+  async function loadSort(path: string, local: SortConfig): Promise<SortConfig> {
+    let raw: string | null;
+    try {
+      raw = await api.readConfig(path, SORT_FILE);
+    } catch (e) {
+      notice().report("读取排序方式失败，已按本机设置排序", e);
+      return local;
+    }
+    const parsed = parseSortConfig(raw);
+    if (parsed) return parsed;
+    if (raw) {
+      notice().report("排序方式无法识别，已按本机设置排序", SORT_FILE);
+      return local;
+    }
+    await writeSort(path, local);
+    return local;
+  }
+
+  async function writeSort(path: string, sort: SortConfig) {
+    try {
+      await api.writeConfig(path, SORT_FILE, JSON.stringify(sort, null, 2) + "\n");
+    } catch (e) {
+      notice().report("保存排序方式失败", e);
+    }
+  }
+
+  let lastScanWarning: string | null = null;
+
+  /** 扫描文件树；文件时间记录出错时提示一次（同样的错误不重复提示） */
+  async function scan(path: string): Promise<TreeNode[]> {
+    const { nodes, warning } = await api.scanVault(path);
+    if (warning && warning !== lastScanWarning) notice().report("文件时间可能不准", warning);
+    lastScanWarning = warning;
+    return nodes;
+  }
+
+  /**
+   * 同步下来的排序、自定义顺序和收藏：`.ttnote/` 不在文件监听范围内，Git 拉取或 WebDAV 下载后要重新读取。
+   */
+  async function reloadConfig(): Promise<void> {
+    const path = root.value;
+    if (!path) return;
+    const [order, favs, sortRaw] = await Promise.all([
+      loadOrder(path),
+      loadFavorites(path),
+      api.readConfig(path, SORT_FILE).catch((e) => {
+        notice().report("读取排序方式失败", e);
+        return null;
+      }),
+    ]);
+    if (root.value !== path) return;
+    customOrder.value = order;
+    favoriteList.value = favs;
+    const sort = parseSortConfig(sortRaw);
+    if (sort) {
+      sortKey.value = sort.key;
+      sortDesc.value = sort.desc;
     }
   }
 
@@ -133,7 +216,8 @@ export const useVaultStore = defineStore("vault", () => {
     tabs.resetHistory();
     let nodes: TreeNode[];
     try {
-      nodes = await api.scanVault(path);
+      lastScanWarning = null;
+      nodes = await scan(path);
     } catch (e) {
       loadError.value = `无法打开笔记库 ${path}：${e}`;
       notice().report("打开笔记库失败", e);
@@ -149,8 +233,10 @@ export const useVaultStore = defineStore("vault", () => {
     root.value = path;
     tree.value = nodes;
     expanded.value = new Set(ui.expanded);
-    sortKey.value = ui.sortKey;
-    sortDesc.value = ui.sortDesc;
+    const sort = await loadSort(path, { key: ui.sortKey, desc: ui.sortDesc });
+    sortKey.value = sort.key;
+    sortDesc.value = sort.desc;
+    hidden.value = Array.isArray(ui.hidden) ? ui.hidden.filter((p) => typeof p === "string") : [];
     customOrder.value = await loadOrder(path);
     favoriteList.value = await loadFavorites(path);
     selected.value = null;
@@ -183,11 +269,29 @@ export const useVaultStore = defineStore("vault", () => {
 
   async function refresh(): Promise<void> {
     if (!root.value) return;
+    const path = root.value;
     try {
-      tree.value = await api.scanVault(root.value);
+      const nodes = await scan(path);
+      if (root.value === path) tree.value = nodes;
     } catch (e) {
       notice().report("刷新目录失败", e);
     }
+  }
+
+  /**
+   * 新建或移入的项排在所在文件夹自定义顺序的末尾。在 refresh 之后调用，才能拿到同一文件夹里的其他项；
+   * 这个文件夹还没有顺序列表时，先按当前显示的顺序（未排过的按名称）建一份。
+   */
+  async function appendToOrder(path: string): Promise<void> {
+    // 表格簿里的表由簿内的 .book.json 记顺序，由 Rust 端维护
+    if (bookOf(path)) return;
+    const dir = dirOf(path);
+    const me = baseName(path);
+    const parent = dir ? node(dir)?.children : tree.value;
+    if (!parent) return;
+    const list = customOrder.value[dir] ?? sortTree(parent, "custom", false, customOrder.value, dir, false).map((c) => baseName(c.path));
+    customOrder.value = { ...customOrder.value, [dir]: [...list.filter((x) => x !== me), me] };
+    await saveOrder();
   }
 
   function node(path: string) {
@@ -218,21 +322,43 @@ export const useVaultStore = defineStore("vault", () => {
     expanded.value = next;
   }
 
-  /** 新建的目标文件夹：选中的文件夹 → 选中项或当前笔记所在文件夹 → 根目录 */
+  /** 新建的目标文件夹：选中的文件夹 → 选中项或当前笔记所在文件夹 → 根目录；不会落在表格簿里面 */
   function targetDir(): string {
     if (selected.value) {
       const n = node(selected.value);
-      if (n) return n.isDir ? n.path : dirOf(n.path);
+      if (n) return outsideBook(n.isDir && !n.book ? n.path : dirOf(n.path));
     }
     const activePath = useTabsStore().activePath;
-    return activePath ? dirOf(activePath) : "";
+    return outsideBook(activePath ? dirOf(activePath) : "");
+  }
+
+  /** 在 dir 下新建笔记 / 图。dir 是表格簿时作为新的一张表加到最后，名称重复时加序号 */
+  async function createDocIn(dir: string, kind: DocKind, name?: string): Promise<string> {
+    if (!root.value) throw new Error("没有打开笔记库");
+    return isBookPath(dir) ? api.createSheet(root.value, dir, kind, name) : api.createNote(root.value, dir, name, kind);
+  }
+
+  async function newBook(dir = targetDir()): Promise<void> {
+    if (!root.value) return;
+    try {
+      const rel = await api.createBook(root.value, outsideBook(dir));
+      await refresh();
+      await appendToOrder(rel);
+      reveal(rel);
+      selected.value = rel;
+      await useBookStore().openBook(rel);
+      renaming.value = rel;
+    } catch (e) {
+      notice().report("新建表格簿失败", e);
+    }
   }
 
   async function newDoc(kind: DocKind, dir = targetDir()): Promise<void> {
     if (!root.value) return;
     try {
-      const rel = await api.createNote(root.value, dir, undefined, kind);
+      const rel = await api.createNote(root.value, outsideBook(dir), undefined, kind);
       await refresh();
+      await appendToOrder(rel);
       reveal(rel);
       selected.value = rel;
       await useTabsStore().open(rel);
@@ -249,6 +375,7 @@ export const useVaultStore = defineStore("vault", () => {
     try {
       const rel = await api.createFolder(root.value, dir);
       await refresh();
+      await appendToOrder(rel);
       reveal(rel);
       selected.value = rel;
       renaming.value = rel;
@@ -259,7 +386,18 @@ export const useVaultStore = defineStore("vault", () => {
 
   function remapState(from: string, to: string) {
     expanded.value = new Set([...expanded.value].map((p) => remapPath(p, from, to)));
+    // 表格簿上次停在哪张表：表格簿或表改名、移动后跟着走
+    if (root.value) {
+      const settings = useSettingsStore();
+      const sheets = settings.vaultUi(root.value).bookSheets ?? {};
+      if (Object.entries(sheets).some(([b, s]) => isWithin(b, from) || isWithin(s, from))) {
+        const next: Record<string, string> = {};
+        for (const [b, s] of Object.entries(sheets)) next[remapPath(b, from, to)] = remapPath(s, from, to);
+        settings.patchVaultUi(root.value, { bookSheets: next });
+      }
+    }
     if (selected.value) selected.value = remapPath(selected.value, from, to);
+    if (hidden.value.some((p) => isWithin(p, from))) hidden.value = hidden.value.map((p) => remapPath(p, from, to));
     if (favoriteList.value.some((p) => isWithin(p, from))) {
       void setFavorites(favoriteList.value.map((p) => remapPath(p, from, to)));
     }
@@ -338,8 +476,15 @@ export const useVaultStore = defineStore("vault", () => {
 
   async function move(path: string, targetDir: string): Promise<string | null> {
     if (dirOf(path) === targetDir) return path;
+    if (isBookPath(targetDir)) {
+      notice().report("无法移动", "不能把文件移进表格簿，请在表格簿里用“+”新建表");
+      return null;
+    }
     const rel = await relocate(path, "移动", (r) => api.move(r, path, targetDir));
-    if (rel) expand(targetDir);
+    if (rel) {
+      expand(targetDir);
+      if (rel !== path) await appendToOrder(rel);
+    }
     return rel;
   }
 
@@ -360,12 +505,15 @@ export const useVaultStore = defineStore("vault", () => {
     await saveOrder();
   }
 
-  async function trash(path: string): Promise<void> {
-    if (!root.value) return;
+  /** 删除（移入回收站）；返回是否真的删除了 */
+  async function trash(path: string): Promise<boolean> {
+    if (!root.value) return false;
     const n = node(path);
-    if (!n) return;
+    if (!n) return false;
     const kind = docKind(path);
-    const what = n.isDir
+    const what = n.book
+      ? `表格簿“${n.name}”及其中的所有表`
+      : n.isDir
       ? `文件夹“${n.name}”及其中的所有内容`
       : kind === "note" || !kind ? `笔记“${n.name}”及其附件` : `${DOC_LABEL[kind]}“${n.name}”`;
     const ok = await ask(`确定删除${what}吗？\n\n将移入笔记库的回收站（.ttnote/trash），之后可以恢复。`, {
@@ -374,7 +522,7 @@ export const useVaultStore = defineStore("vault", () => {
       okLabel: "删除",
       cancelLabel: "取消",
     });
-    if (!ok) return;
+    if (!ok) return false;
     const tabs = useTabsStore();
     // 先保存，保证回收站里是最新内容；保存失败时先问，避免未保存的修改被丢掉
     if (!(await tabs.flushUnder(path))) {
@@ -386,13 +534,13 @@ export const useVaultStore = defineStore("vault", () => {
         okLabel: "放弃修改并删除",
         cancelLabel: "取消",
       });
-      if (!discard) return;
+      if (!discard) return false;
     }
     try {
       await api.trash(root.value, path);
     } catch (e) {
       notice().report("删除失败", e);
-      return;
+      return false;
     }
     tabs.dropUnder(path);
     expanded.value = new Set([...expanded.value].filter((p) => !isWithin(p, path)));
@@ -406,13 +554,40 @@ export const useVaultStore = defineStore("vault", () => {
     if (favoriteList.value.some((p) => isWithin(p, path))) {
       void setFavorites(favoriteList.value.filter((p) => !isWithin(p, path)));
     }
+    hidden.value = hidden.value.filter((p) => !isWithin(p, path));
     await refresh();
     useSearchStore().schedule();
+    return true;
+  }
+
+  /** 从文件树中隐藏（不影响搜索、快速打开和链接） */
+  function hide(path: string) {
+    if (!path || hidden.value.includes(path)) return;
+    hidden.value = [...hidden.value, path];
+    if (selected.value && isWithin(selected.value, path)) selected.value = null;
+    if (renaming.value && isWithin(renaming.value, path)) renaming.value = null;
+  }
+
+  function unhide(path: string) {
+    hidden.value = hidden.value.filter((p) => p !== path);
+  }
+
+  function unhideAll() {
+    hidden.value = [];
   }
 
   function setSort(key: SortKey, desc = sortDesc.value) {
     sortKey.value = key;
     sortDesc.value = desc;
+    if (root.value) void writeSort(root.value, { key, desc });
+  }
+
+  /** 同步前调用：没有打开笔记库时提示，并打开“笔记库”对话框以便新建或打开 */
+  function requireForSync(): boolean {
+    if (root.value) return true;
+    notice().inform(NEED_VAULT_FOR_SYNC);
+    useUiStore().vaultOpen = true;
+    return false;
   }
 
   function absolutePath(path: string): string {
@@ -424,8 +599,8 @@ export const useVaultStore = defineStore("vault", () => {
 
   return {
     root, tree, sortedTree, expanded, selected, renaming, sortKey, sortDesc, customOrder, favorites, loadError, switching, name,
-    openVault, pickAndOpen, refresh, node, toggle, expand, collapseAll, reveal, targetDir,
-    newNote, newDoc, newFolder, rename, move, place, trash, setSort, absolutePath,
-    favoriteList, toggleFavorite, reorderFavorite, notePaths, docPaths,
+    openVault, pickAndOpen, refresh, reloadConfig, appendToOrder, node, toggle, expand, collapseAll, reveal, targetDir,
+    newNote, newDoc, newBook, createDocIn, newFolder, rename, move, place, trash, setSort, absolutePath, requireForSync,
+    favoriteList, toggleFavorite, reorderFavorite, notePaths, docPaths, bookPaths, linkPaths, hidden, hide, unhide, unhideAll,
   };
 });

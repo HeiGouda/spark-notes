@@ -97,6 +97,7 @@ onBeforeUnmount(() => {
             @blur="finishRename(c.id, ($event.target as HTMLInputElement).value)"
           />
           <span v-else class="name" :title="c.title">{{ c.title }}</span>
+          <span v-if="chat.isRunning(c.id)" class="chat-run">生成中</span>
           <button class="btn more" type="button" title="更多" @click.stop="openMenu($event, c.id)"><Icon name="dots" sm /></button>
         </div>
       </template>

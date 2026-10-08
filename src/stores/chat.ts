@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, reactive, ref, shallowRef } from "vue";
+import { computed, reactive, ref } from "vue";
 import { api, baseName, type ChatSummary } from "../lib/api";
 import {
   CHAT_SYSTEM,
@@ -19,7 +19,7 @@ import {
   type ChatMsg,
   type Conversation,
 } from "../lib/chat";
-import { sendBudget } from "../lib/aiModels";
+import { modelLabel, sendBudget, type AiModelEntry } from "../lib/aiModels";
 import { splitFrontMatter } from "../lib/frontmatter";
 import { AiCancelled, useAiStore, type AiRun } from "./ai";
 import { useSettingsStore } from "./settings";
@@ -43,8 +43,19 @@ export const useChatStore = defineStore("chat", () => {
   const saved = ref(false);
   const draft = ref("");
   const pending = ref<PendingAttachment[]>([]);
-  const running = ref(false);
   const loadError = ref("");
+  /** 正在生成回复的会话。切换会话不取消请求，每个会话各自一份 */
+  const runs = new Map<string, AiRun>();
+  const runningIds = ref(new Set<string>());
+  /** 生成中的会话对象：切回来时用它，避免从磁盘读到还没写完的内容 */
+  const live = new Map<string, Conversation>();
+  /** 生成过程中被删除的会话，结束后不再写回 */
+  const dropped = new Set<string>();
+  /** 当前打开的会话是否正在生成 */
+  const running = computed(() => {
+    const id = current.value?.id;
+    return !!id && runningIds.value.has(id);
+  });
   /** `会话 id/文件名` → data URL（显示与发送共用，避免不同会话的同名图片串掉） */
   const images = reactive(new Map<string, string>());
   const imageKey = (id: string, file: string) => `${id}/${file}`;
@@ -52,9 +63,22 @@ export const useChatStore = defineStore("chat", () => {
   function keepImagesOf(id: string) {
     for (const key of [...images.keys()]) if (!key.startsWith(`${id}/`)) images.delete(key);
   }
-  const run = shallowRef<AiRun | null>(null);
+  function setRun(id: string, handle: AiRun | null) {
+    if (handle) runs.set(id, handle);
+    else runs.delete(id);
+    runningIds.value = new Set(runs.keys());
+  }
 
-  const model = computed(() => current.value?.model || settings.aiModel);
+  function isRunning(id: string): boolean {
+    return runningIds.value.has(id);
+  }
+
+  /** 会话用的模型：会话里记的是模型 id（旧会话是模型名），已从设置里删掉时用默认模型 */
+  function modelOf(c: Conversation | null): AiModelEntry | null {
+    return (c?.model ? settings.findModel(c.model) : null) ?? settings.defaultModel;
+  }
+
+  const model = computed(() => modelOf(current.value));
   const context = computed(() => settings.contextOf(model.value));
   const budget = computed(() => sendBudget(context.value.tokens));
 
@@ -84,18 +108,17 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  /** 离开一个没存盘的新对话时，删掉它已经保存的附件图片 */
+  /** 离开一个没存盘的新对话时，删掉它已经保存的附件图片。正在生成的会话不删 */
   async function discardUnsaved() {
     const c = current.value;
-    if (!c || saved.value) return;
+    if (!c || saved.value || runs.has(c.id)) return;
     await api.chatDelete(c.id).catch((e) => notice().report("清理未发送的图片失败", e));
   }
 
   async function newChat() {
-    if (running.value) stop();
     if (current.value && !saved.value && !current.value.messages.length) return;
     await discardUnsaved();
-    current.value = emptyConversation(settings.aiModel);
+    current.value = emptyConversation(settings.defaultModel?.id ?? "");
     keepImagesOf(current.value.id);
     saved.value = false;
     draft.value = "";
@@ -104,10 +127,19 @@ export const useChatStore = defineStore("chat", () => {
 
   async function open(id: string) {
     if (current.value?.id === id) return;
-    if (running.value) stop();
     await discardUnsaved();
+    const generating = live.get(id);
+    if (generating) {
+      current.value = generating;
+      keepImagesOf(id);
+      saved.value = true;
+      draft.value = "";
+      pending.value = [];
+      void loadImages(generating);
+      return;
+    }
     try {
-      current.value = parseConversation(await api.chatRead(id), settings.aiModel);
+      current.value = parseConversation(await api.chatRead(id), settings.defaultModel?.id ?? "");
       keepImagesOf(current.value.id);
       saved.value = true;
       draft.value = "";
@@ -139,23 +171,29 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** 写入会话文件并更新列表。当前打开的会话另把 saved 标上 */
+  async function writeConversation(c: Conversation) {
+    c.updatedAt = Date.now();
+    await api.chatWrite(c.id, JSON.stringify(c));
+    const summary = { id: c.id, title: c.title, updatedAt: c.updatedAt };
+    list.value = [summary, ...list.value.filter((s) => s.id !== c.id)];
+    if (current.value?.id === c.id) saved.value = true;
+  }
+
   async function persist() {
     const c = current.value;
     if (!c) return;
-    c.updatedAt = Date.now();
     try {
-      await api.chatWrite(c.id, JSON.stringify(c));
-      saved.value = true;
-      const summary = { id: c.id, title: c.title, updatedAt: c.updatedAt };
-      list.value = [summary, ...list.value.filter((s) => s.id !== c.id)];
+      await writeConversation(c);
     } catch (e) {
       notice().report("保存会话失败", e);
     }
   }
 
-  function setModel(name: string) {
-    if (!current.value || current.value.model === name) return;
-    current.value.model = name;
+  /** id 为设置里模型的 id */
+  function setModel(id: string) {
+    if (!current.value || current.value.model === id) return;
+    current.value.model = id;
     if (saved.value) void persist();
   }
 
@@ -245,7 +283,7 @@ export const useChatStore = defineStore("chat", () => {
 
   async function send() {
     const c = current.value;
-    if (!c || running.value || (!draft.value.trim() && !pending.value.length)) return;
+    if (!c || runs.has(c.id) || (!draft.value.trim() && !pending.value.length)) return;
     if (!ai.ensureConfigured()) return;
     const next = draftMessage();
     const p = planContext(c.messages, next, budget.value);
@@ -255,28 +293,36 @@ export const useChatStore = defineStore("chat", () => {
     }
     if (!c.messages.length) c.title = autoTitle(next.content || next.attachments?.[0]?.name || "");
     c.messages.push(next);
+    live.set(c.id, c);
     draft.value = "";
     pending.value = [];
-    await persist();
-    await answer();
+    try {
+      await writeConversation(c);
+    } catch (e) {
+      notice().report("保存会话失败", e);
+    }
+    await answer(c);
   }
 
-  /** 按当前会话的消息请求回复；每次请求只带本会话的内容 */
-  async function answer() {
-    const c = current.value;
-    if (!c) return;
+  /** 按这个会话的消息请求回复；切换到别的会话后，回复仍然写回这个会话 */
+  async function answer(c: Conversation) {
+    live.set(c.id, c);
     const last = c.messages[c.messages.length - 1];
-    if (!last || last.role !== "user") return;
+    if (!last || last.role !== "user") {
+      if (!runs.has(c.id)) live.delete(c.id);
+      return;
+    }
     const p = planContext(c.messages.slice(0, -1), last, budget.value);
     const sent = [...p.included, last];
     await loadImages(c);
     const messages = [{ role: "system" as const, content: CHAT_SYSTEM }, ...sent.map((m) => toApiMessage(m, (f) => images.get(imageKey(c.id, f))))];
-    const reply: ChatMsg = { id: newId(), role: "assistant", content: "", model: model.value, createdAt: Date.now() };
+    const using = modelOf(c);
+    const reply: ChatMsg = { id: newId(), role: "assistant", content: "", model: using ? modelLabel(using) : "", createdAt: Date.now() };
     c.messages.push(reply);
     const target = c.messages[c.messages.length - 1];
-    running.value = true;
-    const handle = ai.run(messages, (full) => (target.content = full), model.value);
-    run.value = handle;
+    const handle = ai.run(messages, (full) => (target.content = full), using);
+    setRun(c.id, handle);
+    live.set(c.id, c);
     try {
       target.content = await handle.done;
       if (!target.content.trim()) target.error = "AI 没有返回内容";
@@ -288,28 +334,36 @@ export const useChatStore = defineStore("chat", () => {
         c.messages.splice(c.messages.indexOf(target), 1);
       }
     } finally {
-      if (run.value === handle) {
-        run.value = null;
-        running.value = false;
+      if (runs.get(c.id) === handle) setRun(c.id, null);
+      if (dropped.delete(c.id)) {
+        live.delete(c.id);
+      } else {
+        try {
+          await writeConversation(c);
+        } catch (e) {
+          notice().report("保存会话失败", e);
+        }
+        if (!runs.has(c.id)) live.delete(c.id);
       }
-      if (current.value?.id === c.id) await persist();
-      else await api.chatWrite(c.id, JSON.stringify(c)).catch((e) => notice().report("保存会话失败", e));
     }
   }
 
-  /** 停止后保留已收到的内容 */
+  /** 停止当前会话的生成，保留已收到的内容。其他会话的生成不受影响 */
   function stop() {
-    run.value?.cancel();
-    run.value = null;
-    running.value = false;
+    const id = current.value?.id;
+    if (!id) return;
+    const handle = runs.get(id);
+    if (!handle) return;
+    setRun(id, null);
+    handle.cancel();
   }
 
   /** 重新生成最后一条回复 */
   async function regenerate() {
     const c = current.value;
-    if (!c || running.value) return;
+    if (!c || runs.has(c.id)) return;
     if (c.messages[c.messages.length - 1]?.role === "assistant") c.messages.pop();
-    await answer();
+    await answer(c);
   }
 
   /* ---------- 会话管理 ---------- */
@@ -318,7 +372,7 @@ export const useChatStore = defineStore("chat", () => {
     const t = title.trim();
     if (!t) return;
     try {
-      const c = current.value?.id === id ? current.value : parseConversation(await api.chatRead(id), settings.aiModel);
+      const c = current.value?.id === id ? current.value : live.get(id) ?? parseConversation(await api.chatRead(id), settings.defaultModel?.id ?? "");
       c.title = t;
       await api.chatWrite(id, JSON.stringify(c));
       list.value = list.value.map((s) => (s.id === id ? { ...s, title: t } : s));
@@ -329,10 +383,14 @@ export const useChatStore = defineStore("chat", () => {
 
   async function remove(id: string) {
     try {
-      if (current.value?.id === id) {
-        stop();
-        current.value = null;
+      const handle = runs.get(id);
+      if (handle) {
+        dropped.add(id);
+        setRun(id, null);
+        live.delete(id);
+        handle.cancel();
       }
+      if (current.value?.id === id) current.value = null;
       await api.chatDelete(id);
       list.value = list.value.filter((s) => s.id !== id);
       if (!current.value) {
@@ -346,6 +404,6 @@ export const useChatStore = defineStore("chat", () => {
 
   return {
     list, current, saved, draft, pending, running, loadError, images, model, context, budget, plan,
-    loadList, newChat, open, ensureOpen, setModel, addFiles, addPaths, addNote, imageSrc, removePending, send, stop, regenerate, rename, remove,
+    loadList, newChat, open, ensureOpen, setModel, addFiles, addPaths, addNote, imageSrc, removePending, send, stop, isRunning, regenerate, rename, remove,
   };
 });

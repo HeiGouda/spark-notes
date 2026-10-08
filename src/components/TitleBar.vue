@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Icon from "./Icon.vue";
 import MenuList, { type MenuEntry } from "./MenuList.vue";
@@ -7,10 +7,12 @@ import { runCommand, shortcutOf, tipFor } from "../lib/commands";
 import { displayShortcut } from "../lib/shortcut";
 import { isMac } from "../lib/platform";
 import { useSettingsStore } from "../stores/settings";
-import { useTabsStore } from "../stores/tabs";
+import { useTabsStore, type Tab } from "../stores/tabs";
+import { useBookStore } from "../stores/book";
+import { bookName } from "../lib/book";
 import { DOC_ICON } from "../lib/doctype";
 import { useNoticeStore } from "../stores/notice";
-import { useVaultStore } from "../stores/vault";
+import { NEED_VAULT_FOR_SYNC, useVaultStore } from "../stores/vault";
 import { useGitStore } from "../stores/git";
 import { useWebdavStore } from "../stores/webdav";
 import { useUiStore } from "../stores/ui";
@@ -19,6 +21,7 @@ import { THEMES, isDarkTheme, themeCommandId, themeName } from "../lib/themes";
 
 const settings = useSettingsStore();
 const tabs = useTabsStore();
+const book = useBookStore();
 const vault = useVaultStore();
 const git = useGitStore();
 const webdav = useWebdavStore();
@@ -34,6 +37,7 @@ const MENU: MenuEntry[] = [
       { kind: "item", label: "新建笔记", command: "file.newNote" },
       { kind: "item", label: "新建思维导图", command: "file.newMind" },
       { kind: "item", label: "新建流程图", command: "file.newFlow" },
+      { kind: "item", label: "新建表格簿", command: "file.newBook" },
       { kind: "item", label: "新建文件夹", command: "file.newFolder" },
       { kind: "sep" },
       { kind: "item", label: "打开笔记库…", command: "file.openVault" },
@@ -68,6 +72,7 @@ const MENU: MenuEntry[] = [
       { kind: "item", label: "显示侧栏", command: "view.toggleSidebar", checked: () => settings.sidebarVisible },
       { kind: "item", label: "显示格式工具栏", command: "view.toggleToolbar", checked: () => settings.toolbarVisible },
       { kind: "item", label: "显示状态栏", command: "view.toggleStatusbar", checked: () => settings.statusbarVisible },
+      { kind: "item", label: "正文自适应宽度", command: "view.toggleDocWidth", checked: () => settings.editorWidthMode === "fill" },
       { kind: "sep" },
       {
         kind: "sub", label: "主题", items: THEMES.flatMap((t, i): MenuEntry[] => [
@@ -127,7 +132,7 @@ function gitSyncActive() {
 }
 
 function onSync(e: MouseEvent) {
-  if (!vault.root) return;
+  if (!vault.requireForSync()) return;
   if (webdav.mode === "webdav") {
     openSyncMenu(e);
     return;
@@ -155,19 +160,54 @@ async function winAction(fn: () => Promise<void>) {
   }
 }
 
-function onTabMouseUp(e: MouseEvent, path: string) {
-  if (e.button === 1) void tabs.close(path);
+/** 顶部标签页：同一个表格簿里打开的表合并成一项，其余一个文件一项 */
+const items = computed(() => {
+  const seen = new Set<string>();
+  const out: { key: string; tab: Tab; idx: number; book: boolean; name: string }[] = [];
+  tabs.tabs.forEach((tab, idx) => {
+    const key = tabs.groupKey(tab.path);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const book = key !== tab.path;
+    out.push({ key, tab, idx, book, name: book ? bookName(key) : tab.name });
+  });
+  return out;
+});
+
+function isActiveItem(key: string) {
+  return ui.mainView === "note" && !!tabs.activePath && tabs.groupKey(tabs.activePath) === key;
 }
 
-function onTabMenu(e: MouseEvent, path: string) {
-  const idx = tabs.tabs.findIndex((t) => t.path === path);
+function activateItem(item: (typeof items.value)[number]) {
+  ui.showNotes();
+  if (item.book) void book.openBook(item.key);
+  else tabs.activate(item.tab.path);
+}
+
+function onTabMouseUp(e: MouseEvent, path: string) {
+  if (e.button === 1) void tabs.closeGroup(path);
+}
+
+function onTabMenu(e: MouseEvent, item: (typeof items.value)[number]) {
+  const at = items.value.findIndex((i) => i.key === item.key);
+  const pathsOf = (keys: Set<string>) => tabs.tabs.filter((t) => keys.has(tabs.groupKey(t.path))).map((t) => t.path);
   ctxMenu.show(e, [
-    { kind: "item", label: "关闭", hint: displayShortcut(shortcutOf("tab.close")), action: () => tabs.close(path) },
-    { kind: "item", label: "关闭其他", action: () => tabs.closeOthers(path), disabled: tabs.tabs.length < 2 },
-    { kind: "item", label: "关闭右侧", action: () => tabs.closeRight(path), disabled: idx === tabs.tabs.length - 1 },
+    { kind: "item", label: "关闭", hint: displayShortcut(shortcutOf("tab.close")), action: () => tabs.closeGroup(item.tab.path) },
+    {
+      kind: "item",
+      label: "关闭其他",
+      action: () => tabs.closeMany(pathsOf(new Set(items.value.filter((i) => i.key !== item.key).map((i) => i.key)))),
+      disabled: items.value.length < 2,
+    },
+    {
+      kind: "item",
+      label: "关闭右侧",
+      action: () => tabs.closeMany(pathsOf(new Set(items.value.slice(at + 1).map((i) => i.key)))),
+      disabled: at === items.value.length - 1,
+    },
     { kind: "sep" },
-    { kind: "item", label: "固定标签页", action: () => tabs.pin(path), disabled: !tabs.tabs[idx]?.preview },
-    { kind: "item", label: "在文件树中定位", action: () => { vault.reveal(path); vault.selected = path; } },
+    { kind: "item", label: "固定标签页", action: () => tabs.pin(item.tab.path), disabled: item.book || !item.tab.preview },
+    { kind: "item", label: "在文件树中定位", action: () => { vault.reveal(item.key); vault.selected = item.key; } },
   ]);
 }
 
@@ -217,33 +257,34 @@ function onTabDrop(idx: number) {
         <span class="x" :title="tipFor('关闭', 'tab.close')" @click.stop="ui.closeChat()"><Icon name="close" sm /></span>
       </button>
       <button
-        v-for="(t, i) in tabs.tabs"
-        :key="t.path"
+        v-for="item in items"
+        :key="item.key"
         class="tab"
-        :class="{ 'is-active': ui.mainView === 'note' && t.path === tabs.activePath, 'is-preview': t.preview, 'is-drop': dropAt === i && dragFrom !== i }"
+        :class="{ 'is-active': isActiveItem(item.key), 'is-preview': !item.book && item.tab.preview, 'is-drop': dropAt === item.idx && dragFrom !== item.idx }"
         role="tab"
-        :aria-selected="ui.mainView === 'note' && t.path === tabs.activePath"
-        :title="t.path"
+        :aria-selected="isActiveItem(item.key)"
+        :title="item.key"
         draggable="true"
-        @click="ui.showNotes(); tabs.activate(t.path)"
-        @dblclick="tabs.pin(t.path)"
-        @mouseup="onTabMouseUp($event, t.path)"
-        @contextmenu="onTabMenu($event, t.path)"
-        @dragstart="onTabDragStart($event, i)"
-        @dragover="onTabDragOver($event, i)"
-        @drop.prevent="onTabDrop(i)"
+        @click="activateItem(item)"
+        @dblclick="!item.book && tabs.pin(item.tab.path)"
+        @mouseup="onTabMouseUp($event, item.tab.path)"
+        @contextmenu="onTabMenu($event, item)"
+        @dragstart="onTabDragStart($event, item.idx)"
+        @dragover="onTabDragOver($event, item.idx)"
+        @drop.prevent="onTabDrop(item.idx)"
         @dragend="dragFrom = dropAt = null"
       >
-        <Icon v-if="t.kind !== 'note'" class="tab-kind" :name="DOC_ICON[t.kind]" sm />
-        <span class="name">{{ t.name }}</span>
-        <span class="x" :title="tipFor('关闭', 'tab.close')" @click.stop="tabs.close(t.path)"><Icon name="close" sm /></span>
+        <Icon v-if="item.book" class="tab-kind" name="book" sm />
+        <Icon v-else-if="item.tab.kind !== 'note'" class="tab-kind" :name="DOC_ICON[item.tab.kind]" sm />
+        <span class="name">{{ item.name }}</span>
+        <span class="x" :title="tipFor('关闭', 'tab.close')" @click.stop="tabs.closeGroup(item.tab.path)"><Icon name="close" sm /></span>
       </button>
       <button class="btn tab-add" :title="tipFor('新建笔记', 'file.newNote')" :disabled="!vault.root" @click="run('file.newNote')"><Icon name="plus" sm /></button>
     </div>
     <div class="tb-drag" data-tauri-drag-region />
     <div class="tb-right" data-tauri-drag-region>
       <div ref="syncHost" class="sync-host">
-        <button class="btn sync" :class="{ 'is-active': syncMenu }" :title="syncMenu ? undefined : (webdav.mode === 'webdav' ? webdav.title : (gitSyncActive() ? git.syncTitle : '尚未配置同步\n点击打开同步设置'))" :disabled="!vault.root" @click="onSync($event)">
+        <button class="btn sync" :class="{ 'is-active': syncMenu }" :title="syncMenu ? undefined : !vault.root ? NEED_VAULT_FOR_SYNC : (webdav.mode === 'webdav' ? webdav.title : (gitSyncActive() ? git.syncTitle : '尚未配置同步\n点击打开同步设置'))" @click="onSync($event)">
           <Icon name="sync" />
           <span v-if="webdav.mode === 'webdav' && webdav.badge !== 'unknown'" class="dot" :class="webdav.badge === 'failed' ? 'is-bad' : `is-${webdav.badge}`" />
           <span v-else-if="gitSyncActive() && git.dirty" class="dot git-dirty" />

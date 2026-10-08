@@ -234,6 +234,12 @@ export const useGitStore = defineStore("git", () => {
     pendingLocal = "ask";
     if (action.notice) useNoticeStore().inform(action.notice);
     await refresh();
+    if (kind === "pull" || kind === "sync") {
+      // 拉取期间文件时间只读不记，完成后重新扫描；`.ttnote/` 不在文件监听范围内，同步下来的排序等配置要重新读取
+      const vault = useVaultStore();
+      await vault.refresh();
+      await vault.reloadConfig();
+    }
     return true;
   }
 

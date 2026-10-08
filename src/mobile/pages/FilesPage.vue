@@ -7,13 +7,13 @@ import { DOC_TAG, docKind, type DocKind } from "../../lib/doctype";
 import type { IconName } from "../icons";
 import { favoriteNotes, folderItems, folderLabel, timeLabel } from "../browse";
 import { useMobile } from "../store";
-import { back, go, open } from "../nav";
+import { back, go, open, openDoc } from "../nav";
 
 const props = defineProps<{ path: string }>();
 const store = useMobile();
 
 const synced = computed(() => (store.currentId ? (store.meta[store.currentId]?.lastSyncMs ?? 0) > 0 : false));
-const items = computed(() => folderItems(store.tree, props.path, store.order));
+const items = computed(() => folderItems(store.tree, props.path, store.order, store.sort));
 const favs = computed(() => (props.path ? [] : favoriteNotes(store.tree, store.favorites)));
 const favSet = computed(() => new Set(store.favorites));
 const title = computed(() => props.path.slice(props.path.lastIndexOf("/") + 1));
@@ -23,15 +23,18 @@ function kindOf(n: TreeNode): DocKind {
   return docKind(n.path) ?? "note";
 }
 
+/** 表格簿在磁盘上是文件夹，但这里像文件一样直接打开 */
+const isFolder = (n: TreeNode) => n.isDir && !n.book;
+
 function iconOf(n: TreeNode): IconName {
+  if (n.book) return "book";
   const k = kindOf(n);
   return k === "note" ? "note" : k;
 }
 
 function openNode(n: TreeNode) {
-  if (n.isDir) go({ p: "files", path: n.path });
-  else if (kindOf(n) === "note") go({ p: "note", path: n.path });
-  else go({ p: "diagram", path: n.path });
+  if (isFolder(n)) go({ p: "files", path: n.path });
+  else openDoc(n.path);
 }
 
 /* 下拉刷新：列表在顶部时往下拖超过 100px 松手 */
@@ -100,13 +103,13 @@ function onTouchEnd() {
           <div class="sec">全部</div>
         </template>
         <button v-for="n in items" :key="n.path" class="row" @click="openNode(n)">
-          <span class="ic"><Icon :name="n.isDir ? 'folder' : iconOf(n)" :size="20" /></span>
+          <span class="ic"><Icon :name="isFolder(n) ? 'folder' : iconOf(n)" :size="20" /></span>
           <span class="main">
             <div class="name">{{ n.name }}<span v-if="!n.isDir && DOC_TAG[kindOf(n)]" class="badge">{{ DOC_TAG[kindOf(n)] }}</span></div>
-            <div class="sub">{{ n.isDir ? `${n.children.length} 项` : timeLabel(n.modifiedMs) }}</div>
+            <div class="sub">{{ isFolder(n) ? `${n.children.length} 项` : n.book ? `${n.children.length} 张表 · ${timeLabel(n.modifiedMs)}` : timeLabel(n.modifiedMs) }}</div>
           </span>
           <span class="end">
-            <Icon v-if="n.isDir" name="chev" :size="18" />
+            <Icon v-if="isFolder(n)" name="chev" :size="18" />
             <span v-else-if="favSet.has(n.path)" class="star"><Icon name="star" :size="14" /></span>
           </span>
         </button>

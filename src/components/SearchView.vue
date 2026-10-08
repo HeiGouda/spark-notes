@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { api, dirOf, type SearchHit } from "../lib/api";
 import { DOC_ICON, DOC_LABEL, docKind } from "../lib/doctype";
+import { SHEET_SEP, bookName, bookOf } from "../lib/book";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { useSearchStore } from "../stores/search";
@@ -103,8 +104,8 @@ function open(hit: SearchHit, pin = false) {
         @keydown.enter="open(h)"
       >
         <div class="result-title">
-          <Icon :name="DOC_ICON[docKind(h.path) ?? 'note']" sm />{{ h.title }}
-          <span class="result-dir">{{ [kindTag(h.path), dirOf(h.path)].filter(Boolean).join(" · ") }}</span>
+          <Icon :name="DOC_ICON[docKind(h.path) ?? 'note']" sm /><span v-if="bookOf(h.path)" class="result-dir">{{ bookName(bookOf(h.path)!) }}{{ SHEET_SEP }}</span>{{ h.title }}
+          <span class="result-dir">{{ [kindTag(h.path), dirOf(bookOf(h.path) ?? h.path)].filter(Boolean).join(" · ") }}</span>
         </div>
         <div class="result-snip">
           <template v-for="(s, i) in h.snippet" :key="i"><mark v-if="s.hit">{{ s.text }}</mark><template v-else>{{ s.text }}</template></template>

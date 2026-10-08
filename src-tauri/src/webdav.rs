@@ -7,6 +7,7 @@ use crate::doctype;
 use crate::fsops;
 use crate::history;
 use crate::secret::{read_secret, write_secret};
+use crate::times;
 use crate::vault::{self, atomic_write};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -99,6 +100,11 @@ pub struct RemoteInfo {
     pub missing: bool,
 }
 
+/// 正在预览或同步（期间文件和 times.json 随时可能被写入）
+pub fn busy() -> bool {
+    SYNC_LOCK.try_lock().is_err()
+}
+
 /// 笔记、思维导图、流程图、附件（`*.assets/` 与根目录 `assets/`）和 `.ttnote/config/`。
 pub fn should_sync(rel: &str) -> bool {
     let rel = rel.replace('\\', "/");
@@ -120,7 +126,8 @@ pub fn should_sync(rel: &str) -> bool {
     if rel.split('/').any(|p| p.ends_with(".assets")) && !rel.ends_with(".assets") {
         return true;
     }
-    doctype::is_doc(&rel)
+    // 表格簿里记录表顺序的 .book.json
+    crate::book::is_manifest_path(&rel) || doctype::is_doc(&rel)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -365,6 +372,9 @@ fn classify(dav: &dyn Dav, rel: &str, scan: &Scan, state: &mut StateFile) -> Res
             if !local_changed && !remote_changed {
                 record(state, rel, l, token);
                 (None, None)
+            } else if rel == times::REL && !remote_changed {
+                // 文件时间记录：本地改过就上传；同步（云端为准）时不用云端旧版覆盖本地
+                (Some(Update), None)
             } else if !remote_changed {
                 (Some(Update), Some(Overwrite))
             } else if !local_changed {
@@ -372,6 +382,9 @@ fn classify(dav: &dyn Dav, rel: &str, scan: &Scan, state: &mut StateFile) -> Res
             } else if same_content(dav, rel, l, r).map_err(|e| format!("{rel}：{e}"))? {
                 record(state, rel, l, token);
                 (None, None)
+            } else if rel == times::REL {
+                // 两边都改过：执行时合并两份，不需要确认
+                (Some(Update), Some(Update))
             } else {
                 (Some(Overwrite), Some(Overwrite))
             }
@@ -461,7 +474,7 @@ pub fn run(root: &Path, dav: &dyn Dav, direction: Direction, accept: &[String], 
             continue;
         }
         let result = match direction {
-            Direction::Upload => upload_one(root, dav, item, &stamp, &mut state, &mut uploaded, &mut report),
+            Direction::Upload => upload_one(root, dav, item, &scan, &stamp, &mut state, &mut uploaded, &mut report),
             Direction::Download => download_one(root, dav, item, &scan, &mut state, &mut report),
         };
         if let Err(e) = result {
@@ -491,10 +504,30 @@ fn ensure_parent(dav: &dyn Dav, rel: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// times.json 两边自上次同步后都改过：执行时把两份合并（见 `times::merge_stamp`），不覆盖任何一边
+fn times_both_changed(rel: &str, scan: &Scan, state: &StateFile) -> bool {
+    if rel != times::REL {
+        return false;
+    }
+    let (Some(local), Some(token)) = (scan.local.get(rel), scan.tokens.get(rel)) else { return false };
+    state.files.get(rel).is_none_or(|base| base.hash != local.hash && &base.etag != token)
+}
+
+/// 合并后的内容与本地不同时写回本地
+fn merge_times_into_local(path: &Path, local: &[u8], remote: &[u8]) -> Result<(), String> {
+    let merged = times::merge_text(&String::from_utf8_lossy(local), &String::from_utf8_lossy(remote)).into_bytes();
+    if merged != local {
+        write_bytes(path, &merged)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn upload_one(
     root: &Path,
     dav: &dyn Dav,
     item: &PlanItem,
+    scan: &Scan,
     stamp: &TrashStamp,
     state: &mut StateFile,
     uploaded: &mut HashMap<String, String>,
@@ -510,6 +543,10 @@ fn upload_one(
         }
     }
     let path = vault::resolve(root, rel)?;
+    if times_both_changed(rel, scan, state) {
+        let local = fs::read(&path).map_err(|e| format!("读取失败：{e}"))?;
+        merge_times_into_local(&path, &local, &dav.get(rel)?)?;
+    }
     let (size, mtime) = fs::metadata(&path).map(|m| file_stat(&m)).map_err(|e| format!("读取失败：{e}"))?;
     let bytes = fs::read(&path).map_err(|e| format!("读取失败：{e}"))?;
     ensure_parent(dav, rel)?;
@@ -553,7 +590,13 @@ fn download_one(root: &Path, dav: &dyn Dav, item: &PlanItem, scan: &Scan, state:
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
     }
-    write_bytes(&dest, &bytes)?;
+    if times_both_changed(rel, scan, state) {
+        // 记下云端那份的哈希：合并后的本地与它不同，下次上传时会把合并结果传上去
+        let local = fs::read(&dest).map_err(|e| format!("读取失败：{e}"))?;
+        merge_times_into_local(&dest, &local, &bytes)?;
+    } else {
+        write_bytes(&dest, &bytes)?;
+    }
     let token = scan.tokens.get(rel).cloned().unwrap_or_default();
     // 不记录写入后的修改时间：写完到取时间之间用户可能又保存，下次扫描重新计算一次更稳妥
     state.files.insert(rel.to_string(), FileState { hash: hash_bytes(&bytes), etag: token, ..Default::default() });
@@ -1099,6 +1142,9 @@ mod tests {
         assert!(should_sync("路线.mind.mmd"));
         assert!(!should_sync("其他.mmd"));
         assert!(should_sync("周报.assets/a.png"));
+        assert!(should_sync("工作/周报.book/.book.json"));
+        assert!(should_sync("工作/周报.book/本周.md"));
+        assert!(!should_sync("工作/.book.json"));
         assert!(should_sync(".ttnote/config/order.json"));
         assert!(should_sync("assets/a.png"));
         assert!(should_sync("工作/上线流程.flow.mmd"));
@@ -1225,6 +1271,34 @@ mod tests {
         let path = root.join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn times_changed_on_both_sides_merge_without_confirmation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rel = times::REL;
+        let entry = |c: u64, m: u64, h: &str| format!("{{\n  \"a.md\": {{\"created\":{c},\"modified\":{m},\"hash\":\"{h}\"}}\n}}\n");
+        write(tmp.path(), "a.md", "x");
+        write(tmp.path(), rel, &entry(5, 10, "base"));
+        let dav = mem(&[], true);
+        upload(tmp.path(), &dav, &[]);
+        // 另一台改了云端那份，这台又改了本地这份
+        dav.put(rel, entry(4, 30, "remote").as_bytes()).unwrap();
+        write(tmp.path(), rel, &entry(5, 20, "local"));
+        let p = preview(tmp.path(), &dav).unwrap();
+        assert_eq!(steps(&p.download), vec![(rel, Step::Update)]);
+        assert_eq!(steps(&p.upload), vec![(rel, Step::Update)]);
+        let report = download(tmp.path(), &dav, &[]);
+        assert_eq!(report.skipped, 0, "{report:?}");
+        let merged = times::parse(&fs::read_to_string(tmp.path().join(rel)).unwrap());
+        assert_eq!(merged["a.md"], times::Stamp { created: 4, modified: 30, hash: "remote".into() });
+        // 本地只改了时间记录时，同步（云端为准）不覆盖它
+        write(tmp.path(), rel, &entry(1, 40, "newer"));
+        let p = preview(tmp.path(), &dav).unwrap();
+        assert!(p.download.is_empty(), "{p:?}");
+        upload(tmp.path(), &dav, &[]);
+        assert_eq!(times::parse(&cloud(&dav, rel).unwrap())["a.md"].modified, 40);
+        assert!(cloud_trash(&dav).is_empty());
     }
 
     #[test]

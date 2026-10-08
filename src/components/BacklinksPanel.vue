@@ -3,6 +3,7 @@ import { ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { api, type Backlink } from "../lib/api";
 import { wikiLabel } from "../editor/wikilink";
+import { sheetLabel } from "../lib/book";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { useSearchStore } from "../stores/search";
@@ -56,7 +57,7 @@ function openSource(b: Backlink) {
       </button>
       <template v-if="open">
         <a v-for="b in items" :key="b.path + b.line" class="bl-item" href="#" @click.prevent="openSource(b)">
-          <div class="bl-title">{{ b.title }}</div>
+          <div class="bl-title">{{ sheetLabel(b.path) }}</div>
           <div class="bl-snip">
             <template v-for="(s, i) in segments(b.line)" :key="i"><b v-if="s.link">{{ s.text }}</b><template v-else>{{ s.text }}</template></template>
           </div>

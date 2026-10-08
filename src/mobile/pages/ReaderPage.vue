@@ -5,6 +5,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Backlink, type TreeNode } from "../../lib/api";
 import Icon from "../Icon.vue";
 import ReaderSettings from "../ReaderSettings.vue";
+import SheetStrip from "../SheetStrip.vue";
+import { bookName, bookOf } from "../../lib/book";
 import ImageViewer from "../reader/ImageViewer.vue";
 import { renderNote, type Rendered } from "../reader/render";
 import { folderLabel, timeLabel } from "../browse";
@@ -16,12 +18,17 @@ const store = useMobile();
 const doc = ref<Rendered | null>(null);
 const error = ref("");
 const backlinks = ref<Backlink[]>([]);
-const title = props.path.slice(props.path.lastIndexOf("/") + 1).replace(/\.md$/i, "");
+// 表格簿里的表，顶部标题是簿名
+const bookPath = bookOf(props.path);
+const title = bookPath ? bookName(bookPath) : props.path.slice(props.path.lastIndexOf("/") + 1).replace(/\.md$/i, "");
 
+/** 链接能指向的所有文件：笔记、图，以及表格簿本身 */
 function allNotes(nodes: TreeNode[], out: TreeNode[] = []): TreeNode[] {
   for (const n of nodes) {
-    if (n.isDir) allNotes(n.children, out);
-    else out.push(n);
+    if (n.isDir) {
+      if (n.book) out.push(n);
+      allNotes(n.children, out);
+    } else out.push(n);
   }
   return out;
 }
@@ -37,7 +44,7 @@ function scrollToHeading(name: string) {
 }
 
 onMounted(async () => {
-  void store.rememberOpen(props.path);
+  void store.rememberOpen(bookPath ?? props.path);
   const root = store.root;
   if (!root) return;
   try {
@@ -115,6 +122,7 @@ function jump(id: string) {
         </section>
       </article>
     </div>
+    <SheetStrip :path="path" />
     <template v-if="currentOverlay?.t === 'outline' && doc">
       <div class="m-ovl">
         <div class="mask" @click="close()"></div>

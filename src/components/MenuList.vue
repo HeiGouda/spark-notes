@@ -13,6 +13,8 @@ export type MenuEntry =
       command?: string;
       action?: () => unknown;
       disabled?: boolean;
+      /** 悬停提示，例如说明为什么不能点 */
+      title?: string;
       hint?: string;
       checked?: () => boolean;
     }
@@ -61,7 +63,7 @@ async function run(entry: Extract<MenuEntry, { kind: "item" }>) {
         class="menu-item"
         role="menuitem"
         :disabled="disabledOf(entry)"
-        :title="entry.command || entry.action ? undefined : '尚未实现，将在后续里程碑提供'"
+        :title="entry.title ?? (entry.command || entry.action ? undefined : '尚未实现，将在后续里程碑提供')"
         @mousedown.prevent
         @mouseenter="openSub = null"
         @click="run(entry)"

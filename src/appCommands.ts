@@ -8,6 +8,7 @@ import { registerCommands, shortcutOf, type AppCommand } from "./lib/commands";
 import { useSettingsStore } from "./stores/settings";
 import { useVaultStore } from "./stores/vault";
 import { useTabsStore } from "./stores/tabs";
+import { useBookStore } from "./stores/book";
 import { useEditorStore } from "./stores/editor";
 import { useUiStore } from "./stores/ui";
 import { useGitStore } from "./stores/git";
@@ -38,6 +39,7 @@ export function registerAppCommands(): void {
   const vault = useVaultStore();
   const tabs = useTabsStore();
   const editor = useEditorStore();
+  const book = useBookStore();
   const ui = useUiStore();
   const git = useGitStore();
   const webdav = useWebdavStore();
@@ -164,6 +166,7 @@ export function registerAppCommands(): void {
     { id: "file.newNote", title: "新建笔记", category: "文件", defaultShortcut: "Ctrl+N", run: () => vault.newNote(), enabled: hasVault },
     { id: "file.newMind", title: "新建思维导图", category: "文件", defaultShortcut: null, run: () => vault.newDoc("mind"), enabled: hasVault },
     { id: "file.newFlow", title: "新建流程图", category: "文件", defaultShortcut: null, run: () => vault.newDoc("flow"), enabled: hasVault },
+    { id: "file.newBook", title: "新建表格簿", category: "文件", defaultShortcut: null, run: () => vault.newBook(), enabled: hasVault },
     { id: "file.newFolder", title: "新建文件夹", category: "文件", defaultShortcut: "Ctrl+Shift+N", run: () => vault.newFolder(), enabled: hasVault },
     { id: "file.openVault", title: "打开笔记库", category: "文件", defaultShortcut: null, run: () => vault.pickAndOpen() },
     { id: "file.save", title: "立即保存", category: "文件", defaultShortcut: "Ctrl+S", run: () => tabs.saveActive() },
@@ -266,6 +269,18 @@ export function registerAppCommands(): void {
       enabled: () => !!vault.root,
     },
     {
+      id: "ai.generateMind",
+      title: "AI：生成思维导图",
+      category: "AI",
+      defaultShortcut: null,
+      run: () => {
+        const note = tabs.active?.kind === "note" ? tabs.active.path : null;
+        const text = note && editor.path === note ? editor.selectionText().trim() : "";
+        useMindGenStore().openDialog({ kind: "folder", folder: note ? dirOf(note) : vault.targetDir() }, text);
+      },
+      enabled: () => !!vault.root,
+    },
+    {
       id: "ai.arrangeFlow",
       title: "AI：整理流程图",
       category: "AI",
@@ -281,6 +296,10 @@ export function registerAppCommands(): void {
     { id: "view.toggleToolbar", title: "显示/隐藏格式工具栏", category: "视图", defaultShortcut: null, run: () => settings.toggleToolbar() },
     { id: "view.toggleStatusbar", title: "显示/隐藏状态栏", category: "视图", defaultShortcut: null, run: () => settings.toggleStatusbar() },
     { id: "view.toggleNight", title: "切换深浅主题", category: "视图", defaultShortcut: null, run: () => settings.toggleDarkTheme() },
+    {
+      id: "view.toggleDocWidth", title: "切换正文宽度（固定 / 自适应）", category: "视图", defaultShortcut: null,
+      run: () => settings.patchEditor({ editorWidthMode: settings.editorWidthMode === "fill" ? "fixed" : "fill" }),
+    },
     ...THEMES.map((t) => ({
       id: themeCommandId(t.id), title: `主题：${t.name}`, category: "视图", defaultShortcut: null, run: () => settings.setTheme(t.id),
     })),
@@ -290,8 +309,25 @@ export function registerAppCommands(): void {
       title: "关闭标签页",
       category: "标签页",
       defaultShortcut: "Ctrl+W",
-      run: () => (ui.mainView === "chat" ? ui.closeChat() : tabs.activePath && tabs.close(tabs.activePath)),
+      // 表格簿是一项标签页：关闭它会关掉里面所有打开的表
+      run: () => (ui.mainView === "chat" ? ui.closeChat() : tabs.activePath && tabs.closeGroup(tabs.activePath)),
       enabled: () => !!tabs.activePath || ui.mainView === "chat",
+    },
+    {
+      id: "sheet.next",
+      title: "表格簿：下一张表",
+      category: "标签页",
+      defaultShortcut: "Ctrl+PageDown",
+      run: () => book.go(1),
+      enabled: () => !!book.activeBook && ui.mainView === "note",
+    },
+    {
+      id: "sheet.prev",
+      title: "表格簿：上一张表",
+      category: "标签页",
+      defaultShortcut: "Ctrl+PageUp",
+      run: () => book.go(-1),
+      enabled: () => !!book.activeBook && ui.mainView === "note",
     },
     { id: "tab.next", title: "下一个标签页", category: "标签页", defaultShortcut: "Ctrl+Tab", run: () => tabs.cycle(1) },
     { id: "tab.prev", title: "上一个标签页", category: "标签页", defaultShortcut: "Ctrl+Shift+Tab", run: () => tabs.cycle(-1) },
@@ -318,8 +354,8 @@ export function registerAppCommands(): void {
       title: "立即同步",
       category: "版本控制",
       defaultShortcut: null,
-      enabled: hasVault,
       run: () => {
+        if (!vault.requireForSync()) return;
         if (webdav.mode === "webdav") return webdav.start("download");
         if (webdav.mode === "git" || (!webdav.configured && git.isRepo)) return git.syncFromTitle();
         ui.settingsSection = "sync";
@@ -334,7 +370,7 @@ export function registerAppCommands(): void {
       enabled: () => hasVault() && webdav.mode === "webdav",
       run: () => webdav.start("upload"),
     },
-    { id: "git.sync", title: "一键同步", category: "版本控制", defaultShortcut: null, run: () => git.syncFromTitle(), enabled: hasVault },
+    { id: "git.sync", title: "一键同步", category: "版本控制", defaultShortcut: null, run: () => vault.requireForSync() && git.syncFromTitle() },
     { id: "help.guide", title: "操作指南", category: "帮助", defaultShortcut: null, run: () => (ui.guideOpen = true) },
     { id: "help.shortcuts", title: "快捷键设置", category: "帮助", defaultShortcut: null, run: () => { ui.settingsSection = "keys"; ui.settingsOpen = true; } },
     {

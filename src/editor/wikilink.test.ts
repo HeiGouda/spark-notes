@@ -85,4 +85,59 @@ describe("编辑器中的双向链接", () => {
     });
     expect(readMarkdown(e).trim()).toBe("x [[工作/周报]]");
   });
+
+  function typeQuery(e: Editor, text: string) {
+    e.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      view.focus();
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 2)).insertText(text));
+    });
+  }
+
+  it("补全：最多显示 200 条，超出时提示继续输入，不搜正文", async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({ label: `笔记${i}`, detail: "根目录", value: `笔记${i}`, path: `笔记${i}.md` }));
+    const search = vi.fn(async () => []);
+    const { editor: e } = await setup("x\n", { candidates: () => many, search, open: () => {} });
+    typeQuery(e, " [[笔记");
+    const box = document.querySelector(".wiki-suggest") as HTMLElement;
+    expect(box.querySelectorAll(".menu-item")).toHaveLength(200);
+    expect(box.textContent).toContain("继续输入以缩小范围");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("补全：标题匹配之后列出正文匹配，去掉重复的笔记，回车可选中正文匹配", async () => {
+    const search = vi.fn(async () => [
+      { label: "周报", detail: "工作", value: "工作/周报", path: "工作/周报.md", snippet: [{ text: "周报", hit: true }] },
+      { label: "会议", detail: "工作", value: "会议", path: "工作/会议.md", snippet: [{ text: "本周", hit: false }, { text: "周报", hit: true }] },
+    ]);
+    const host: WikiHost = {
+      candidates: () => [{ label: "周报", detail: "工作", value: "工作/周报", path: "工作/周报.md" }],
+      search,
+      open: () => {},
+    };
+    const { editor: e } = await setup("x\n", host);
+    typeQuery(e, " [[周报");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(search).toHaveBeenCalledWith("周报", expect.any(Number));
+    const box = document.querySelector(".wiki-suggest") as HTMLElement;
+    expect(box.querySelector(".menu-title")?.textContent).toBe("正文匹配");
+    const hits = box.querySelectorAll(".wiki-hit");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].querySelector("mark")?.textContent).toBe("周报");
+    e.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      view.someProp("handleKeyDown", (f) => f(view, new KeyboardEvent("keydown", { key: "ArrowDown" })));
+      view.someProp("handleKeyDown", (f) => f(view, new KeyboardEvent("keydown", { key: "Enter" })));
+    });
+    expect(readMarkdown(e).trim()).toBe("x [[会议]]");
+  });
+
+  it("补全：少于两个字时不搜正文", async () => {
+    const search = vi.fn(async () => []);
+    const { editor: e } = await setup("x\n", { candidates: () => [], search, open: () => {} });
+    typeQuery(e, " [[周");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(search).not.toHaveBeenCalled();
+  });
 });

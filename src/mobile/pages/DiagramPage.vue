@@ -11,6 +11,8 @@ import { parseFlow, type FlowDoc } from "../../diagram/flowchart";
 import type { DiagramIssue } from "../../diagram/issues";
 import type { NodeStyle } from "../../diagram/spark";
 import Icon from "../Icon.vue";
+import SheetStrip from "../SheetStrip.vue";
+import { bookName, bookOf } from "../../lib/book";
 import { useMobile } from "../store";
 import { back } from "../nav";
 
@@ -23,6 +25,7 @@ const flow = ref<FlowDoc | null>(null);
 const host = ref<HTMLElement | null>(null);
 const kind = docKind(props.path) === "flow" ? "flow" : "mind";
 const title = docName(props.path);
+const bookPath = bookOf(props.path);
 
 const dark = computed(() => isDarkTheme(store.reader.theme));
 
@@ -69,7 +72,7 @@ function fit() {
 }
 
 onMounted(async () => {
-  void store.rememberOpen(props.path);
+  void store.rememberOpen(bookPath ?? props.path);
   if (!store.root) return;
   try {
     const { content } = await api.readNote(store.root, props.path);
@@ -143,7 +146,7 @@ function onEnd(e: TouchEvent) {
   <div class="page bare">
     <div class="top">
       <button class="ib" @click="back()"><Icon name="back" /></button>
-      <h1>{{ title }}<small>{{ DOC_LABEL[kind] }} · 只读</small></h1>
+      <h1>{{ bookPath ? bookName(bookPath) : title }}<small>{{ bookPath ? `${title} · ` : "" }}{{ DOC_LABEL[kind] }} · 只读</small></h1>
       <button class="ib" title="居中" @click="fit"><Icon name="target" /></button>
     </div>
     <div v-if="error" class="m-empty">{{ error }}</div>
@@ -216,5 +219,6 @@ function onEnd(e: TouchEvent) {
         </g>
       </svg>
     </div>
+    <SheetStrip :path="path" />
   </div>
 </template>

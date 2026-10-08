@@ -5,7 +5,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import Icon from "./Icon.vue";
 import { api, baseName } from "../lib/api";
 import { FILE_FILTER_EXTS, formatSize, noteTitleFrom, userText, type ChatMsg } from "../lib/chat";
-import { formatTokens } from "../lib/aiModels";
+import { formatTokens, modelLabel } from "../lib/aiModels";
+import { presetOf } from "../lib/ai";
 import { fuzzyMatch } from "../lib/fuzzy";
 import { renderMarkdown } from "../lib/markdown";
 import { insertAtCursor } from "../editor/markdownEdit";
@@ -49,10 +50,7 @@ const meter = computed(() => {
   };
 });
 
-const models = computed(() => {
-  const names = settings.aiModels.map((m) => m.name);
-  return names.includes(chat.model) || !chat.model ? names : [chat.model, ...names];
-});
+const models = computed(() => settings.aiModels);
 
 const canSend = computed(() => !!chat.draft.trim() || chat.pending.length > 0);
 
@@ -96,6 +94,7 @@ async function saveAsNote(m: ChatMsg) {
     const rel = await api.createNote(root, vault.targetDir(), noteTitleFrom(m.content));
     await api.writeNote(root, rel, m.content.endsWith("\n") ? m.content : `${m.content}\n`);
     await vault.refresh();
+    await vault.appendToOrder(rel);
     notice().inform(`已保存为笔记“${baseName(rel).replace(/\.md$/i, "")}”`);
   } catch (e) {
     notice().report("保存为新笔记失败", e);
@@ -209,9 +208,9 @@ async function pickFiles() {
   inputEl.value?.focus();
 }
 
-function pickModel(name: string) {
+function pickModel(id: string) {
   modelOpen.value = false;
-  chat.setModel(name);
+  chat.setModel(id);
 }
 
 function onWindowKey(e: KeyboardEvent) {
@@ -310,18 +309,19 @@ onBeforeUnmount(() => {
     </div>
     <div v-else class="chat-empty">
       <h2>有什么可以帮你的？</h2>
-      <p>只在你点击发送时，才把消息和附件发给 设置 → AI 里配置的服务商</p>
+      <p>只在你点击发送时，才把消息和附件发给所选模型的服务商（在 设置 → AI 里添加）</p>
     </div>
 
     <div class="composer-wrap">
       <div v-if="modelOpen" class="menu model-menu" role="menu">
-        <button v-for="name in models" :key="name" class="menu-item" role="menuitemradio" :aria-checked="name === chat.model" @click="pickModel(name)">
-          <span class="mark"><Icon v-if="name === chat.model" name="check" sm /></span>
-          <span class="label">{{ name }}</span>
-          <span class="hint">{{ formatTokens(settings.contextOf(name).tokens) }}</span>
+        <button v-for="m in models" :key="m.id" class="menu-item" role="menuitemradio" :aria-checked="m.id === chat.model?.id" :title="`${presetOf(m.provider).label} · ${m.name}`" @click="pickModel(m.id)">
+          <span class="mark"><Icon v-if="m.id === chat.model?.id" name="check" sm /></span>
+          <span class="label">{{ modelLabel(m) }}</span>
+          <span class="hint">{{ presetOf(m.provider).label }} · {{ formatTokens(settings.contextOf(m).tokens) }}</span>
         </button>
+        <div v-if="!models.length" class="model-foot">还没有添加模型</div>
         <div class="menu-sep" />
-        <div class="model-foot">只影响这个对话；可选模型在 设置 → AI 里填写</div>
+        <div class="model-foot">只影响这个对话；可选模型在 设置 → AI 里添加</div>
       </div>
       <div v-if="mention && mentionItems.length" class="menu mention" role="listbox">
         <div class="menu-title">引用笔记</div>
@@ -361,7 +361,7 @@ onBeforeUnmount(() => {
           <button class="btn" type="button" title="引用笔记（@）" :disabled="!vault.root" @click="insertAt()"><span class="at">@</span></button>
           <span class="hint">Enter 发送 · Shift+Enter 换行</span>
           <button class="model-sel" :class="{ 'is-open': modelOpen }" type="button" title="本次对话使用的模型" @click="modelOpen = !modelOpen">
-            {{ chat.model || "未设置模型" }}<Icon name="down" sm />
+            {{ chat.model ? modelLabel(chat.model) : "未设置模型" }}<Icon name="down" sm />
           </button>
           <button v-if="chat.running" class="send" type="button" title="停止生成" @click="chat.stop()"><Icon name="stop" /></button>
           <button v-else class="send" type="button" title="发送 (Enter)" :disabled="!canSend" @click="chat.send()"><Icon name="send" /></button>

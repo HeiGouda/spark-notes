@@ -9,7 +9,7 @@ const writeNote = vi.fn(async (_root: string, path: string, content: string) => 
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   api: {
-    scanVault: vi.fn(async () => []),
+    scanVault: vi.fn(async () => ({ nodes: [], warning: null })),
     readNote: vi.fn(async (_root: string, path: string) => {
       if (!files.has(path)) throw new Error(`not found: ${path}`);
       return { content: files.get(path)!, createdMs: 0 };

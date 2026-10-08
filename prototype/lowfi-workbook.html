@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>低保真原型：表格簿</title>
+<style>
+  :root { --ink: #222; --mid: #777; --line: #999; --soft: #e9e9e9; --bg: #fafafa; --note: #c0392b; --pick: #2f6fd6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fff; color: var(--ink); font: 13px/1.6 "Microsoft YaHei", "PingFang SC", sans-serif; }
+  header.page { padding: 24px 32px 8px; border-bottom: 1px dashed var(--line); }
+  header.page h1 { margin: 0 0 4px; font-size: 20px; }
+  header.page p { margin: 0; color: var(--mid); }
+  nav.toc { padding: 8px 32px; color: var(--mid); }
+  nav.toc a { color: var(--pick); margin-right: 16px; }
+  section.board { padding: 24px 32px 40px; border-bottom: 1px dashed var(--line); }
+  section.board > h2 { margin: 0 0 4px; font-size: 16px; }
+  section.board > .sub { margin: 0 0 16px; color: var(--mid); }
+  .row { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .cap { font-size: 12px; color: var(--mid); margin: 6px 0 0; }
+
+  /* 线框元素 */
+  .frame { border: 1.5px solid var(--ink); border-radius: 6px; background: #fff; }
+  .hint { color: var(--mid); font-size: 12px; }
+  .box { border: 1.2px solid var(--line); border-radius: 4px; padding: 4px 8px; background: #fff; min-height: 26px; }
+  .btn { display: inline-block; border: 1.2px solid var(--ink); border-radius: 4px; padding: 2px 10px; background: #fff; }
+  .btn.pri { background: var(--ink); color: #fff; }
+  .muted { color: var(--mid); }
+  .badge { display: inline-block; font-size: 11px; border: 1px solid var(--ink); border-radius: 3px; padding: 0 4px; margin-left: 6px; line-height: 1.4; }
+  .flex { display: flex; align-items: center; gap: 8px; }
+  .grow { flex: 1; }
+  .ph { display: inline-block; height: 8px; background: var(--soft); border-radius: 4px; vertical-align: middle; }
+  code { font-family: Consolas, monospace; font-size: 12px; }
+
+  /* 标注 */
+  .n { display: inline-flex; width: 18px; height: 18px; border-radius: 50%; background: var(--note); color: #fff; font-size: 11px; align-items: center; justify-content: center; font-weight: bold; margin: 0 4px; vertical-align: middle; flex: none; line-height: 1; }
+  .notes { width: 360px; }
+  .notes ol { margin: 0; padding-left: 0; list-style: none; }
+  .notes li { margin: 0 0 8px; padding-left: 26px; position: relative; }
+  .notes li .n { position: absolute; left: 0; top: 2px; margin: 0; }
+  .ask { border: 1.5px dashed var(--note); border-radius: 6px; padding: 8px 12px; margin-top: 12px; color: var(--note); }
+  .ask b { color: var(--note); }
+
+  /* 菜单 */
+  .menu { width: 230px; padding: 4px 0; }
+  .menu div { padding: 3px 14px; display: flex; }
+  .menu div em { margin-left: auto; color: var(--mid); font-style: normal; font-size: 11px; }
+  .menu hr { border: 0; border-top: 1px solid var(--soft); margin: 4px 0; }
+  .menu .new { outline: 2px solid var(--note); outline-offset: -2px; font-weight: bold; }
+  .menu .off { color: #bbb; }
+
+  /* 应用窗口 */
+  .app { width: 900px; display: flex; flex-direction: column; overflow: hidden; }
+  .app .tb { display: flex; align-items: flex-end; gap: 2px; border-bottom: 1.2px solid var(--ink); padding: 6px 10px 0; background: var(--bg); height: 36px; }
+  .app .tb .dtab { border: 1.2px solid var(--line); border-bottom: 0; border-radius: 5px 5px 0 0; padding: 2px 12px; color: var(--mid); background: #f2f2f2; }
+  .app .tb .dtab.on { background: #fff; color: var(--ink); border-color: var(--ink); font-weight: bold; position: relative; top: 1.2px; }
+  .app .mid { display: flex; height: 400px; }
+  .app .side { width: 200px; border-right: 1.2px solid var(--ink); background: var(--bg); padding: 8px 6px; }
+  .app .side .t { color: var(--mid); font-size: 12px; padding: 0 6px 4px; }
+  .app .side .f { padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+  .app .side .f.on { background: var(--soft); font-weight: bold; }
+  .app .side .f i { font-style: normal; display: inline-block; width: 18px; color: var(--mid); }
+  .app .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .app .doc { flex: 1; padding: 20px 40px; position: relative; overflow: hidden; }
+  .app .doc h3 { margin: 0 0 10px; font-size: 18px; }
+  .app .doc p { margin: 0 0 8px; color: #555; }
+  .app .sb { border-top: 1.2px solid var(--ink); height: 26px; display: flex; align-items: center; gap: 16px; padding: 0 12px; font-size: 12px; color: var(--mid); background: var(--bg); }
+
+  /* 底部表标签栏 */
+  .sheets { display: flex; align-items: stretch; height: 30px; border-top: 1.2px solid var(--ink); background: var(--bg); font-size: 12.5px; }
+  .sheets .ctl { display: flex; align-items: center; padding: 0 8px; border-right: 1px solid var(--line); color: var(--mid); }
+  .sheets .list { display: flex; align-items: stretch; overflow: hidden; min-width: 0; }
+  .sheets .s { display: flex; align-items: center; gap: 4px; padding: 0 12px; border-right: 1px solid var(--line); white-space: nowrap; color: #555; }
+  .sheets .s i { font-style: normal; color: var(--mid); font-size: 11px; }
+  .sheets .s.on { background: #fff; color: var(--ink); font-weight: bold; box-shadow: inset 0 -2px 0 var(--pick); margin-top: -1.2px; border-left: 1.2px solid var(--ink); border-right: 1.2px solid var(--ink); }
+  .sheets .s.draft { border-style: dashed; }
+  .sheets .s input { width: 70px; font: inherit; border: 1.5px solid var(--pick); border-radius: 3px; padding: 0 4px; }
+  .sheets .s input.bad { border-color: var(--note); }
+  .sheets .s.drag { opacity: .45; }
+  .sheets .ins { width: 2px; background: var(--pick); margin: 4px -1px; }
+  .sheets .warn { margin-left: auto; display: flex; align-items: center; padding: 0 10px; color: var(--note); white-space: nowrap; }
+  .sheets .plus { display: flex; align-items: center; padding: 0 12px; font-size: 16px; font-weight: bold; }
+  .callout { position: absolute; background: #fff; box-shadow: 3px 3px 0 rgba(0,0,0,.08); }
+  .tip { position: absolute; border: 1.2px solid var(--note); color: var(--note); background: #fff; border-radius: 4px; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+
+  /* 画布 */
+  .canvas { background: radial-gradient(circle, #ddd 1px, transparent 1px) 0 0 / 16px 16px; }
+  .node { position: absolute; border: 1.5px solid var(--ink); border-radius: 6px; padding: 2px 12px; background: #fff; font-size: 12px; }
+  .dbar { border-bottom: 1.2px solid var(--ink); padding: 5px 10px; display: flex; gap: 6px; align-items: center; }
+  .dbar span.t { border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; color: var(--mid); font-size: 12px; }
+
+  /* 补全 / 搜索 */
+  .pop { width: 300px; padding: 4px 0; }
+  .pop .it { padding: 4px 12px; display: flex; gap: 8px; align-items: baseline; }
+  .pop .it.on { background: #dfe8f7; }
+  .pop .it .d { color: var(--mid); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
+  .crumb { color: var(--mid); }
+  .crumb b { color: var(--ink); font-weight: normal; }
+
+  /* 手机 */
+  .phone { width: 260px; height: 470px; border: 1.5px solid var(--ink); border-radius: 22px; padding: 10px 8px; display: flex; flex-direction: column; }
+  .phone .bar { display: flex; align-items: center; gap: 8px; padding: 4px 6px 8px; border-bottom: 1px solid var(--soft); font-weight: bold; }
+  .phone .li { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid var(--soft); }
+  .phone .li i { font-style: normal; width: 18px; color: var(--mid); }
+  .phone .li .d { margin-left: auto; color: var(--mid); font-size: 11px; }
+  .phone .body { flex: 1; padding: 10px 8px; overflow: hidden; }
+  .phone .body p { margin: 0 0 8px; color: #555; font-size: 12.5px; }
+  .phone .sw { display: flex; gap: 6px; border-top: 1.2px solid var(--ink); padding: 6px 4px 2px; overflow: hidden; font-size: 12px; }
+  .phone .sw span { border: 1.2px solid var(--line); border-radius: 12px; padding: 1px 10px; white-space: nowrap; color: #555; }
+  .phone .sw span.on { border-color: var(--ink); background: var(--ink); color: #fff; }
+
+  /* 目录结构 */
+  pre.tree { margin: 0; padding: 12px 16px; font: 12.5px/1.7 Consolas, "Microsoft YaHei", monospace; background: var(--bg); }
+  pre.tree em { color: var(--mid); font-style: normal; }
+</style>
+</head>
+<body>
+<header class="page">
+  <h1>低保真原型：表格簿</h1>
+  <p>只表达布局、内容和交互，不代表最终配色和尺寸；最终样式沿用现有界面。红色编号对应右侧说明，红色虚线框是需要你确认的地方。</p>
+</header>
+<nav class="toc">
+  <a href="#overview">1. 打开表格簿</a>
+  <a href="#strip">2. 底部表标签栏</a>
+  <a href="#create">3. 新建与侧边栏</a>
+  <a href="#links">4. 双链、搜索、反向链接</a>
+  <a href="#ai">5. AI 生成到表格簿</a>
+  <a href="#mobile">6. 移动端</a>
+  <a href="#disk">7. 磁盘上的样子</a>
+</nav>
+
+<!-- ======================= 1. 总览 ======================= -->
+<section class="board" id="overview">
+  <h2>1. 打开表格簿</h2>
+  <p class="sub">一个表格簿占一个顶部标签页；编辑区和现在的笔记、思维导图、流程图完全一样，只是底部多了一行表标签。</p>
+  <div class="row">
+    <div>
+      <div class="frame app">
+        <div class="tb">
+          <span class="dtab">上线流程.flow</span>
+          <span class="dtab on">▦ 周报 <span class="n">1</span></span>
+          <span class="dtab">读书笔记</span>
+          <span class="muted" style="padding:0 8px 4px">+</span>
+        </div>
+        <div class="mid">
+          <div class="side">
+            <div class="t">文件</div>
+            <div class="f"><i>▸</i>工作</div>
+            <div class="f" style="padding-left:24px"><i>≡</i>读书笔记</div>
+            <div class="f on" style="padding-left:24px"><i>▦</i>周报 <span class="n">2</span></div>
+            <div class="f" style="padding-left:24px"><i>⇢</i>上线流程</div>
+            <div class="f"><i>▸</i>生活</div>
+            <div class="f"><i>≡</i>收件箱</div>
+          </div>
+          <div class="main">
+            <div class="doc">
+              <h3>本周</h3>
+              <p>1. 完成表格簿原型评审 <span class="ph" style="width:120px"></span></p>
+              <p>2. 修复 WebDAV 同步冲突提示 <span class="ph" style="width:90px"></span></p>
+              <p><span class="ph" style="width:320px"></span></p>
+              <p><span class="ph" style="width:260px"></span></p>
+              <p>相关：<span style="color:var(--pick);text-decoration:underline">上线流程</span></p>
+            </div>
+            <div class="sheets">
+              <span class="plus">+ <span class="n">3</span></span>
+              <div class="list">
+                <span class="s on"><i>≡</i>本周 <span class="n">6</span></span>
+                <span class="s"><i>✱</i>目标拆解</span>
+                <span class="s"><i>⇢</i>发布流程</span>
+                <span class="s"><i>≡</i>上周</span>
+              </div>
+              <span class="n" style="align-self:center">4</span>
+            </div>
+          </div>
+        </div>
+        <div class="sb"><span>字数 1,284</span><span>行 3，列 12</span><span class="n">5</span><span class="grow"></span><span>✓ 已保存 12:40</span></div>
+      </div>
+      <p class="cap">图 1：在桌面端打开表格簿“周报”，当前是笔记表“本周”</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>顶部标签页显示簿名“周报”，带表格簿图标。一个表格簿只占一个标签页，切换表不会新开标签页。</li>
+        <li><span class="n">2</span>侧边栏：表格簿显示成一个文件节点，不能展开，有专门的图标；和其他文件按同样的规则排序（和文件排在一起，不和文件夹排在一起）。</li>
+        <li><span class="n">3</span>左下角“+”：新建一张表，菜单见图 2-a。</li>
+        <li><span class="n">4</span>表标签：类型图标加表名（≡ 笔记，✱ 思维导图，⇢ 流程图）。当前表白底、加粗，底部有一条强调色线。点击切换；<code>Ctrl+PageUp</code> 和 <code>Ctrl+PageDown</code> 切换到上一张或下一张表（不会和现有快捷键冲突）。每张表各自自动保存；切换表的行为和现在切换标签页一致：思维导图和流程图的缩放、折叠状态按表保留，笔记的光标和滚动位置不单独保留。</li>
+        <li><span class="n">5</span>状态栏显示当前这张表的统计：笔记表显示字数和行列，导图和流程图表显示节点数和缩放比例；保存状态也对应当前这张表。</li>
+        <li><span class="n">6</span>打开表格簿时，停在本机上次看的那张表；第一次打开时停在第一张。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 2. 标签栏 ======================= -->
+<section class="board" id="strip">
+  <h2>2. 底部表标签栏</h2>
+  <p class="sub">每张图只画底部标签栏，上面的编辑区省略。</p>
+  <div class="row">
+    <div style="position:relative;width:440px;height:200px">
+      <div class="frame menu callout" style="left:0;top:0;width:200px">
+        <div>笔记</div>
+        <div>思维导图</div>
+        <div>流程图</div>
+      </div>
+      <div class="frame" style="position:absolute;left:0;bottom:0;width:440px;overflow:hidden">
+        <div class="sheets" style="border-top:0">
+          <span class="plus" style="background:var(--soft)">+</span>
+          <div class="list">
+            <span class="s on"><i>≡</i>本周</span>
+            <span class="s"><i>✱</i>目标拆解</span>
+            <span class="s"><i>⇢</i>发布流程</span>
+          </div>
+        </div>
+      </div>
+      <p class="cap" style="position:absolute;bottom:-28px">图 2-a：点“+”弹出类型菜单</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>选了类型后，新表加在最后，自动命名为“表 N”（N 取下一个没用过的数字），然后切换过去并进入改名状态（图 2-c）。</li>
+        <li><span class="n">2</span>新建的思维导图表：中心主题就是表名；新建的流程图表：空白画布。和现在新建独立文件时一样。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:44px">
+    <div style="position:relative;width:440px;height:240px">
+      <div class="frame menu callout" style="left:110px;top:0;width:210px">
+        <div>重命名<em>双击</em></div>
+        <div>复制</div>
+        <div class="off">删除</div>
+        <hr>
+        <div>用 AI 生成思维导图</div>
+        <div>用 AI 生成流程图</div>
+      </div>
+      <div class="frame" style="position:absolute;left:0;bottom:0;width:440px;overflow:hidden">
+        <div class="sheets" style="border-top:0">
+          <span class="plus">+</span>
+          <div class="list">
+            <span class="s on"><i>≡</i>本周</span>
+          </div>
+        </div>
+      </div>
+      <p class="cap" style="position:absolute;bottom:-44px">图 2-b：右键表标签。只剩一张表时“删除”不能点；<br>“用 AI 生成…”两项只在笔记表上出现（见第 5 部分）</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>重命名：双击标签或在菜单里选，标签就地变成输入框（图 2-c）。</li>
+        <li><span class="n">2</span>复制：在这张表后面插入一份副本，名为“本周 副本”，切换过去。</li>
+        <li><span class="n">3</span>删除：和现在删除文件一样，先弹确认框“确定删除笔记‘本周’及其附件吗？将移入笔记库的回收站，之后可以恢复”，确认后移到回收站，切到相邻的表。只剩最后一张表时置灰，悬停提示“表格簿至少保留一张表；要删除整个表格簿，请在侧边栏操作”。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:96px">
+    <div>
+      <div class="frame" style="width:440px;overflow:visible;position:relative">
+        <div class="sheets" style="border-top:0">
+          <span class="plus">+</span>
+          <div class="list" style="overflow:visible">
+            <span class="s"><i>≡</i>本周</span>
+            <span class="s on"><i>✱</i><input class="bad" value="上周"></span>
+            <span class="s"><i>⇢</i>发布流程</span>
+            <span class="s"><i>≡</i>上周</span>
+          </div>
+        </div>
+        <span class="tip" style="left:60px;top:-26px">这个表格簿里已经有名为“上周”的表</span>
+      </div>
+      <p class="cap">图 2-c：就地改名，名称重复（即使类型不同）时红框提示，不能保存</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>回车保存，<code>Esc</code> 放弃。名称为空、和别的表重复，或者含有文件名不允许的字符时，红框提示，回车不生效、输入框保持打开；点别处离开时放弃改名，并在状态栏提示原因。</li>
+        <li><span class="n">2</span>改名就是改文件名；其他笔记里指向这张表的双链会自动改写（和现在给文件改名一致）。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:20px">
+    <div>
+      <div class="frame" style="width:440px;overflow:hidden">
+        <div class="sheets" style="border-top:0">
+          <span class="plus">+</span>
+          <div class="list">
+            <span class="s on"><i>≡</i>本周</span>
+            <span class="ins"></span>
+            <span class="s"><i>✱</i>目标拆解</span>
+            <span class="s drag"><i>≡</i>上周</span>
+            <span class="s"><i>⇢</i>发布流程</span>
+          </div>
+        </div>
+      </div>
+      <p class="cap">图 2-d：拖动“上周”，蓝色竖线是放下的位置</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>拖动排序只改 <code>.book.json</code> 里的顺序，不改文件。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:20px">
+    <div>
+      <div class="frame" style="width:640px;overflow:hidden">
+        <div class="sheets" style="border-top:0">
+          <span class="plus">+</span>
+          <span class="ctl">‹</span>
+          <div class="list">
+            <span class="s"><i>≡</i>第 3 周</span>
+            <span class="s"><i>≡</i>第 4 周</span>
+            <span class="s on"><i>≡</i>第 5 周</span>
+            <span class="s"><i>≡</i>第 6 周</span>
+          </div>
+          <span class="ctl" style="border-left:1px solid var(--line)">›</span>
+          <span class="ctl">☰</span>
+          <span class="warn">⚠ 有 2 个项目无法显示</span>
+        </div>
+      </div>
+      <p class="cap">图 2-e：表太多放不下时；以及文件夹里有不认识的内容时</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>放不下时出现“‹ ›”，也可以在标签栏上滚动鼠标滚轮横向滚动；“☰”列出全部表，点击跳转。当前表始终滚动到可见范围内。</li>
+        <li><span class="n">2</span>表格簿文件夹里有子文件夹、其他格式的文件或嵌套的表格簿时（<code>*.assets/</code> 附件文件夹除外），右侧显示红色提示；悬停时列出这些项目的名称，点击在资源管理器中打开这个文件夹。</li>
+      </ol>
+      <div class="ask"><b>待确认 A：</b>表放不下时用“‹ › + ☰ 列表”（上图）可以吗？另一种做法是不加按钮，只靠滚轮横向滚动。我的建议：用上图的做法，和 Excel 习惯一致。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 3. 新建与侧边栏 ======================= -->
+<section class="board" id="create">
+  <h2>3. 新建表格簿，以及侧边栏右键菜单</h2>
+  <p class="sub">文件树的“新建”下拉菜单和右键菜单是同一份，红框是新增项。</p>
+  <div class="row">
+    <div>
+      <div class="frame menu">
+        <div>新建笔记<em>Ctrl+N</em></div>
+        <div>新建思维导图</div>
+        <div>新建流程图</div>
+        <div class="new">新建表格簿</div>
+        <div>AI 生成流程图…</div>
+        <div>AI 生成思维导图…</div>
+        <div>新建文件夹<em>Ctrl+Shift+N</em></div>
+      </div>
+      <p class="cap">图 3-a：“新建”菜单</p>
+    </div>
+    <div>
+      <div class="frame" style="width:220px;background:var(--bg);padding:8px 6px">
+        <div style="padding:2px 6px"><span class="muted" style="display:inline-block;width:18px">▾</span>工作</div>
+        <div style="padding:2px 6px 2px 24px"><span class="muted" style="display:inline-block;width:18px">≡</span>读书笔记</div>
+        <div style="padding:2px 6px 2px 24px" class="flex"><span class="muted" style="display:inline-block;width:10px">▦</span><span class="box" style="padding:0 4px;min-height:0;border-color:var(--pick);border-width:1.5px">未命名表格簿</span></div>
+      </div>
+      <p class="cap">图 3-b：新建后在侧边栏就地输入名称</p>
+    </div>
+    <div>
+      <div class="frame menu">
+        <div class="muted">新建笔记 / 思维导图 / 流程图…（同图 3-a）</div>
+        <hr>
+        <div>重命名<em>F2</em></div>
+        <div>隐藏</div>
+        <div>删除<em>Delete</em></div>
+        <hr>
+        <div>收藏</div>
+        <div>复制路径</div>
+        <div>在资源管理器中打开</div>
+      </div>
+      <p class="cap">图 3-c：右键侧边栏里的表格簿节点</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>“新建表格簿”放在“新建流程图”下面。建好后在侧边栏就地输入名称，默认“未命名表格簿”，同时打开它，里面已有一张笔记表“表 1”。</li>
+        <li><span class="n">2</span>表格簿节点的右键菜单和普通文件一样，只是没有“用 AI 生成思维导图”（这一项移到了表标签的右键菜单）。在表格簿上点“新建…”时，新文件建在表格簿所在的文件夹里，不会放进簿里。</li>
+        <li><span class="n">3</span>移动表格簿靠拖拽，和普通文件一样。改名或移动后，指向它和指向里面各张表的双链都会自动改写。</li>
+        <li><span class="n">4</span>收藏、最近打开都记录表格簿整体。</li>
+        <li><span class="n">5</span>标题栏标签页上的“+”和 <code>Ctrl+N</code> 仍然只新建独立笔记，不变。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 4. 双链 ======================= -->
+<section class="board" id="links">
+  <h2>4. 双链、搜索、反向链接</h2>
+  <p class="sub">凡是列出文件的地方，表格簿里的表都显示成“簿名 › 表名”；点击时打开表格簿并切换到那张表。</p>
+  <div class="row">
+    <div>
+      <div class="frame" style="width:300px;padding:10px 14px">相关：[[本<span style="border-left:1.5px solid var(--ink)"></span></div>
+      <div class="frame pop" style="margin-top:2px">
+        <div class="it on"><span>≡ 本周</span><span class="d">周报 · 工作</span></div>
+        <div class="it"><span>✱ 本季度目标</span><span class="d">思维导图 · 工作</span></div>
+        <div class="it"><span>▦ 本地化方案</span><span class="d">表格簿 · 工作</span></div>
+      </div>
+      <p class="cap">图 4-a：输入 <code>[[</code> 弹出补全</p>
+    </div>
+    <div>
+      <div class="frame" style="width:320px;padding:8px 0">
+        <div style="padding:0 12px 6px" class="muted">搜索“同步冲突” · 3 个结果</div>
+        <div style="padding:4px 12px;background:#dfe8f7"><div><span class="crumb">周报 › </span>本周</div><div class="hint">…修复 WebDAV <mark>同步冲突</mark>提示…</div></div>
+        <div style="padding:4px 12px"><div>WebDAV 设计</div><div class="hint">…<mark>同步冲突</mark>的处理规则…</div></div>
+        <div style="padding:4px 12px"><div><span class="crumb">周报 › </span>上周</div><div class="hint">…复现了<mark>同步冲突</mark>…</div></div>
+      </div>
+      <p class="cap">图 4-b：搜索结果</p>
+    </div>
+    <div>
+      <div class="frame" style="width:300px;padding:8px 12px">
+        <div class="muted" style="margin-bottom:4px">反向链接 · 2</div>
+        <div><span class="crumb">周报 › </span>本周</div>
+        <div class="hint" style="margin-bottom:6px">相关：<u>上线流程</u></div>
+        <div>项目总览</div>
+        <div class="hint">发布步骤见 <u>上线流程</u></div>
+      </div>
+      <p class="cap">图 4-c：“上线流程”的反向链接</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>补全：选中表时，写入的格式和现在一样，即 <code>[[本周]]</code>；只有重名时才写成 <code>[[周报.book/本周]]</code>。思维导图和流程图表照常带 <code>.mind</code> 或 <code>.flow</code> 后缀。表格簿本身也出现在补全里，写入 <code>[[本地化方案.book]]</code>。</li>
+        <li><span class="n">2</span>双链在正文里只显示链接文字，和现在一样，不会显示“周报 ›”。</li>
+        <li><span class="n">3</span>点击指向某张表的双链：如果表格簿已打开，切换到它的标签页并切到那张表；如果还没打开，就打开表格簿并切到那张表。点击 <code>[[周报.book]]</code>：打开表格簿，停在上次看的那张表。</li>
+        <li><span class="n">4</span>标签视图、快速打开（<code>Ctrl+P</code>）里，表也显示成“周报 › 本周”。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 5. AI ======================= -->
+<section class="board" id="ai">
+  <h2>5. 在表格簿里用 AI 生成</h2>
+  <p class="sub">在笔记表上用 AI 生成思维导图或流程图时，结果作为草稿表放进同一个表格簿。生成过程、停止、保留、丢弃、重新生成都沿用现有的草稿流程。</p>
+  <div class="row">
+    <div>
+      <div class="frame" style="width:600px;overflow:hidden">
+        <div class="dbar"><span class="t">主题</span><span class="t">子主题</span><span class="t">布局 ▾</span><span class="grow"></span><span class="muted">AI 正在生成…</span><span class="btn">停止</span><span class="btn">丢弃</span><span class="btn pri">保留</span><span class="n">1</span></div>
+        <div class="canvas" style="height:170px;position:relative">
+          <div class="node" style="left:30px;top:70px">本周 思维导图</div>
+          <div class="node" style="left:220px;top:30px">完成原型评审</div>
+          <div class="node" style="left:220px;top:110px">修复同步冲突提示</div>
+        </div>
+        <div class="sheets">
+          <span class="plus">+</span>
+          <div class="list">
+            <span class="s"><i>≡</i>本周</span>
+            <span class="s"><i>✱</i>目标拆解</span>
+            <span class="s"><i>⇢</i>发布流程</span>
+            <span class="s on draft"><i>✱</i>本周 思维导图<span class="badge">草稿</span></span>
+          </div>
+          <span class="n" style="align-self:center">2</span>
+        </div>
+      </div>
+      <p class="cap">图 5：在“本周”上右键 →“用 AI 生成思维导图”之后</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>顶部工具条和现在的 AI 草稿标签页一样：生成中可以停止；生成完可以保留、丢弃或重新生成。</li>
+        <li><span class="n">2</span>草稿表加在最后，虚线边框并带“草稿”标记，名称是“来源表名 思维导图”（或“流程图”），重名时加序号。“保留”后成为正式的表（写入文件），“丢弃”后标签消失，切回来源表。</li>
+        <li><span class="n">3</span>入口：表标签右键菜单（图 2-b，用整张笔记生成），以及笔记表里选中文字后右键的“用选中文字生成思维导图 / 流程图”，结果都放进当前表格簿。</li>
+        <li><span class="n">4</span>草稿没保留时关闭表格簿，和现在关闭草稿标签页一样，草稿直接丢弃（磁盘上还没有它的文件），其他表照常保存。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 6. 移动端 ======================= -->
+<section class="board" id="mobile">
+  <h2>6. 移动端（只读）</h2>
+  <p class="sub">文件列表里显示为一个条目；打开后底部是只读的表切换条。</p>
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="bar">‹ 工作</div>
+        <div class="li"><i>≡</i>读书笔记<span class="d">昨天 21:15</span></div>
+        <div class="li"><i>▦</i>周报<span class="badge" style="margin-left:2px">4 张表</span><span class="d">今天 12:40</span></div>
+        <div class="li"><i>⇢</i>上线流程<span class="d">9月25日</span></div>
+      </div>
+      <p class="cap">图 6-a：文件列表</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar">‹ 周报</div>
+        <div class="body">
+          <p style="font-weight:bold;color:var(--ink);font-size:15px">本周</p>
+          <p>1. 完成表格簿原型评审</p>
+          <p>2. 修复 WebDAV 同步冲突提示</p>
+          <p><span class="ph" style="width:180px"></span></p>
+          <p><span class="ph" style="width:140px"></span></p>
+        </div>
+        <div class="sw"><span class="on">本周</span><span>✱ 目标拆解</span><span>⇢ 发布流程</span><span>上周</span></div>
+      </div>
+      <p class="cap">图 6-b：打开表格簿</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>列表条目带表格簿图标，旁边注明“N 张表”。</li>
+        <li><span class="n">2</span>顶部标题是簿名。笔记表用现有的阅读页显示，导图和流程图表用现有的图表页显示。</li>
+        <li><span class="n">3</span>底部切换条可以横向滑动，点击切换；不能新建、改名或排序。</li>
+        <li><span class="n">4</span>收藏、最近打开同样记录表格簿整体；从双链或搜索结果进入时，直接切到对应的表。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 7. 磁盘 ======================= -->
+<section class="board" id="disk">
+  <h2>7. 磁盘上的样子（不是界面，供确认存储规则）</h2>
+  <div class="row">
+    <div class="frame" style="width:440px;overflow:hidden">
+<pre class="tree">工作/
+├─ 读书笔记.md
+├─ 上线流程.flow.mmd
+└─ 周报.book/                <em>← 以 .book 结尾的文件夹就是表格簿</em>
+   ├─ .book.json            <em>← 只记录表的顺序</em>
+   ├─ 本周.md
+   ├─ 本周.assets/          <em>← 附件照常放在旁边</em>
+   ├─ 目标拆解.mind.mmd
+   ├─ 发布流程.flow.mmd
+   └─ 上周.md</pre>
+    </div>
+    <div class="frame" style="width:320px;overflow:hidden">
+<pre class="tree">{
+  "version": 1,
+  "order": [
+    "本周.md",
+    "目标拆解.mind.mmd",
+    "发布流程.flow.mmd",
+    "上周.md"
+  ]
+}</pre>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>每张表都是普通文件：历史版本、Git 和 WebDAV 同步、全文搜索、回收站都按单个文件处理，不需要特殊对待。</li>
+        <li><span class="n">2</span>“上次停在哪张表”只存在本机，不写进 <code>.book.json</code>，避免多台设备互相改它造成同步冲突。</li>
+        <li><span class="n">3</span>对不上时：文件夹里有、清单里没有的表追加到最后；清单里有、文件已经不存在的条目忽略；<code>.book.json</code> 缺失或损坏时，按文件名排序，下次调整顺序时重新写入。</li>
+        <li><span class="n">4</span>从回收站恢复一张表时，放回原来的表格簿，排在最后；如果表格簿也已经被删除，会重新建出这个簿，只包含这一张表。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+</body>
+</html>

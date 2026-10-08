@@ -295,6 +295,19 @@ pub fn backlinks(conn: &Connection, path: &str) -> Result<Vec<Backlink>, String>
     Ok(out)
 }
 
+/// 指向表格簿本身的链接改名后的写法：带路径的写完整新路径，只写名字的写新名字；不是指向这个表格簿时返回 None
+fn book_link_text(target: &str, from: &str, to: &str) -> Option<String> {
+    let t = target.replace('\\', "/").to_lowercase();
+    if !t.ends_with(crate::book::EXT) {
+        return None;
+    }
+    if t.contains('/') {
+        return (t == from.to_lowercase()).then(|| to.to_string());
+    }
+    let name = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
+    (t == name(from).to_lowercase() && name(from) != name(to)).then(|| name(to))
+}
+
 /// 笔记或文件夹从 `from` 改名 / 移动到 `to` 之后，改写所有指向其中笔记的链接。
 /// 必须在索引更新之前调用（用改名前的索引判断链接原本指向哪篇笔记）。返回被改写的笔记（新路径）。
 pub fn rewrite_links(conn: &Connection, root: &Path, from: &str, to: &str) -> Result<Vec<String>, String> {
@@ -302,7 +315,9 @@ pub fn rewrite_links(conn: &Connection, root: &Path, from: &str, to: &str) -> Re
     let within = |p: &str| p == from || p.starts_with(&format!("{from}/"));
     let map_path = |p: &str| if within(p) { format!("{to}{}", &p[from.len()..]) } else { p.to_string() };
     let moved: HashMap<String, String> = before.iter().filter(|p| within(p)).map(|p| (p.clone(), map_path(p))).collect();
-    if moved.is_empty() {
+    // 指向表格簿本身的链接（`[[周报.book]]`）不对应任何笔记，单独处理
+    let from_is_book = crate::book::is_book_path(from);
+    if moved.is_empty() && !from_is_book {
         return Ok(Vec::new());
     }
     let after: Vec<String> = before.iter().map(|p| map_path(p)).collect();
@@ -310,7 +325,10 @@ pub fn rewrite_links(conn: &Connection, root: &Path, from: &str, to: &str) -> Re
     let after_links = LinkIndex::new(&after);
 
     // 链接的 base 是目标的笔记名（小写），只有指向被移动笔记名字的链接才可能需要改写，其余笔记不必读取
-    let moved_bases: HashSet<String> = moved.keys().map(|p| link_base(p)).collect();
+    let mut moved_bases: HashSet<String> = moved.keys().map(|p| link_base(p)).collect();
+    if from_is_book {
+        moved_bases.insert(link_base(from));
+    }
     let mut stmt = conn.prepare("SELECT DISTINCT src, base FROM links").map_err(db_err)?;
     let mut sources: BTreeSet<String> = BTreeSet::new();
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db_err)?;
@@ -332,6 +350,11 @@ pub fn rewrite_links(conn: &Connection, root: &Path, from: &str, to: &str) -> Re
             }
             let split = inner.find(['#', '|']).unwrap_or(inner.len());
             let target = inner[..split].trim();
+            if from_is_book {
+                if let Some(text) = book_link_text(target, from, to) {
+                    return Some(format!("{text}{}", &inner[split..]));
+                }
+            }
             let old = before_links.resolve(target, &src)?;
             let new_path = moved.get(old)?;
             let had_path = target.contains('/');
@@ -482,6 +505,23 @@ mod tests {
         let changed = rewrite_links(&conn, root, "工作", "项目").unwrap();
         assert_eq!(changed, vec!["读书.md"]);
         assert_eq!(fs::read_to_string(root.join("读书.md")).unwrap(), "参考 [[项目/周报#本周|周报]] 与 [[WebDAV 同步设计]]\n");
+    }
+
+    #[test]
+    fn book_rename_rewrites_links_to_book_and_to_its_sheets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        touch(root, "周报.book/本周.md", "本周\n");
+        touch(root, "读书.md", "见 [[周报.book]]、[[周报.book#x|别名]]、[[周报.book/本周]]、[[本周]]、[[其他.book]]\n");
+        let mut conn = open(root).unwrap();
+        sync(&mut conn, root).unwrap();
+        fs::rename(root.join("周报.book"), root.join("总结.book")).unwrap();
+        let changed = rewrite_links(&conn, root, "周报.book", "总结.book").unwrap();
+        assert_eq!(changed, vec!["读书.md"]);
+        assert_eq!(
+            fs::read_to_string(root.join("读书.md")).unwrap(),
+            "见 [[总结.book]]、[[总结.book#x|别名]]、[[总结.book/本周]]、[[本周]]、[[其他.book]]\n"
+        );
     }
 
     #[test]

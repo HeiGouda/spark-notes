@@ -8,6 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+__pycache__/
+*.py[cod]
 dist
 dist-mobile
 dist-ssr
@@ -15,6 +17,10 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# 本地原型，不进仓库
+prototype/mobile.html
+prototype/webdav.html
 
 # Editor directories and files
 .vscode/*

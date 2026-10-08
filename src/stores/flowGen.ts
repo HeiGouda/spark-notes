@@ -194,7 +194,8 @@ export const useFlowGenStore = defineStore("flowGen", () => {
     }
     const content = serializeFlow(result.doc);
     try {
-      const rel = await api.createNote(vault.root, g.folder, flowFileName(result.title), "flow");
+      // 在表格簿里生成的作为新的一张表放进同一个簿
+      const rel = await vault.createDocIn(g.folder, "flow", flowFileName(result.title));
       await api.writeNote(vault.root, rel, content);
       // 等待期间标签页被关掉（等于丢弃）：文件放进回收站，不留下
       if (!gens.value[path]) {
@@ -209,6 +210,7 @@ export const useFlowGenStore = defineStore("flowGen", () => {
       endSaving(path);
       useTabsStore().finalizeDraft(path, rel, content);
       await vault.refresh();
+      await vault.appendToOrder(rel);
       useSearchStore().schedule();
     } catch (e) {
       endSaving(path);

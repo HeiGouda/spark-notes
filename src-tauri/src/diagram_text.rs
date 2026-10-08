@@ -38,7 +38,20 @@ fn mind(content: &str) -> Option<String> {
     Some(out.join("\n"))
 }
 
-const UNSUPPORTED: &[&str] = &["subgraph", "end", "direction", "style", "classdef", "class", "click", "linkstyle"];
+/// 不支持的语句。这些词也可能是普通的节点编号（`end --> x`），与前端 flowchart.ts 的规则一致：
+/// `end` 单独占一条语句；`subgraph` 开头；其余的后面要跟参数，而不是连线或节点形状
+fn is_unsupported(stmt: &str) -> bool {
+    let mut words = stmt.split_whitespace();
+    let first = words.next().unwrap_or("").to_ascii_lowercase();
+    match first.as_str() {
+        "subgraph" => true,
+        "end" => words.next().is_none(),
+        "direction" | "style" | "classdef" | "class" | "click" | "linkstyle" => {
+            words.next().is_some_and(|arg| !arg.starts_with(['-', '=', '.', '<', '~', '(', '[', '{', '>', '@', ':', '|']))
+        }
+        _ => false,
+    }
+}
 
 /// 解码实体；多行文字里的 `<br>` 换成空格
 fn decode(s: &str) -> String {
@@ -230,8 +243,7 @@ fn flow(content: &str) -> Option<String> {
     let mut edges: Vec<(String, String, String)> = Vec::new();
     for line in lines {
         for stmt in split_statements(line) {
-            let first = stmt.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-            if UNSUPPORTED.contains(&first.as_str()) || stmt.contains(":::") {
+            if is_unsupported(stmt) || stmt.contains(":::") {
                 return None;
             }
             let mut p = Stmt { s: stmt, i: 0 };
@@ -284,6 +296,15 @@ mod tests {
     fn mind_quoted_text_and_spark_comments() {
         let src = "mindmap\n  %% spark: layout=balanced\n  [\"Rust (入门)\"]\n    %% spark: summary=1 bg=mint\n    [\"他说 #quot;好#quot;<br>第二行\"]\n";
         assert_eq!(extract(DocKind::Mind, src).unwrap(), "节点：Rust (入门)\n节点：他说 \"好\" 第二行");
+    }
+
+    #[test]
+    fn keyword_words_as_node_ids_are_not_unsupported() {
+        let src = "flowchart TD\n  start([开始]) --> end([结束])\n  end --> style\n  class --> style\n";
+        assert_eq!(extract(DocKind::Flow, src).unwrap(), "节点：开始\n节点：结束\n节点：style\n节点：class");
+        for bad in ["end", "subgraph A", "class A hot", "style A fill:#f96", "direction LR", "click A \"x\"", "linkStyle 0 stroke:red", "classDef hot fill:red"] {
+            assert!(extract(DocKind::Flow, &format!("flowchart TD\n  A --> B\n  {bad}\n")).is_none(), "{bad}");
+        }
     }
 
     #[test]

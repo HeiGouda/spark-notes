@@ -23,7 +23,7 @@ vi.mock("./api", () => ({
   },
 }));
 vi.mock("../lib/api", () => ({
-  api: { scanVault: async () => m.tree, readConfig: async () => null, allowAssets: async () => {} },
+  api: { scanVault: async () => ({ nodes: m.tree, warning: null }), readConfig: async () => null, allowAssets: async () => {} },
 }));
 vi.mock("./prefs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./prefs")>()),

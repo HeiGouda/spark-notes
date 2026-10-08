@@ -1,3 +1,4 @@
+use crate::book;
 use crate::doctype;
 use serde::Serialize;
 use std::fs::{self, File};
@@ -12,9 +13,22 @@ pub struct TreeNode {
     /// 相对笔记库根目录的路径，统一用 `/` 分隔
     pub path: String,
     pub is_dir: bool,
+    /// 文件夹的子项；表格簿的子项是它的各张表（按表格簿里的顺序）
     pub children: Vec<TreeNode>,
     pub modified_ms: Option<u64>,
     pub created_ms: Option<u64>,
+    /// 表格簿（以 `.book` 结尾的文件夹）：`is_dir` 仍为 true，`name` 不含后缀
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub book: Option<BookInfo>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookInfo {
+    /// 表格簿里不能显示成表的项目名称（子文件夹、不认识的文件、嵌套的表格簿）
+    pub unsupported: Vec<String>,
+    /// 顺序文件读取出错时的说明，表仍按名称排序显示
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,7 +103,18 @@ fn scan_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, String> {
             Ok(m) => (to_ms(m.modified()), to_ms(m.created())),
             Err(_) => (None, None),
         };
-        if is_dir {
+        if is_dir && book::is_book_name(&name) {
+            let (children, info) = scan_book(root, &full)?;
+            nodes.push(TreeNode {
+                name: book::book_stem(&name).to_string(),
+                path: rel,
+                is_dir: true,
+                children,
+                modified_ms,
+                created_ms,
+                book: Some(info),
+            });
+        } else if is_dir {
             nodes.push(TreeNode {
                 name,
                 path: rel,
@@ -97,6 +122,7 @@ fn scan_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, String> {
                 children: scan_dir(root, &full)?,
                 modified_ms,
                 created_ms,
+                book: None,
             });
         } else if let (true, Some((stem, _))) = (file_type.is_file(), doctype::split(&name)) {
             nodes.push(TreeNode {
@@ -106,15 +132,41 @@ fn scan_dir(root: &Path, dir: &Path) -> Result<Vec<TreeNode>, String> {
                 children: Vec::new(),
                 modified_ms,
                 created_ms,
+                book: None,
             });
         }
     }
+    // 文件夹排在前面；表格簿和文件排在一起
+    let is_folder = |n: &TreeNode| n.is_dir && n.book.is_none();
     nodes.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
+        is_folder(b)
+            .cmp(&is_folder(a))
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(nodes)
+}
+
+/// 表格簿的各张表（按表格簿里的顺序）和不能显示的项目
+fn scan_book(root: &Path, dir: &Path) -> Result<(Vec<TreeNode>, BookInfo), String> {
+    let layout = book::layout(dir)?;
+    let mut sheets = Vec::with_capacity(layout.sheets.len());
+    for file in &layout.sheets {
+        let full = dir.join(file);
+        let (modified_ms, created_ms) = match fs::metadata(&full) {
+            Ok(m) => (to_ms(m.modified()), to_ms(m.created())),
+            Err(_) => (None, None),
+        };
+        sheets.push(TreeNode {
+            name: doctype::display_name(file).to_string(),
+            path: rel_of(root, &full)?,
+            is_dir: false,
+            children: Vec::new(),
+            modified_ms,
+            created_ms,
+            book: None,
+        });
+    }
+    Ok((sheets, BookInfo { unsupported: layout.unsupported, warning: layout.warning }))
 }
 
 pub fn scan(root: &Path) -> Result<Vec<TreeNode>, String> {
@@ -203,6 +255,29 @@ mod tests {
         let tree = scan(root).unwrap();
         let got: Vec<_> = tree.iter().map(|n| (n.name.as_str(), n.path.as_str())).collect();
         assert_eq!(got, vec![("上线", "上线.flow.mmd"), ("路线", "路线.mind.mmd")]);
+    }
+
+    #[test]
+    fn scan_shows_book_as_one_node_with_ordered_sheets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        touch(&root.join("周报.book/b.md"), "");
+        touch(&root.join("周报.book/a.mind.mmd"), "");
+        touch(&root.join("周报.book/.book.json"), r#"{"order":["b.md","a.mind.mmd"]}"#);
+        touch(&root.join("周报.book/b.assets/x.png"), "x");
+        touch(&root.join("周报.book/杂项/x.txt"), "x");
+        touch(&root.join("夹/c.md"), "");
+        touch(&root.join("z.md"), "");
+        let tree = scan(root).unwrap();
+        let names: Vec<_> = tree.iter().map(|n| n.name.as_str()).collect();
+        // 文件夹在前；表格簿和文件按名称排在一起
+        assert_eq!(names, vec!["夹", "z", "周报"]);
+        let book = tree.iter().find(|n| n.book.is_some()).unwrap();
+        assert_eq!(book.path, "周报.book");
+        assert!(book.is_dir);
+        let sheets: Vec<_> = book.children.iter().map(|n| (n.name.as_str(), n.path.as_str())).collect();
+        assert_eq!(sheets, vec![("b", "周报.book/b.md"), ("a", "周报.book/a.mind.mmd")]);
+        assert_eq!(book.book.as_ref().unwrap().unsupported, vec!["杂项"]);
     }
 
     #[test]

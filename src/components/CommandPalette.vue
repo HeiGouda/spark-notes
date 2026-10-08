@@ -10,6 +10,7 @@ import { useUiStore } from "../stores/ui";
 import { useSettingsStore } from "../stores/settings";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore, nameOf } from "../stores/tabs";
+import { SHEET_SEP, bookName, bookOf } from "../lib/book";
 import { useNoticeStore } from "../stores/notice";
 
 /** 命令面板（Ctrl+Shift+P）与快速打开（Ctrl+P），对应原型 M4 浮层 1、2 */
@@ -72,10 +73,12 @@ const commandRows = computed<Row[]>(() => {
 
 function fileRow(path: string, indices: number[]): Row {
   const name = nameOf(path);
+  // 表格簿里的表显示成“簿名 › 表名”
+  const book = bookOf(path);
   return {
     key: path,
-    label: highlightSegments(name, indices),
-    detail: dirOf(path) || "根目录",
+    label: book ? [{ text: `${bookName(book)}${SHEET_SEP}`, hit: false }, ...highlightSegments(name, indices)] : highlightSegments(name, indices),
+    detail: dirOf(book ?? path) || "根目录",
     shortcut: [],
     icon: DOC_ICON[docKind(path) ?? "note"],
     run: () => void tabs.open(path),

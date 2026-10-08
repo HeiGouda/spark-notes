@@ -123,12 +123,25 @@ export interface LinkCandidate {
   detail: string;
   /** 写入 [[ ]] 的内容 */
   value: string;
+  /** 笔记库相对路径，用于去掉标题匹配和正文匹配中重复的笔记 */
+  path?: string;
+  /** 正文匹配时的片段 */
+  snippet?: { text: string; hit: boolean }[];
 }
 
 export interface WikiHost {
   candidates: (query: string) => LinkCandidate[];
+  /** 按正文搜索笔记，最多返回 limit 条 */
+  search?: (query: string, limit: number) => Promise<LinkCandidate[]>;
   open: (value: string) => void;
 }
+
+/** 列表最多显示的条数（标题匹配与正文匹配合计） */
+export const SUGGEST_LIMIT = 200;
+const CONTENT_LIMIT = 50;
+/** 搜索索引按两个字切词，少于两个字时不搜正文 */
+const CONTENT_MIN_CHARS = 2;
+const CONTENT_DELAY = 150;
 
 interface Pending {
   from: number;
@@ -147,11 +160,25 @@ function pendingAt(state: EditorState): Pending | null {
   return { from, to: $from.pos, query: m[1] };
 }
 
+function textEl(tag: string, className: string, text: string): HTMLElement {
+  const el = document.createElement(tag);
+  el.className = className;
+  el.textContent = text;
+  return el;
+}
+
 class Suggest {
   el: HTMLElement;
-  items: LinkCandidate[] = [];
+  titleItems: LinkCandidate[] = [];
+  /** 标题匹配超过上限，需要继续输入缩小范围 */
+  titleMore = false;
+  contentItems: LinkCandidate[] = [];
+  contentError: string | null = null;
   index = 0;
   pending: Pending | null = null;
+  rows: HTMLElement[] = [];
+  searchTimer = 0;
+  searchSeq = 0;
 
   constructor(private view: EditorView, private host: WikiHost) {
     this.el = document.createElement("div");
@@ -161,43 +188,95 @@ class Suggest {
     this.hide();
   }
 
+  get items(): LinkCandidate[] {
+    return [...this.titleItems, ...this.contentItems];
+  }
+
   update(view: EditorView) {
     this.view = view;
     const p = pendingAt(view.state);
     if (!p || !view.hasFocus()) return this.hide();
+    const changed = !this.pending || this.pending.query !== p.query;
     this.pending = p;
-    this.items = this.host.candidates(p.query).slice(0, 12);
-    this.index = Math.min(this.index, Math.max(this.items.length - 1, 0));
-    this.render();
+    if (changed) {
+      const all = this.host.candidates(p.query);
+      this.titleItems = all.slice(0, SUGGEST_LIMIT);
+      this.titleMore = all.length > SUGGEST_LIMIT;
+      this.contentItems = [];
+      this.contentError = null;
+      this.index = Math.min(this.index, Math.max(this.titleItems.length - 1, 0));
+      this.render();
+      this.scheduleSearch(p.query);
+    }
     const at = view.coordsAtPos(p.from);
     this.el.style.left = `${Math.min(at.left, window.innerWidth - 300)}px`;
     this.el.style.top = `${at.bottom + 4}px`;
     this.el.style.display = "block";
   }
 
+  scheduleSearch(query: string) {
+    clearTimeout(this.searchTimer);
+    const seq = ++this.searchSeq;
+    const room = Math.min(CONTENT_LIMIT, SUGGEST_LIMIT - this.titleItems.length);
+    const search = this.host.search;
+    if (!search || room <= 0 || [...query.trim()].length < CONTENT_MIN_CHARS) return;
+    this.searchTimer = window.setTimeout(async () => {
+      let hits: LinkCandidate[];
+      try {
+        // 多取一些：排在前面的往往是标题已经匹配过的笔记
+        hits = await search(query, room + this.titleItems.length);
+      } catch (e) {
+        if (seq !== this.searchSeq) return;
+        this.contentError = `正文搜索失败：${e instanceof Error ? e.message : String(e)}`;
+        this.render();
+        return;
+      }
+      if (seq !== this.searchSeq || this.pending?.query !== query) return;
+      const seen = new Set(this.titleItems.map((t) => t.path ?? t.value));
+      this.contentItems = hits.filter((h) => !seen.has(h.path ?? h.value)).slice(0, room);
+      this.render();
+    }, CONTENT_DELAY);
+  }
+
+  row(item: LinkCandidate, i: number): HTMLElement {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "menu-item" + (i === this.index ? " is-open" : "");
+    const line = [textEl("span", "label", item.label), textEl("span", "hint", item.detail)];
+    if (item.snippet) {
+      row.classList.add("wiki-hit");
+      const head = document.createElement("span");
+      head.className = "wiki-hit-line";
+      head.append(...line);
+      const snip = document.createElement("span");
+      snip.className = "wiki-snip";
+      for (const s of item.snippet) snip.append(s.hit ? textEl("mark", "", s.text) : document.createTextNode(s.text));
+      row.append(head, snip);
+    } else {
+      row.append(...line);
+    }
+    row.addEventListener("click", () => this.choose(i));
+    return row;
+  }
+
   render() {
     this.el.replaceChildren();
-    if (!this.items.length) {
-      const empty = document.createElement("div");
-      empty.className = "wiki-suggest-empty";
-      empty.textContent = this.pending?.query ? "没有匹配的笔记，输入 ]] 创建链接" : "输入笔记名";
-      this.el.append(empty);
+    this.rows = [];
+    if (!this.items.length && !this.contentError) {
+      this.el.append(textEl("div", "wiki-suggest-empty", this.pending?.query ? "没有匹配的笔记，输入 ]] 创建链接" : "输入笔记名"));
       return;
     }
-    this.items.forEach((item, i) => {
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = "menu-item" + (i === this.index ? " is-open" : "");
-      const label = document.createElement("span");
-      label.className = "label";
-      label.textContent = item.label;
-      const hint = document.createElement("span");
-      hint.className = "hint";
-      hint.textContent = item.detail;
-      row.append(label, hint);
-      row.addEventListener("click", () => this.choose(i));
-      this.el.append(row);
-    });
+    this.titleItems.forEach((item, i) => this.rows.push(this.row(item, i)));
+    this.el.append(...this.rows);
+    if (this.contentItems.length || this.contentError) {
+      this.el.append(textEl("div", "menu-title", "正文匹配"));
+      if (this.contentError) this.el.append(textEl("div", "wiki-suggest-empty", this.contentError));
+      const base = this.titleItems.length;
+      const content = this.contentItems.map((item, i) => this.row(item, base + i));
+      this.rows.push(...content);
+      this.el.append(...content);
+    }
+    if (this.titleMore) this.el.append(textEl("div", "wiki-suggest-empty", "继续输入以缩小范围"));
   }
 
   get visible() {
@@ -208,12 +287,18 @@ class Suggest {
     this.el.style.display = "none";
     this.pending = null;
     this.index = 0;
+    clearTimeout(this.searchTimer);
+    this.searchSeq++;
   }
 
   move(delta: number) {
-    if (!this.items.length) return;
-    this.index = (this.index + delta + this.items.length) % this.items.length;
-    this.render();
+    const n = this.rows.length;
+    if (!n) return;
+    this.rows[this.index]?.classList.remove("is-open");
+    this.index = (this.index + delta + n) % n;
+    const row = this.rows[this.index];
+    row.classList.add("is-open");
+    row.scrollIntoView({ block: "nearest" });
   }
 
   choose(i = this.index) {
@@ -231,6 +316,7 @@ class Suggest {
   }
 
   destroy() {
+    this.hide();
     this.el.remove();
   }
 }

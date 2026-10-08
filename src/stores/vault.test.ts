@@ -15,7 +15,13 @@ const dir = (path: string, children: TreeNode[]): TreeNode => ({ name: path.spli
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   api: {
-    scanVault: vi.fn(async () => tree),
+    scanVault: vi.fn(async () => ({ nodes: tree, warning: null })),
+    createNote: vi.fn(async (_r: string, dir: string) => {
+      const rel = (dir ? dir + "/" : "") + "未命名.md";
+      calls.push(`create ${rel}`);
+      tree = dir ? tree.map((n) => (n.path === dir ? { ...n, children: [...n.children, file(rel)] } : n)) : [...tree, file(rel)];
+      return rel;
+    }),
     readNote: vi.fn(async () => ({ content: "x\n", createdMs: 0 })),
     writeNote,
     rename: vi.fn(async (_r: string, path: string, name: string) => {
@@ -111,12 +117,85 @@ describe("vault store 文件操作", () => {
     await vi.waitFor(() => expect(JSON.parse(configs.get("favorites.json")!)).toEqual(["e"]));
   });
 
+  it("隐藏：从文件树去掉，笔记路径照常可用；随改名、移动更新，随删除移除", async () => {
+    const vault = useVaultStore();
+    vault.selected = "d/a.md";
+    vault.hide("d");
+    vault.hide("c.md");
+    expect(vault.sortedTree).toEqual([]);
+    expect(vault.docPaths).toEqual(["d/a.md", "d/b.md", "c.md"]);
+    expect(vault.selected).toBeNull();
+    await vault.trash("c.md");
+    expect(vault.hidden).toEqual(["d"]);
+    vault.hide("d/b.md");
+    await vault.rename("d", "e");
+    expect(vault.hidden).toEqual(["e", "e/b.md"]);
+    await vault.move("e/b.md", "");
+    expect(vault.hidden).toEqual(["e", "b.md"]);
+  });
+
+  it("恢复隐藏的项", () => {
+    const vault = useVaultStore();
+    vault.hide("d");
+    vault.hide("c.md");
+    vault.unhide("d");
+    expect(vault.sortedTree.map((n) => n.path)).toEqual(["d"]);
+    vault.unhideAll();
+    expect(vault.sortedTree.map((n) => n.path)).toEqual(["d", "c.md"]);
+  });
+
   it("自定义排序：拖到另一个文件夹的项前面时先移动再排序", async () => {
     const vault = useVaultStore();
     vault.sortKey = "custom";
     await vault.place("c.md", "d/b.md", "before");
     expect(calls.slice(0, 2)).toEqual(["move c.md d", "rewriteLinks c.md d/c.md"]);
     expect(vault.customOrder.d).toEqual(["a.md", "c.md", "b.md"]);
+  });
+
+  it("新建的项排在所在文件夹自定义顺序的末尾；文件夹还没有顺序时按当前显示顺序建一份", async () => {
+    const vault = useVaultStore();
+    vault.customOrder = { d: ["b.md", "a.md"] };
+    await vault.newNote("d");
+    expect(vault.customOrder.d).toEqual(["b.md", "a.md", "未命名.md"]);
+    await vault.newNote("");
+    expect(vault.customOrder[""]).toEqual(["d", "c.md", "未命名.md"]);
+    expect(JSON.parse(configs.get("order.json")!)).toEqual(vault.customOrder);
+  });
+
+  it("移到另一个文件夹的项排在那里的末尾", async () => {
+    const vault = useVaultStore();
+    vault.customOrder = { d: ["b.md", "a.md"] };
+    await vault.move("c.md", "d");
+    expect(vault.customOrder.d).toEqual(["b.md", "a.md", "c.md"]);
+  });
+
+  it("切换排序方式时写入 sort.json，随笔记库同步", () => {
+    const vault = useVaultStore();
+    vault.setSort("modified", true);
+    expect(JSON.parse(configs.get("sort.json")!)).toEqual({ key: "modified", desc: true });
+  });
+
+  it("同步后重新读取排序方式、自定义顺序和收藏", async () => {
+    const vault = useVaultStore();
+    configs.set("sort.json", '{"key":"custom","desc":false}');
+    configs.set("order.json", '{"": ["c.md", "d"]}');
+    configs.set("favorites.json", '["c.md"]');
+    await vault.reloadConfig();
+    expect(vault.sortKey).toBe("custom");
+    expect(vault.sortedTree.map((n) => n.path)).toEqual(["d", "c.md"]);
+    expect(vault.customOrder[""]).toEqual(["c.md", "d"]);
+    expect(vault.favoriteList).toEqual(["c.md"]);
+  });
+
+  it("没有打开笔记库时同步：提示并打开笔记库对话框", async () => {
+    const vault = useVaultStore();
+    const { useUiStore } = await import("./ui");
+    const { useNoticeStore } = await import("./notice");
+    expect(vault.requireForSync()).toBe(true);
+    vault.root = null;
+    expect(vault.requireForSync()).toBe(false);
+    expect(useUiStore().vaultOpen).toBe(true);
+    expect(useNoticeStore().info).toBe("需要先新建或打开一个笔记库才能同步");
   });
 
   it("删除需要确认；取消时不删除", async () => {

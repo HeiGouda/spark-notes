@@ -4,6 +4,7 @@ export const ICONS = {
   chev: '<path d="M9 6l6 6-6 6"/>',
   down: '<path d="M7 10l5 5 5-5"/>',
   folder: '<path d="M3 6.5h6l2 2h10v10H3z"/>',
+  book: '<rect x="3.5" y="5" width="17" height="11.5" rx="1.5"/><path d="M3.5 9.5h17M9 5v11.5M4 20h5M12 20h4"/>',
   note: '<path d="M6 3h9l4 4v14H6z"/><path d="M9 11h7M9 15h7"/>',
   mind: '<circle cx="6.5" cy="12" r="2.5"/><path d="M9 12h3.5M12.5 12l3.5-5M12.5 12l3.5 5M12.5 12H17"/><circle cx="17.5" cy="6.5" r="1.4"/><circle cx="17.5" cy="17.5" r="1.4"/><circle cx="18.5" cy="12" r="1.4"/>',
   flow: '<rect x="8" y="2.5" width="8" height="5" rx="1"/><path d="M12 7.5v3.5"/><path d="M12 11l4 3-4 3-4-3z"/><path d="M12 17v4"/>',

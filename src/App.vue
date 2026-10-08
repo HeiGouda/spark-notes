@@ -10,10 +10,12 @@ import FormatToolbar from "./components/FormatToolbar.vue";
 import NoteEditor from "./components/NoteEditor.vue";
 import DiagramView from "./components/DiagramView.vue";
 import StatusBar from "./components/StatusBar.vue";
+import SheetBar from "./components/SheetBar.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import { dispatchShortcut, runCommand } from "./lib/commands";
 import { useSettingsStore } from "./stores/settings";
 import { useTabsStore } from "./stores/tabs";
+import { useBookStore } from "./stores/book";
 import { useNoticeStore } from "./stores/notice";
 import { useUiStore } from "./stores/ui";
 import CommandPalette from "./components/CommandPalette.vue";
@@ -32,11 +34,13 @@ import AiNoConfigDialog from "./components/AiNoConfigDialog.vue";
 import AiSummaryDialog from "./components/AiSummaryDialog.vue";
 import AiStructureDialog from "./components/AiStructureDialog.vue";
 import FlowGenDialog from "./components/FlowGenDialog.vue";
+import MindGenDialog from "./components/MindGenDialog.vue";
 import ChatView from "./components/ChatView.vue";
 import { useGitStore } from "./stores/git";
 
 const settings = useSettingsStore();
 const tabs = useTabsStore();
+const book = useBookStore();
 const ui = useUiStore();
 const chatShown = computed(() => ui.chatOpen && ui.mainView === "chat");
 const diagramShown = computed(() => !!tabs.active && tabs.active.kind !== "note");
@@ -122,6 +126,7 @@ onBeforeUnmount(() => {
         <NoteEditor v-else-if="tabs.active" v-show="!chatShown" :key="tabs.active.path" :tab="tabs.active" />
         <div v-else-if="!chatShown" class="main-empty">在左侧选择一篇笔记</div>
         <FindBar v-if="tabs.active && !chatShown" />
+        <SheetBar v-if="book.activeBook && !chatShown" />
         <ChatView v-if="ui.chatOpen" v-show="chatShown" />
       </main>
     </div>
@@ -143,4 +148,5 @@ onBeforeUnmount(() => {
   <AiSummaryDialog />
   <AiStructureDialog />
   <FlowGenDialog />
+  <MindGenDialog />
 </template>

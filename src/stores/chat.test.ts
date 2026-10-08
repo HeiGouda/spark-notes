@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import type { ChatMessage } from "../lib/api";
+import type { AiModelEntry } from "../lib/aiModels";
+
+const entry = (id: string, name: string, context: number): AiModelEntry => ({
+  id, provider: "qwen", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", name, label: "", context, providerContext: null,
+});
 
 const saved = new Map<string, string>();
 vi.mock("../lib/api", async (importOriginal) => ({
@@ -20,7 +25,7 @@ vi.mock("@tauri-apps/plugin-store", () => ({ load: vi.fn() }));
 /** 可控的假 AI：记录每次请求，手动推送文字、结束或失败 */
 interface FakeCall {
   messages: ChatMessage[];
-  model: string;
+  model: AiModelEntry | null;
   push: (t: string) => void;
   finish: () => void;
   fail: (e: Error) => void;
@@ -31,7 +36,7 @@ vi.mock("./ai", () => {
   class AiCancelled extends Error {}
   const fake = {
     ensureConfigured: () => true,
-    run(messages: ChatMessage[], onText: (full: string) => void, model: string) {
+    run(messages: ChatMessage[], onText: (full: string) => void, model: AiModelEntry | null) {
       let text = "";
       let resolve!: (t: string) => void;
       let reject!: (e: unknown) => void;
@@ -70,7 +75,7 @@ describe("AI 对话", () => {
     setActivePinia(createPinia());
     saved.clear();
     calls.length = 0;
-    useSettingsStore().aiModels = [{ name: "qwen-plus", context: 1_000_000 }, { name: "small", context: 400 }];
+    useSettingsStore().aiModels = [entry("m1", "qwen-plus", 1_000_000), entry("m2", "small", 400)];
   });
 
   it("发送后自动命名、存盘，回复逐字写入并随会话保存", async () => {
@@ -80,7 +85,7 @@ describe("AI 对话", () => {
     const sending = chat.send();
     await flush();
     expect(chat.running).toBe(true);
-    expect(calls[0].model).toBe("qwen-plus");
+    expect(calls[0].model?.name).toBe("qwen-plus");
     expect(calls[0].messages.map((m) => m.role)).toEqual(["system", "user"]);
     calls[0].push("冲突时");
     expect(chat.current!.messages[1].content).toBe("冲突时");
@@ -106,9 +111,9 @@ describe("AI 对话", () => {
     expect(call.messages.map((m) => m.content)).toEqual([expect.any(String), "新会话的问题"]);
 
     await chat.open(firstId);
-    chat.setModel("small");
+    chat.setModel("m2");
     const tight = await sendAndReply(chat, "第三问", "第三答");
-    expect(tight.model).toBe("small");
+    expect(tight.model?.name).toBe("small");
     const contents = tight.messages.slice(1).map((m) => m.content as string);
     expect(contents).toEqual(["第二问", "第二答", "第三问"]);
     expect(chat.plan.omitted).toBeGreaterThan(0);
@@ -130,6 +135,57 @@ describe("AI 对话", () => {
 
     const next = await sendAndReply(chat, "换个问题", "好的");
     expect(next.messages.map((m) => m.role)).toEqual(["system", "user", "user"]);
+  });
+
+  it("切换会话不中断生成；切回来能看到后续内容，停止只影响当前会话", async () => {
+    const chat = useChatStore();
+    await chat.newChat();
+    chat.draft = "第一问";
+    const first = chat.send();
+    await flush();
+    const firstId = chat.current!.id;
+    calls[0].push("第一");
+    expect(calls[0].cancelled).toBe(false);
+
+    await chat.newChat();
+    expect(chat.running).toBe(false);
+    expect(chat.isRunning(firstId)).toBe(true);
+    expect(calls[0].cancelled).toBe(false);
+
+    chat.draft = "第二问";
+    const second = chat.send();
+    await flush();
+    expect(calls).toHaveLength(2);
+    expect(chat.running).toBe(true);
+
+    await chat.open(firstId);
+    expect(chat.current!.messages[1].content).toBe("第一");
+    expect(chat.running).toBe(true);
+    calls[0].push("段");
+    expect(chat.current!.messages[1].content).toBe("第一段");
+    calls[0].finish();
+    await first;
+    expect(JSON.parse(saved.get(firstId)!).messages[1].content).toBe("第一段");
+
+    calls[1].push("第二段");
+    calls[1].finish();
+    await second;
+    expect(chat.running).toBe(false);
+    expect(chat.isRunning(chat.list.find((s) => s.id !== firstId)!.id)).toBe(false);
+  });
+
+  it("删除正在生成的会话会停止它，并且不会再写回", async () => {
+    const chat = useChatStore();
+    await chat.newChat();
+    chat.draft = "写个提纲";
+    const sending = chat.send();
+    await flush();
+    const id = chat.current!.id;
+    calls[0].push("一、");
+    await chat.remove(id);
+    await sending;
+    expect(calls[0].cancelled).toBe(true);
+    expect(saved.has(id)).toBe(false);
   });
 
   it("停止后保留已收到的内容；重新生成替换最后一条回复", async () => {

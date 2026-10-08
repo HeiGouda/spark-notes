@@ -65,6 +65,11 @@ fn latest_ms(dir: &Path) -> Option<u64> {
     fs::read_dir(dir).ok()?.filter_map(|e| e.ok()).filter_map(|e| version_ms(&e.file_name().to_string_lossy())).max()
 }
 
+/// 最早的历史版本时间：笔记在那之前就已存在，用于补记创建时间
+pub fn earliest_ms(root: &Path, rel: &str) -> Option<u64> {
+    fs::read_dir(note_dir(root, rel)).ok()?.filter_map(|e| e.ok()).filter_map(|e| version_ms(&e.file_name().to_string_lossy())).min()
+}
+
 fn version_ms(name: &str) -> Option<u64> {
     let stem = name.strip_suffix(".md")?;
     if !valid_id(stem) { return None }

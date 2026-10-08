@@ -1,5 +1,5 @@
 //! AI 接口（需求文档 5.16）：OpenAI 兼容的 Chat Completions，流式返回。
-//! API Key 只存系统凭据库；接口地址和模型名由前端的应用设置传入。
+//! API Key 只存系统凭据库，按接口地址分别保存（同一地址的多个模型共用）；接口地址和模型名由前端的应用设置传入。
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use crate::secret::{delete_secret, read_secret, write_secret};
 
-const KEY_ACCOUNT: &str = "Spark:ai:apikey";
+/// 旧版本只有一套接口地址，Key 存在这个账号下；升级时迁移到对应地址
+const LEGACY_KEY_ACCOUNT: &str = "Spark:ai:apikey";
+const KEY_PREFIX: &str = "Spark:ai:key:";
 /// 60 秒内没有收到任何内容算超时
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -67,20 +69,38 @@ impl AiState {
     }
 }
 
-pub fn save_key(key: &str) -> Result<(), String> {
+/// 凭据库里的账号名：同一接口地址（忽略首尾空白和末尾的 `/`）共用一个 Key
+pub fn key_account(base_url: &str) -> String {
+    format!("{KEY_PREFIX}{}", base_url.trim().trim_end_matches('/'))
+}
+
+pub fn save_key(base_url: &str, key: &str) -> Result<(), String> {
     let key = key.trim();
     if key.is_empty() {
         return Err("API Key 不能为空".into());
     }
-    write_secret(KEY_ACCOUNT, key).map_err(|e| e.replace("密码", "API Key"))
+    endpoint(base_url)?;
+    write_secret(&key_account(base_url), key).map_err(|e| e.replace("密码", "API Key"))
 }
 
-pub fn has_key() -> Result<bool, String> {
-    Ok(read_secret(KEY_ACCOUNT)?.is_some_and(|k| !k.is_empty()))
+pub fn has_key(base_url: &str) -> Result<bool, String> {
+    Ok(load_key(base_url)?.is_some_and(|k| !k.is_empty()))
 }
 
-pub fn clear_key() -> Result<(), String> {
-    delete_secret(KEY_ACCOUNT)
+pub fn clear_key(base_url: &str) -> Result<(), String> {
+    delete_secret(&key_account(base_url))
+}
+
+/// 把旧版本的 Key 搬到原来那个接口地址名下。这个地址已有 Key 时保留它；返回是否搬了
+pub fn migrate_legacy_key(base_url: &str) -> Result<bool, String> {
+    let Some(old) = read_secret(LEGACY_KEY_ACCOUNT)?.filter(|k| !k.is_empty()) else { return Ok(false) };
+    let account = key_account(base_url);
+    let moved = read_secret(&account)?.is_none_or(|k| k.is_empty());
+    if moved {
+        write_secret(&account, &old).map_err(|e| e.replace("密码", "API Key"))?;
+    }
+    delete_secret(LEGACY_KEY_ACCOUNT)?;
+    Ok(moved)
 }
 
 pub fn endpoint(base_url: &str) -> Result<String, String> {
@@ -174,12 +194,20 @@ fn send(url: &str, key: Option<&str>, body: &Value, cancel: &AtomicBool) -> Resu
     }
 }
 
-fn load_key() -> Result<Option<String>, String> {
-    read_secret(KEY_ACCOUNT)
+fn load_key(base_url: &str) -> Result<Option<String>, String> {
+    read_secret(&key_account(base_url))
+}
+
+/// 本次请求用的 Key：传入了（添加模型时还没保存的）就用它，否则用这个接口地址保存的
+fn key_for(base_url: &str, typed: Option<&str>) -> Result<Option<String>, String> {
+    match typed.map(str::trim).filter(|k| !k.is_empty()) {
+        Some(k) => Ok(Some(k.to_string())),
+        None => load_key(base_url),
+    }
 }
 
 /// 测试连接：发一条很短的请求，返回收到回复所用的毫秒数
-pub fn test(base_url: &str, model: &str) -> Result<u64, String> {
+pub fn test(base_url: &str, model: &str, key: Option<&str>) -> Result<u64, String> {
     let url = endpoint(base_url)?;
     if model.trim().is_empty() {
         return Err("请填写模型名".into());
@@ -187,7 +215,7 @@ pub fn test(base_url: &str, model: &str) -> Result<u64, String> {
     let body = json!({ "model": model.trim(), "messages": [{ "role": "user", "content": "ping" }], "max_tokens": 1, "stream": false });
     let started = Instant::now();
     let never = AtomicBool::new(false);
-    let resp = send(&url, load_key()?.as_deref(), &body, &never)?.ok_or("已取消")?;
+    let resp = send(&url, key_for(base_url, key)?.as_deref(), &body, &never)?.ok_or("已取消")?;
     let ms = started.elapsed().as_millis() as u64;
     let text = resp.into_string().map_err(|e| if is_timeout(&e.to_string()) { TIMEOUT_MESSAGE.to_string() } else { format!("读取回复失败：{e}") })?;
     let v: Value = serde_json::from_str(&text).map_err(|_| "回复不是 OpenAI 兼容格式，请检查接口地址".to_string())?;
@@ -216,11 +244,11 @@ pub fn parse_models(body: &str) -> Result<Vec<ProviderModel>, String> {
 }
 
 /// 读取服务商的模型列表（部分服务商会给出上下文长度）
-pub fn list_models(base_url: &str) -> Result<Vec<ProviderModel>, String> {
+pub fn list_models(base_url: &str, key: Option<&str>) -> Result<Vec<ProviderModel>, String> {
     let base = base_url.trim().trim_end_matches('/');
     endpoint(base)?;
     let mut req = agent().get(&format!("{base}/models"));
-    if let Some(k) = load_key()?.filter(|k| !k.is_empty()) {
+    if let Some(k) = key_for(base_url, key)?.filter(|k| !k.is_empty()) {
         req = req.set("Authorization", &format!("Bearer {k}"));
     }
     let resp = req.call().map_err(|e| match e {
@@ -269,7 +297,7 @@ pub fn chat_stream(
         return Err("请填写模型名".into());
     }
     let body = json!({ "model": model.trim(), "messages": messages, "stream": true });
-    let Some(resp) = send(&url, load_key()?.as_deref(), &body, cancel)? else { return Ok(()) };
+    let Some(resp) = send(&url, load_key(base_url)?.as_deref(), &body, cancel)? else { return Ok(()) };
     let streaming = resp.content_type().contains("event-stream");
     if !streaming {
         // 少数服务忽略 stream 参数，直接返回完整结果
@@ -308,6 +336,13 @@ mod tests {
         assert_eq!(endpoint("https://api.deepseek.com/v1/").unwrap(), "https://api.deepseek.com/v1/chat/completions");
         assert_eq!(endpoint(" http://localhost:11434/v1 ").unwrap(), "http://localhost:11434/v1/chat/completions");
         assert!(endpoint("api.example.com").is_err());
+    }
+
+    #[test]
+    fn same_endpoint_shares_one_key_account() {
+        assert_eq!(key_account(" https://api.deepseek.com/v1/ "), "Spark:ai:key:https://api.deepseek.com/v1");
+        assert_eq!(key_account("https://api.deepseek.com/v1"), key_account("https://api.deepseek.com/v1/"));
+        assert_ne!(key_account("https://api.deepseek.com/v1"), key_account("https://api.moonshot.cn/v1"));
     }
 
     #[test]

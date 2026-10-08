@@ -1,5 +1,6 @@
 mod ai;
 mod archive;
+mod book;
 mod chat;
 mod diagram_text;
 mod doctype;
@@ -14,6 +15,7 @@ mod notes;
 mod secret;
 #[cfg(target_os = "android")]
 mod secret_android;
+mod times;
 mod vault;
 mod watch;
 
@@ -48,11 +50,25 @@ async fn with_index<T: Send + 'static>(
     .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
+#[derive(serde::Serialize)]
+struct ScanResult {
+    nodes: Vec<TreeNode>,
+    /// 文件时间记录读写失败：文件树照常显示，时间可能不准
+    warning: Option<String>,
+}
+
+/// 扫描文件树，时间按 `.ttnote/config/times.json` 记录的显示。手机只读，不更新记录。
 #[tauri::command]
-async fn vault_scan(root: String) -> Result<Vec<TreeNode>, String> {
-    tauri::async_runtime::spawn_blocking(move || vault::scan(Path::new(&root)))
-        .await
-        .map_err(|e| format!("后台任务失败：{e}"))?
+async fn vault_scan(root: String) -> Result<ScanResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = Path::new(&root);
+        let mut nodes = vault::scan(root)?;
+        let write = cfg!(not(target_os = "android")) && times::writable();
+        let warning = times::apply(root, &mut nodes, write).err();
+        Ok(ScanResult { nodes, warning })
+    })
+    .await
+    .map_err(|e| format!("后台任务失败：{e}"))?
 }
 
 #[tauri::command]
@@ -105,7 +121,12 @@ fn vault_allow_assets(app: tauri::AppHandle, root: String) -> Result<(), String>
 
 #[tauri::command]
 fn note_read(root: String, path: String) -> Result<NoteFile, String> {
-    vault::read_note(Path::new(&root), &path)
+    let root = Path::new(&root);
+    let mut file = vault::read_note(root, &path)?;
+    if let Some(created) = times::created_of(root, &path) {
+        file.created_ms = Some(created);
+    }
+    Ok(file)
 }
 
 #[tauri::command]
@@ -267,17 +288,45 @@ fn folder_create(root: String, dir: String, name: Option<String>) -> Result<Stri
 }
 
 #[tauri::command]
+fn book_create(root: String, dir: String, name: Option<String>) -> Result<String, String> {
+    book::create_book(Path::new(&root), &dir, name.as_deref())
+}
+
+#[tauri::command]
+fn sheet_create(root: String, book: String, kind: String, name: Option<String>) -> Result<String, String> {
+    book::create_sheet(Path::new(&root), &book, doctype::DocKind::parse(&kind)?, name.as_deref())
+}
+
+#[tauri::command]
+fn sheet_duplicate(root: String, path: String) -> Result<String, String> {
+    book::duplicate_sheet(Path::new(&root), &path)
+}
+
+#[tauri::command]
+fn book_set_order(root: String, book: String, order: Vec<String>) -> Result<(), String> {
+    book::set_order(Path::new(&root), &book, &order)
+}
+
+#[tauri::command]
 fn entry_rename(root: String, path: String, name: String) -> Result<String, String> {
     let root = Path::new(&root);
-    let rel = fsops::rename_entry(root, &path, &name)?;
+    // 表格簿里的表要检查同簿重名并保持顺序
+    let rel = if book::parent_book(&path).is_some() {
+        book::rename_sheet(root, &path, &name)?
+    } else {
+        fsops::rename_entry(root, &path, &name)?
+    };
     relocate_history(root, &path, &rel);
     Ok(rel)
 }
 
-/// 文件已经改名 / 移动成功，历史版本迁移失败不应让前端以为操作失败
+/// 文件已经改名 / 移动成功，历史版本和时间记录迁移失败不应让前端以为操作失败
 fn relocate_history(root: &Path, from: &str, to: &str) {
     if let Err(e) = history::relocate(root, from, to) {
         eprintln!("{e}");
+    }
+    if let Err(e) = times::relocate(root, from, to) {
+        eprintln!("迁移文件时间记录失败：{e}");
     }
 }
 
@@ -291,7 +340,12 @@ fn entry_move(root: String, path: String, target_dir: String) -> Result<String, 
 
 #[tauri::command]
 fn entry_trash(root: String, path: String) -> Result<(), String> {
-    fsops::trash_entry(Path::new(&root), &path)
+    let root = Path::new(&root);
+    fsops::trash_entry(root, &path)?;
+    if let Err(e) = times::forget(root, &path) {
+        eprintln!("清除文件时间记录失败：{e}");
+    }
+    Ok(())
 }
 
 /// 用系统默认程序打开笔记库里的文件（Spark 无法显示的图）
@@ -443,23 +497,29 @@ async fn git_change_diff(root: String, max_chars: usize) -> Result<git::ChangeDi
 }
 
 #[tauri::command]
-fn ai_save_key(key: String) -> Result<(), String> {
-    ai::save_key(&key)
+fn ai_save_key(base_url: String, key: String) -> Result<(), String> {
+    ai::save_key(&base_url, &key)
 }
 
 #[tauri::command]
-fn ai_has_key() -> Result<bool, String> {
-    ai::has_key()
+fn ai_has_key(base_url: String) -> Result<bool, String> {
+    ai::has_key(&base_url)
 }
 
 #[tauri::command]
-fn ai_clear_key() -> Result<(), String> {
-    ai::clear_key()
+fn ai_clear_key(base_url: String) -> Result<(), String> {
+    ai::clear_key(&base_url)
 }
 
 #[tauri::command]
-async fn ai_test(base_url: String, model: String) -> Result<u64, String> {
-    tauri::async_runtime::spawn_blocking(move || ai::test(&base_url, &model))
+fn ai_migrate_key(base_url: String) -> Result<bool, String> {
+    ai::migrate_legacy_key(&base_url)
+}
+
+/// key 为添加模型时输入、还没保存的 Key；为空时用这个接口地址保存的
+#[tauri::command]
+async fn ai_test(base_url: String, model: String, key: Option<String>) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || ai::test(&base_url, &model, key.as_deref()))
         .await
         .map_err(|e| format!("后台任务失败：{e}"))?
 }
@@ -492,8 +552,8 @@ fn ai_cancel(state: tauri::State<'_, ai::AiState>, id: String) {
 }
 
 #[tauri::command]
-async fn ai_list_models(base_url: String) -> Result<Vec<ai::ProviderModel>, String> {
-    tauri::async_runtime::spawn_blocking(move || ai::list_models(&base_url))
+async fn ai_list_models(base_url: String, key: Option<String>) -> Result<Vec<ai::ProviderModel>, String> {
+    tauri::async_runtime::spawn_blocking(move || ai::list_models(&base_url, key.as_deref()))
         .await
         .map_err(|e| format!("后台任务失败：{e}"))?
 }
@@ -677,6 +737,10 @@ pub fn run() {
             vault_create,
             note_create,
             folder_create,
+            book_create,
+            sheet_create,
+            sheet_duplicate,
+            book_set_order,
             entry_rename,
             entry_move,
             entry_trash,
@@ -701,6 +765,7 @@ pub fn run() {
             ai_save_key,
             ai_has_key,
             ai_clear_key,
+            ai_migrate_key,
             ai_test,
             ai_chat,
             ai_cancel,

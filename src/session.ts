@@ -29,7 +29,7 @@ export async function installVaultEvents(): Promise<void> {
   });
 }
 
-/** 把打开的标签页、展开的文件夹、排序方式记到本机设置里，下次打开同一笔记库时恢复 */
+/** 把打开的标签页、展开的文件夹、排序方式、隐藏的项记到本机设置里，下次打开同一笔记库时恢复 */
 export function installSessionPersistence(): void {
   const settings = useSettingsStore();
   const vault = useVaultStore();
@@ -43,6 +43,7 @@ export function installSessionPersistence(): void {
       expanded: [...vault.expanded],
       sortKey: vault.sortKey,
       sortDesc: vault.sortDesc,
+      hidden: [...vault.hidden],
     }),
     (state) => {
       if (vault.root && !vault.switching) settings.patchVaultUi(vault.root, state);

@@ -11,6 +11,7 @@ import { useContextMenuStore } from "../stores/contextMenu";
 import { fileManagerName, isMac } from "../lib/platform";
 import { DOC_ICON, DOC_TAG, docKind } from "../lib/doctype";
 import { newItems } from "../lib/newMenu";
+import { bookOf } from "../lib/book";
 import { useMindGenStore } from "../stores/mindGen";
 
 defineProps<{ nodes: TreeNode[]; depth: number }>();
@@ -18,9 +19,13 @@ const vault = useVaultStore();
 const tabs = useTabsStore();
 const ctxMenu = useContextMenuStore();
 
+/** 表格簿在磁盘上是文件夹，但在文件树里像文件一样不能展开：点击打开它，停在上次看的那张表 */
+const isFolder = (node: TreeNode) => node.isDir && !node.book;
+
 function click(node: TreeNode) {
   vault.selected = node.path;
-  if (node.isDir) vault.toggle(node.path);
+  if (isFolder(node)) vault.toggle(node.path);
+  else if (node.book) void tabs.open(node.path);
   else void tabs.open(node.path, { preview: true });
 }
 
@@ -32,7 +37,7 @@ function onKey(e: KeyboardEvent, node: TreeNode) {
   if (vault.renaming) return;
   if (e.key === "Enter") {
     e.preventDefault();
-    if (node.isDir) vault.toggle(node.path);
+    if (isFolder(node)) vault.toggle(node.path);
     else void tabs.open(node.path);
   } else if (e.key === "F2") {
     e.preventDefault();
@@ -61,7 +66,7 @@ async function reveal(node: TreeNode) {
 
 function onMenu(e: MouseEvent, node: TreeNode) {
   vault.selected = node.path;
-  const dir = node.isDir ? node.path : dirOf(node.path);
+  const dir = isFolder(node) ? node.path : dirOf(node.path);
   const items: MenuEntry[] = [
     ...newItems(dir),
     { kind: "sep" },
@@ -69,6 +74,7 @@ function onMenu(e: MouseEvent, node: TreeNode) {
       ? [{ kind: "item", label: "用 AI 生成思维导图", action: () => useMindGenStore().start(node.path) } as MenuEntry, { kind: "sep" } as MenuEntry]
       : []),
     { kind: "item", label: "重命名", hint: "F2", action: () => (vault.renaming = node.path) },
+    { kind: "item", label: "隐藏", action: () => vault.hide(node.path) },
     { kind: "item", label: "删除", hint: isMac ? "Cmd+Backspace" : "Delete", action: () => vault.trash(node.path) },
     { kind: "sep" },
     { kind: "item", label: vault.favorites.has(node.path) ? "取消收藏" : "收藏", action: () => vault.toggleFavorite(node.path) },
@@ -116,7 +122,7 @@ function whereOf(e: DragEvent, node: TreeNode): DropWhere | null {
   const el = e.currentTarget as HTMLElement;
   const ratio = (e.clientY - el.getBoundingClientRect().top) / el.offsetHeight;
   const custom = vault.sortKey === "custom";
-  if (node.isDir) {
+  if (isFolder(node)) {
     if (custom && ratio < 0.25) return "before";
     if (custom && ratio > 0.75) return "after";
     return "into";
@@ -146,14 +152,14 @@ async function onDrop(e: DragEvent, node: TreeNode) {
   const target = dropTarget.value;
   endDrag();
   if (!from || !target || target.path !== node.path) return;
-  if (target.where === "into") await vault.move(from, node.isDir ? node.path : dirOf(node.path));
+  if (target.where === "into") await vault.move(from, isFolder(node) ? node.path : dirOf(node.path));
   else await vault.place(from, node.path, target.where);
 }
 
 function dropClass(node: TreeNode) {
   const t = dropTarget.value;
   if (!t || t.path !== node.path) return "";
-  if (t.where === "into") return node.isDir ? "drop-into" : "";
+  if (t.where === "into") return isFolder(node) ? "drop-into" : "";
   return `drop-${t.where}`;
 }
 </script>
@@ -164,7 +170,7 @@ function dropClass(node: TreeNode) {
       class="row"
       :class="[
         {
-          'is-active': !node.isDir && node.path === tabs.activePath,
+          'is-active': node.book ? !!tabs.activePath && bookOf(tabs.activePath) === node.path : !node.isDir && node.path === tabs.activePath,
           'is-selected': node.path === vault.selected,
           'is-dragging': node.path === dragging,
         },
@@ -172,7 +178,7 @@ function dropClass(node: TreeNode) {
       ]"
       :style="{ '--d': depth }"
       role="treeitem"
-      :aria-expanded="node.isDir ? vault.expanded.has(node.path) : undefined"
+      :aria-expanded="isFolder(node) ? vault.expanded.has(node.path) : undefined"
       tabindex="0"
       :title="node.path"
       :draggable="vault.renaming !== node.path"
@@ -185,9 +191,9 @@ function dropClass(node: TreeNode) {
       @drop="onDrop($event, node)"
       @dragend="endDrag()"
     >
-      <Icon v-if="node.isDir" class="chev" :name="vault.expanded.has(node.path) ? 'down' : 'right'" />
+      <Icon v-if="isFolder(node)" class="chev" :name="vault.expanded.has(node.path) ? 'down' : 'right'" />
       <span v-else class="spacer" />
-      <Icon :name="node.isDir ? 'folder' : DOC_ICON[docKind(node.path) ?? 'note']" />
+      <Icon :name="node.book ? 'book' : node.isDir ? 'folder' : DOC_ICON[docKind(node.path) ?? 'note']" />
       <input
         v-if="vault.renaming === node.path"
         class="row-rename"
@@ -202,6 +208,6 @@ function dropClass(node: TreeNode) {
       <span v-if="!node.isDir && DOC_TAG[docKind(node.path) ?? 'note']" class="kind-tag">{{ DOC_TAG[docKind(node.path) ?? 'note'] }}</span>
       <Icon v-if="vault.favorites.has(node.path)" class="star" name="star" sm />
     </li>
-    <TreeRows v-if="node.isDir && vault.expanded.has(node.path)" :nodes="node.children" :depth="depth + 1" />
+    <TreeRows v-if="isFolder(node) && vault.expanded.has(node.path)" :nodes="node.children" :depth="depth + 1" />
   </template>
 </template>

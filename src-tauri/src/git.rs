@@ -1124,12 +1124,39 @@ fn unique_conflict_rel(root: &Path, path: &str, computer: &str, stamp: &str) -> 
     Err("无法生成冲突副本文件名".into())
 }
 
+/// 笔记库配置的冲突不必让用户处理：times.json 两边合并，其余（排序、收藏等）以正在同步的这一台为准
+fn resolve_config(root: &Path, git: &Path, path: &str) -> Result<(), String> {
+    let ours = stage_blob(root, git, 2, path)?;
+    let theirs = stage_blob(root, git, 3, path)?;
+    let dest = vault::resolve(root, path)?;
+    let content = match (ours, theirs) {
+        (Some(a), Some(b)) if path == crate::times::REL => {
+            Some(crate::times::merge_text(&String::from_utf8_lossy(&a), &String::from_utf8_lossy(&b)).into_bytes())
+        }
+        (Some(a), _) => Some(a),
+        (None, b) => b,
+    };
+    match content {
+        Some(bytes) => {
+            write_bytes(&dest, &bytes)?;
+            run_ok(root, git, &["add", "--", path])?;
+        }
+        None => {
+            run_ok(root, git, &["rm", "-f", "--ignore-unmatch", "--", path])?;
+        }
+    }
+    Ok(())
+}
+
 fn finish_conflicts(root: &Path, git: &Path) -> Result<GitAction, String> {
     let paths = unmerged_paths(root, git)?;
     let mut notes = Vec::new();
+    let mut configs = Vec::new();
     let mut others = Vec::new();
     for path in paths {
-        if is_note_path(&path) {
+        if path.starts_with(".ttnote/config/") {
+            configs.push(path);
+        } else if is_note_path(&path) {
             notes.push(path);
         } else {
             others.push(path);
@@ -1148,9 +1175,13 @@ fn finish_conflicts(root: &Path, git: &Path) -> Result<GitAction, String> {
         let _ = run(root, git, &["merge", "--abort"]);
         return Ok(need_identity());
     }
-    let copies = resolve_notes(root, git, &notes).inspect_err(|_| {
-        let _ = run(root, git, &["merge", "--abort"]);
-    })?;
+    let copies = configs
+        .iter()
+        .try_for_each(|p| resolve_config(root, git, p))
+        .and_then(|_| resolve_notes(root, git, &notes))
+        .inspect_err(|_| {
+            let _ = run(root, git, &["merge", "--abort"]);
+        })?;
     let message = if copies == 0 {
         "合并远程".into()
     } else {
@@ -1452,6 +1483,68 @@ pub fn change_diff(root: &Path, max_chars: usize) -> Result<ChangeDiff, String> 
     })
 }
 
+/// 有 Git 操作正在进行（拉取、合并时工作区文件随时在变）
+pub fn busy() -> bool {
+    GIT_LOCK.try_lock().is_err()
+}
+
+/// 每个文件第一次和最后一次提交的时间（毫秒）
+#[derive(Debug, Default)]
+pub struct FileTimes {
+    pub commits: std::collections::HashMap<String, (u64, u64)>,
+    /// 有未提交改动的文件：它的修改时间不能用最后一次提交的时间
+    pub dirty: HashSet<String>,
+}
+
+/// 用于给还没有记录时间的文件补记。笔记库不是仓库、没有提交或没装 Git 时返回空。
+pub fn file_times(root: &Path) -> Result<FileTimes, String> {
+    with_lock(|| {
+        let mut out = FileTimes::default();
+        let Some(git) = locate_git() else { return Ok(out) };
+        if !root.join(".git").exists() || !is_repo(root, &git)? {
+            return Ok(out);
+        }
+        let log = run(root, &git, &["log", "--no-renames", "--format=%x01%ct", "--name-only"])?;
+        if log.code == 0 {
+            out.commits = parse_file_times(&log.stdout_str());
+        }
+        let status = run(root, &git, &["status", "--porcelain=v1", "-z", "--untracked-files=no"])?;
+        if status.code == 0 {
+            let text = status.stdout_str();
+            let mut parts = text.split('\0');
+            while let Some(entry) = parts.next() {
+                if entry.len() < 4 {
+                    continue;
+                }
+                out.dirty.insert(entry[3..].to_string());
+                // 改名的记录后面还跟着原来的路径
+                if entry.starts_with('R') || entry.starts_with('C') {
+                    parts.next();
+                }
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// 解析 `git log --format=%x01%ct --name-only`：新提交在前
+pub fn parse_file_times(text: &str) -> std::collections::HashMap<String, (u64, u64)> {
+    let mut map: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+    let mut at = 0u64;
+    for line in text.lines() {
+        if let Some(ts) = line.strip_prefix('\u{1}') {
+            at = ts.trim().parse::<u64>().unwrap_or(0) * 1000;
+            continue;
+        }
+        let path = line.trim();
+        if path.is_empty() || at == 0 {
+            continue;
+        }
+        map.entry(path.to_string()).and_modify(|e| e.0 = at).or_insert((at, at));
+    }
+    map
+}
+
 pub fn log(root: &Path) -> Result<Vec<GitLogEntry>, String> {
     with_lock(|| {
         let Some(git) = locate_git() else {
@@ -1745,6 +1838,51 @@ mod tests {
         let local = fs::read_to_string(b.join(copy)).unwrap();
         assert!(local.contains("local-side"), "{local}");
         assert!(!b.join(".git").join("MERGE_HEAD").exists());
+    }
+
+    #[test]
+    fn config_conflict_merges_times_and_keeps_local_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("origin.git");
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        let times = |s: &str| format!("{{\n  \"a.md\": {s}\n}}\n");
+        let write = |dir: &Path, name: &str, text: &str| {
+            fs::create_dir_all(dir.join(".ttnote/config")).unwrap();
+            fs::write(dir.join(".ttnote/config").join(name), text).unwrap();
+        };
+        git_at(tmp.path(), &["init", "--bare", "-b", "main", bare.to_str().unwrap()]);
+        git_at(tmp.path(), &["clone", bare.to_str().unwrap(), "a"]);
+        prep_existing(&a);
+        write(&a, "times.json", &times(r#"{"created":5,"modified":10,"hash":"x"}"#));
+        write(&a, "order.json", "{\"\": [\"a.md\"]}\n");
+        git_at(&a, &["add", "-A"]);
+        git_at(&a, &["commit", "-m", "base"]);
+        git_at(&a, &["push", "-u", "origin", "main"]);
+        git_at(tmp.path(), &["clone", bare.to_str().unwrap(), "b"]);
+        prep_existing(&b);
+        write(&a, "times.json", &times(r#"{"created":5,"modified":30,"hash":"remote"}"#));
+        write(&a, "order.json", "{\"\": [\"remote\"]}\n");
+        git_at(&a, &["add", "-A"]);
+        git_at(&a, &["commit", "-m", "remote"]);
+        git_at(&a, &["push"]);
+        write(&b, "times.json", &times(r#"{"created":3,"modified":20,"hash":"local"}"#));
+        write(&b, "order.json", "{\"\": [\"local\"]}\n");
+        git_at(&b, &["add", "-A"]);
+        git_at(&b, &["commit", "-m", "local"]);
+        let report = pull(b.as_path(), LocalChanges::Keep).unwrap();
+        assert_eq!(report.notice, "已拉取");
+        let merged = crate::times::parse(&fs::read_to_string(b.join(crate::times::REL)).unwrap());
+        assert_eq!(merged["a.md"], crate::times::Stamp { created: 3, modified: 30, hash: "remote".into() });
+        assert!(fs::read_to_string(b.join(".ttnote/config/order.json")).unwrap().contains("local"));
+        assert!(!b.join(".git").join("MERGE_HEAD").exists());
+    }
+
+    #[test]
+    fn parses_first_and_last_commit_time_per_file() {
+        let map = parse_file_times("\u{1}300\n\na.md\nd/b.md\n\u{1}200\n\na.md\n\u{1}100\n\nd/b.md\n");
+        assert_eq!(map["a.md"], (200_000, 300_000));
+        assert_eq!(map["d/b.md"], (100_000, 300_000));
     }
 
     #[test]

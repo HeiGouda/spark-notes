@@ -1,20 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { builtinContext, estimateTokens, formatTokens, normalizeModels, resolveContext, sendBudget } from "./aiModels";
+import { builtinContext, estimateTokens, formatTokens, normalizeModels, resolveContext, sendBudget, type AiModelEntry } from "./aiModels";
 
 describe("模型上下文长度", () => {
   it("优先级：手动填写 > 服务商返回 > 内置表 > 128K", () => {
-    const provider = { "qwen-plus": 1_000_000 };
-    expect(resolveContext({ name: "qwen-plus", context: 50_000 }, provider)).toEqual({ tokens: 50_000, source: "manual" });
-    expect(resolveContext({ name: "qwen-plus", context: null }, provider)).toEqual({ tokens: 1_000_000, source: "provider" });
-    expect(resolveContext({ name: "qwen-max", context: null }, provider)).toEqual({ tokens: 32_768, source: "builtin" });
-    expect(resolveContext({ name: "my-finetune", context: null }, {})).toEqual({ tokens: 128_000, source: "default" });
+    expect(resolveContext({ name: "qwen-plus", context: 50_000, providerContext: 1_000_000 })).toEqual({ tokens: 50_000, source: "manual" });
+    expect(resolveContext({ name: "qwen-plus", context: null, providerContext: 1_000_000 })).toEqual({ tokens: 1_000_000, source: "provider" });
+    expect(resolveContext({ name: "qwen-max", context: null, providerContext: null })).toEqual({ tokens: 32_768, source: "builtin" });
+    expect(resolveContext({ name: "my-finetune", context: null, providerContext: null })).toEqual({ tokens: 128_000, source: "default" });
   });
 
-  it("内置表支持厂商前缀和 -32k 之类的后缀", () => {
+  it("内置表支持厂商前缀和 -32k 之类的后缀，并认得当前主力模型", () => {
     expect(builtinContext("qwen/qwen-long")).toBe(10_000_000);
     expect(builtinContext("moonshot-v1-8k")).toBe(8_192);
     expect(builtinContext("some-model-32k")).toBe(32_768);
     expect(builtinContext("unknown")).toBeNull();
+    expect(builtinContext("qwen3.8-max")).toBe(1_000_000);
+    expect(builtinContext("kimi-k3")).toBe(1_000_000);
+    expect(builtinContext("kimi-k2.6")).toBe(262_144);
+    expect(builtinContext("glm-5.3")).toBe(1_000_000);
+    expect(builtinContext("MiniMax-M3")).toBe(1_000_000);
+    expect(builtinContext("deepseek-v4-pro")).toBe(128_000);
   });
 
   it("给回复预留 8K 与 10% 中较小的一个", () => {
@@ -39,11 +44,35 @@ describe("token 估算与显示", () => {
 });
 
 describe("读取模型列表设置", () => {
-  it("迁移旧版本的单个模型名，去掉空名与重复", () => {
-    expect(normalizeModels(undefined, "deepseek-chat")).toEqual([{ name: "deepseek-chat", context: null }]);
-    expect(normalizeModels([{ name: " a ", context: "8192" }, { name: "a" }, { name: "" }, { name: "b", context: -1 }])).toEqual([
-      { name: "a", context: 8192 },
-      { name: "b", context: null },
+  const strip = (list: AiModelEntry[]) => list.map(({ id: _id, ...rest }) => rest);
+
+  it("迁移更早版本的单个模型名：用旧的接口地址，认出服务商", () => {
+    const r = normalizeModels(undefined, { baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.6" });
+    expect(r.migrated).toBe(true);
+    expect(r.legacyBaseUrl).toBe("https://api.moonshot.cn/v1");
+    expect(strip(r.models)).toEqual([{ provider: "kimi", baseUrl: "https://api.moonshot.cn/v1", name: "kimi-k2.6", label: "", context: null, providerContext: null }]);
+  });
+
+  it("迁移旧的模型列表：服务商返回的上下文按模型名并入，去掉空名与重复", () => {
+    const r = normalizeModels([{ name: " a ", context: "8192" }, { name: "a" }, { name: "" }, { name: "b", context: -1 }], {
+      baseUrl: "https://example.com/v1",
+      providerContexts: { b: 32768 },
+    });
+    expect(r.migrated).toBe(true);
+    expect(strip(r.models)).toEqual([
+      { provider: "custom", baseUrl: "https://example.com/v1", name: "a", label: "", context: 8192, providerContext: null },
+      { provider: "custom", baseUrl: "https://example.com/v1", name: "b", label: "", context: null, providerContext: 32768 },
     ]);
+  });
+
+  it("新格式原样读取；不同接口地址下的同名模型都保留", () => {
+    const saved = [
+      { id: "x", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", name: "deepseek-v4-pro", label: "DeepSeek V4 Pro", context: null, providerContext: null },
+      { id: "y", provider: "custom", baseUrl: "https://proxy.example.com/v1", name: "deepseek-v4-pro", label: "", context: 64000, providerContext: null },
+    ];
+    const r = normalizeModels(saved, { baseUrl: "https://api.deepseek.com/v1" });
+    expect(r.migrated).toBe(false);
+    expect(r.legacyBaseUrl).toBeNull();
+    expect(r.models).toEqual(saved);
   });
 });

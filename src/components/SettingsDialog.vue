@@ -9,17 +9,19 @@ import type { SyncDirection } from "../lib/api";
 import { firstStep, serializeSyncConfig, useWebdavStore, type SyncMode } from "../stores/webdav";
 import { useGitStore } from "../stores/git";
 import { useNoticeStore } from "../stores/notice";
-import { useSettingsStore } from "../stores/settings";
+import { useSettingsStore, type EditorWidthMode } from "../stores/settings";
 import { useUiStore } from "../stores/ui";
-import { useVaultStore } from "../stores/vault";
+import { NEED_VAULT_FOR_SYNC, useVaultStore } from "../stores/vault";
 import { TIDY_RULES } from "../editor/tidy";
-import { AI_PRESETS, type AiPresetId } from "../lib/ai";
-import { useAiStore } from "../stores/ai";
-import { resolveContext, SOURCE_LABELS, type AiModelEntry } from "../lib/aiModels";
+import { ask } from "@tauri-apps/plugin-dialog";
+import AiModelDialog from "./AiModelDialog.vue";
+import { presetOf, sameBaseUrl } from "../lib/ai";
+import { formatTokens, modelLabel, SOURCE_LABELS, type AiModelEntry } from "../lib/aiModels";
 import { shortcutOf } from "../lib/commands";
 import { displayShortcut } from "../lib/shortcut";
 import { THEMES } from "../lib/themes";
-import { credentialStoreName } from "../lib/platform";
+import { credentialStoreName, isMac } from "../lib/platform";
+import { DOC_ICON, docKind } from "../lib/doctype";
 
 const ui = useUiStore();
 const settings = useSettingsStore();
@@ -29,6 +31,7 @@ const vault = useVaultStore();
 
 const SECTIONS = [
   ["general", "通用"],
+  ["hidden", "已隐藏"],
   ["look", "外观"],
   ["editor", "编辑器"],
   ["sync", "同步"],
@@ -37,107 +40,29 @@ const SECTIONS = [
   ["ai", "AI"],
 ] as const;
 
-const ai = useAiStore();
-const aiKey = ref("");
-const editingKey = ref(false);
-const aiTesting = ref(false);
-const aiOk = ref("");
+function hiddenIcon(path: string): string {
+  const n = vault.node(path);
+  if (n?.book) return "book";
+  return n?.isDir ? "folder" : DOC_ICON[docKind(path) ?? "note"];
+}
+
+/* ---------- AI 模型列表（需求文档 5.16） ---------- */
+/** 正在添加（null）或编辑的模型；undefined 表示对话框没打开 */
+const editingModel = ref<AiModelEntry | null | undefined>(undefined);
 const aiError = ref("");
 
-async function saveAiKey() {
+async function removeModel(m: AiModelEntry) {
+  const ok = await ask(`确定删除模型“${modelLabel(m)}”吗？`, { title: "删除模型", kind: "warning", okLabel: "删除", cancelLabel: "取消" });
+  if (!ok) return;
   aiError.value = "";
-  try {
-    await api.aiSaveKey(aiKey.value);
-    aiKey.value = "";
-    editingKey.value = false;
-    await ai.refreshKey();
-  } catch (e) {
-    aiError.value = e instanceof Error ? e.message : String(e);
-  }
-}
-
-async function clearAiKey() {
-  aiError.value = "";
-  try {
-    await api.aiClearKey();
-    await ai.refreshKey();
-  } catch (e) {
-    aiError.value = e instanceof Error ? e.message : String(e);
-  }
-}
-
-/* ---------- 模型列表（需求文档 5.16） ---------- */
-const modelRows = ref<AiModelEntry[]>([]);
-const aiReading = ref(false);
-
-function copyModels() {
-  modelRows.value = settings.aiModels.map((m) => ({ ...m }));
-  if (!modelRows.value.length) modelRows.value.push({ name: "", context: null });
-}
-
-function commitModels() {
-  settings.setAiModels(modelRows.value.filter((m) => m.name));
-}
-
-function editModel(i: number, patch: Partial<AiModelEntry>) {
-  modelRows.value[i] = { ...modelRows.value[i], ...patch };
-  commitModels();
-}
-
-function addModel() {
-  modelRows.value.push({ name: "", context: null });
-}
-
-function removeModel(i: number) {
-  modelRows.value.splice(i, 1);
-  commitModels();
-  if (!modelRows.value.length) addModel();
-}
-
-function parseTokens(raw: string): number | null {
-  const n = Number(raw.replace(/[,，\s]/g, ""));
-  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
-}
-
-/** 不算手动填写时的上下文长度，作为输入框的占位提示 */
-function autoContext(row: AiModelEntry): number {
-  return resolveContext({ name: row.name, context: null }, settings.aiProviderContexts).tokens;
-}
-
-function sourceOf(row: AiModelEntry) {
-  return resolveContext(row, settings.aiProviderContexts).source;
-}
-
-async function readProviderModels() {
-  aiError.value = "";
-  aiOk.value = "";
-  aiReading.value = true;
-  try {
-    const list = await api.aiListModels(settings.aiBaseUrl);
-    const map: Record<string, number> = {};
-    for (const m of list) if (m.context) map[m.id] = m.context;
-    settings.setAiProviderContexts(map);
-    const count = Object.keys(map).length;
-    if (!count) aiError.value = `服务商返回了 ${list.length} 个模型，但没有给出上下文长度，可以手动填写`;
-    else aiOk.value = `已读取 ${count} 个模型的上下文长度`;
-  } catch (e) {
-    aiError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    aiReading.value = false;
-  }
-}
-
-async function testAi() {
-  aiError.value = "";
-  aiOk.value = "";
-  aiTesting.value = true;
-  try {
-    const ms = await api.aiTest(settings.aiBaseUrl, settings.aiModel);
-    aiOk.value = `连接成功，${(ms / 1000).toFixed(1)} 秒内收到回复`;
-  } catch (e) {
-    aiError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    aiTesting.value = false;
+  settings.removeAiModel(m.id);
+  // 这个接口地址已没有模型使用时，一并清除它的 API Key
+  if (!settings.aiModels.some((x) => sameBaseUrl(x.baseUrl, m.baseUrl))) {
+    try {
+      await api.aiClearKey(m.baseUrl);
+    } catch (e) {
+      aiError.value = `模型已删除，但清除 API Key 失败：${messageOf(e)}`;
+    }
   }
 }
 
@@ -198,11 +123,8 @@ watch(() => ui.settingsOpen, (open) => {
   copyGit();
   copyDav();
   void loadRetention();
-  aiOk.value = "";
   aiError.value = "";
-  editingKey.value = false;
-  copyModels();
-  void ai.refreshKey();
+  editingModel.value = undefined;
 });
 
 function close() {
@@ -314,7 +236,8 @@ async function saveRetention() {
 }
 
 function onKey(e: KeyboardEvent) {
-  if (!ui.settingsOpen || e.key !== "Escape" || ui.recording) return;
+  // 添加 / 编辑模型的对话框开着时，Esc 只关它
+  if (!ui.settingsOpen || e.key !== "Escape" || ui.recording || editingModel.value !== undefined) return;
   e.preventDefault();
   e.stopImmediatePropagation();
   close();
@@ -339,6 +262,30 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
           <div v-if="ui.settingsSection === 'general'" class="git-body">
             <label class="git-check"><input type="checkbox" :checked="settings.openLastVault" @change="settings.setOpenLastVault(($event.target as HTMLInputElement).checked)" />启动时打开上次的笔记库</label>
             <label class="git-check"><input type="checkbox" :checked="settings.restoreTabs" @change="settings.setRestoreTabs(($event.target as HTMLInputElement).checked)" />恢复上次打开的标签页</label>
+          </div>
+          <div v-else-if="ui.settingsSection === 'hidden'" class="retain">
+            <p v-if="!vault.root" class="git-hint retain-none">未打开笔记库</p>
+            <div v-else class="tl">
+              <div class="tl-bar">
+                <span class="tl-count">{{ vault.hidden.length ? `共 ${vault.hidden.length} 项` : "" }}</span>
+                <button class="fb-txt" type="button" :disabled="!vault.hidden.length" @click="vault.unhideAll()">全部恢复</button>
+              </div>
+              <div v-if="!vault.hidden.length" class="tl-empty">
+                <p>没有隐藏的文件或文件夹</p>
+                <p class="git-hint">在文件树里右键文件或文件夹，选择“隐藏”。隐藏只影响文件树，搜索和链接照常可用。</p>
+              </div>
+              <ul v-else class="tl-list">
+                <li v-for="p in vault.hidden" :key="p" class="tl-row">
+                  <Icon :name="hiddenIcon(p)" sm />
+                  <div class="tl-main" :title="p">
+                    <div class="log-msg">{{ p }}</div>
+                  </div>
+                  <div class="tl-acts">
+                    <button class="fb-txt" type="button" @click="vault.unhide(p)">恢复</button>
+                  </div>
+                </li>
+              </ul>
+            </div>
           </div>
           <div v-else-if="ui.settingsSection === 'look'" class="git-body">
             <div class="git-sec">主题</div>
@@ -367,11 +314,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
               </select>
             </div>
             <div class="git-row">字号 <input class="git-num" type="text" :value="settings.editorFontSize" @change="settings.patchEditor({ editorFontSize: Number(($event.target as HTMLInputElement).value) })" /> 像素</div>
+            <label class="git-check"><input type="checkbox" :checked="settings.wheelFontSize" @change="settings.patchEditor({ wheelFontSize: ($event.target as HTMLInputElement).checked })" />{{ isMac ? "Cmd" : "Ctrl" }}+滚轮调整字号</label>
             <div class="git-row">行高 <input class="git-num" type="text" :value="settings.editorLineHeight" @change="settings.patchEditor({ editorLineHeight: Number(($event.target as HTMLInputElement).value) })" /></div>
-            <div class="git-row">正文最大宽度 <input class="git-num" type="text" :value="settings.editorMaxWidth" @change="settings.patchEditor({ editorMaxWidth: Number(($event.target as HTMLInputElement).value) })" /> 像素</div>
+            <div class="git-row">正文宽度
+              <select class="set-select" aria-label="正文宽度" :value="settings.editorWidthMode" @change="settings.patchEditor({ editorWidthMode: ($event.target as HTMLSelectElement).value as EditorWidthMode })">
+                <option value="fixed">固定</option>
+                <option value="fill">自适应</option>
+              </select>
+              <input class="git-num" type="text" aria-label="正文宽度像素" :disabled="settings.editorWidthMode === 'fill'" :value="settings.editorMaxWidth" @change="settings.patchEditor({ editorMaxWidth: Number(($event.target as HTMLInputElement).value) })" /> 像素
+            </div>
             <label class="git-check"><input type="checkbox" :checked="settings.codeLineNumbers" @change="settings.patchEditor({ codeLineNumbers: ($event.target as HTMLInputElement).checked })" />代码块显示行号</label>
             <label class="git-check"><input type="checkbox" :checked="settings.spellcheck" @change="settings.patchEditor({ spellcheck: ($event.target as HTMLInputElement).checked })" />拼写检查</label>
-            <p class="git-hint">字号 13–24，行高 1.4–2.2，宽度 560–1200。超出范围时会改回默认值。</p>
+            <p class="git-hint">字号 13–24，行高 1.4–2.2，宽度 560–1200。超出范围时会改回默认值。自适应时正文铺满编辑区。</p>
             <div class="git-sec">一键整理（{{ tidyKey }}）</div>
             <p class="git-hint">有选中文字时只整理选中部分。代码、链接地址和 Front Matter 不会改动，整理后可以撤销。</p>
             <label v-for="r in TIDY_RULES" :key="r.id" class="git-check">
@@ -380,6 +334,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
           </div>
           <form v-else-if="ui.settingsSection === 'sync'" class="git-body" @submit.prevent="saveSync">
             <div class="git-sec">同步方式</div>
+            <p v-if="!vault.root" class="git-hint retain-none">{{ NEED_VAULT_FOR_SYNC }}</p>
             <label class="git-check"><input v-model="syncMode" type="radio" value="off" />不同步</label>
             <label class="git-check"><input v-model="syncMode" type="radio" value="webdav" />WebDAV</label>
             <label class="git-check"><input v-model="syncMode" type="radio" value="git" />Git</label>
@@ -420,7 +375,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
               </div>
             </div>
             <div class="git-actions">
-              <button v-if="syncMode === 'webdav'" class="fb-txt" type="button" :disabled="davTesting" @click="testDav()">{{ davTesting ? "正在测试…" : "测试连接" }}</button>
+              <button v-if="syncMode === 'webdav'" class="fb-txt" type="button" :disabled="davTesting || !vault.root" @click="testDav()">{{ davTesting ? "正在测试…" : "测试连接" }}</button>
               <button class="btn-primary" type="submit" :disabled="!vault.root || webdav.busy === 'check'">{{ syncMode === "git" ? "保存自动提交设置" : "保存" }}</button>
             </div>
           </form>
@@ -444,49 +399,41 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
           </div>
           <KeysDialog v-else-if="ui.settingsSection === 'keys'" embedded />
           <div v-else-if="ui.settingsSection === 'ai'" class="git-body">
-            <p class="git-hint">只在你点击 AI 功能时才发送内容，后台不会自动发送任何笔记。支持所有 OpenAI 兼容接口。</p>
-            <div class="git-sec">服务商</div>
-            <select class="set-select" aria-label="服务商预设" :value="settings.aiPreset" @change="settings.setAiPreset(($event.target as HTMLSelectElement).value as AiPresetId)">
-              <option v-for="p in AI_PRESETS" :key="p.id" :value="p.id">{{ p.label }}</option>
-            </select>
-            <p class="git-hint">预设只负责填好接口地址，可以再修改。</p>
-            <label for="ai-url">接口地址</label>
-            <input id="ai-url" type="text" spellcheck="false" placeholder="https://…/v1" :value="settings.aiBaseUrl" @change="settings.setAiBaseUrl(($event.target as HTMLInputElement).value)" />
-            <label for="ai-key">API Key</label>
-            <div v-if="ai.hasKey && !editingKey" class="api-key-row">
-              <Icon name="key" sm /><span class="flex">已保存到{{ credentialStoreName }}</span>
-              <button class="scm-link" type="button" @click="editingKey = true">修改</button>
-              <button class="scm-link" type="button" @click="clearAiKey()">清除</button>
+            <div class="aim-head">
+              <p class="git-hint">只在你点击 AI 功能时才发送内容，后台不会自动发送任何笔记。支持 OpenAI 兼容接口。</p>
+              <button class="btn-primary" type="button" @click="editingModel = null"><Icon name="plus" sm />添加模型</button>
             </div>
-            <form v-else class="key-edit" @submit.prevent="saveAiKey">
-              <input id="ai-key" v-model="aiKey" type="password" autocomplete="off" placeholder="本机模型（Ollama、LM Studio）可以不填" />
-              <button class="fb-txt" type="submit" :disabled="!aiKey.trim()">保存</button>
-              <button v-if="ai.hasKey" class="fb-txt" type="button" @click="editingKey = false">取消</button>
-            </form>
-            <p class="git-hint">API Key 只保存在这台电脑的系统凭据库里，不写入任何配置文件。</p>
-            <label>模型</label>
-            <div class="model-table">
-              <div class="mt-row mt-head"><span>模型名</span><span>上下文（tokens）</span><span>来源</span><span /></div>
-              <div v-for="(row, i) in modelRows" :key="i" class="mt-row">
-                <input type="text" spellcheck="false" placeholder="例如 deepseek-chat" :value="row.name" aria-label="模型名" @change="editModel(i, { name: ($event.target as HTMLInputElement).value.trim() })" />
-                <input type="text" inputmode="numeric" :placeholder="autoContext(row).toLocaleString('zh-CN')" :value="row.context ? row.context.toLocaleString('zh-CN') : ''" aria-label="上下文长度" @change="editModel(i, { context: parseTokens(($event.target as HTMLInputElement).value) })" />
-                <span class="mt-src" :class="{ 'mt-unknown': sourceOf(row) === 'default' }">{{ SOURCE_LABELS[sourceOf(row)] }}<em v-if="i === 0" class="mt-def">默认</em></span>
-                <button class="btn" type="button" title="移除" @click="removeModel(i)"><Icon name="close" sm /></button>
+            <template v-if="settings.aiModels.length">
+              <label for="ai-default">默认模型</label>
+              <select id="ai-default" class="set-select aim-default" :value="settings.defaultModel?.id" @change="settings.setAiDefaultModel(($event.target as HTMLSelectElement).value)">
+                <option v-for="m in settings.aiModels" :key="m.id" :value="m.id">{{ modelLabel(m) }}（{{ presetOf(m.provider).label }}）</option>
+              </select>
+              <p class="git-hint">AI 指令、总结、整理结构、提交说明、生成思维导图和流程图都用默认模型；AI 对话里可以临时切换。</p>
+              <div class="git-sec">已添加的模型</div>
+              <div class="aim-table" role="table">
+                <div class="aim-row aim-th" role="row"><span>名称</span><span>服务商</span><span>模型</span><span>上下文</span><span /></div>
+                <div v-for="m in settings.aiModels" :key="m.id" class="aim-row" role="row">
+                  <span class="aim-label" :title="modelLabel(m)">{{ modelLabel(m) }}<em v-if="m.id === settings.defaultModel?.id" class="mt-def">默认</em></span>
+                  <span class="aim-cell" :title="m.baseUrl">{{ presetOf(m.provider).label }}</span>
+                  <span class="aim-cell aim-code" :title="m.name">{{ m.name }}</span>
+                  <span class="mt-src" :class="{ 'mt-unknown': settings.contextOf(m).source === 'default' }">{{ formatTokens(settings.contextOf(m).tokens) }} · {{ SOURCE_LABELS[settings.contextOf(m).source] }}</span>
+                  <span class="aim-acts">
+                    <button class="scm-link" type="button" @click="editingModel = m">编辑</button>
+                    <button class="scm-link is-danger" type="button" @click="removeModel(m)">删除</button>
+                  </span>
+                </div>
               </div>
-            </div>
-            <div class="mt-actions">
-              <button class="fb-txt" type="button" @click="addModel()">添加模型</button>
-              <button class="fb-txt" type="button" :disabled="aiReading" title="从服务商的模型列表接口读取上下文长度（部分服务商支持）" @click="readProviderModels()">{{ aiReading ? "正在读取…" : "从服务商读取" }}</button>
-            </div>
-            <p class="git-hint">第一个是默认模型，AI 指令、总结、整理结构、提交说明都用它；AI 对话里可以临时切换。上下文长度留空时依次使用服务商返回的值、内置表，都没有时按 128K；手动填写的值优先。发送图片需要支持识图的模型。</p>
-            <div class="test-row">
-              <button class="fb-txt" type="button" :disabled="aiTesting" @click="testAi()">{{ aiTesting ? "正在测试…" : "测试连接" }}</button>
-              <span v-if="aiOk" class="test-ok"><Icon name="check" sm />{{ aiOk }}</span>
+              <p class="git-hint">上下文长度：手动填写 &gt; 服务商返回 &gt; 内置表 &gt; 128K。API Key 按接口地址保存在{{ credentialStoreName }}里，同一地址的模型共用。发送图片需要支持识图的模型。</p>
+            </template>
+            <div v-else class="aim-empty">
+              <p>还没有添加模型</p>
+              <button class="fb-txt" type="button" @click="editingModel = null">添加第一个模型</button>
             </div>
             <p v-if="aiError" class="git-error">{{ aiError }}</p>
           </div>
         </div>
       </div>
     </div>
+    <AiModelDialog v-if="editingModel !== undefined" :model="editingModel" @close="editingModel = undefined" />
   </div>
 </template>

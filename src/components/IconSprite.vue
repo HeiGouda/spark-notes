@@ -6,6 +6,7 @@
     <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
     <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
     <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
     <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-14.3 4.9M4 12a8 8 0 0 1 14.3-4.9"/><path d="M19 3v4.5h-4.5M5 21v-4.5h4.5"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
@@ -18,6 +19,7 @@
     <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3h7l4 4v13a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13.5 3v4h4"/></symbol>
     <symbol id="i-mind" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.5"/><path d="M8.5 12h3M11.5 6.5v11M11.5 6.5h8M11.5 12h8M11.5 17.5h8"/></symbol>
     <symbol id="i-flow" viewBox="0 0 24 24"><rect x="3" y="3.5" width="8" height="5.5" rx="1"/><rect x="13" y="15" width="8" height="5.5" rx="1"/><path d="M7 9v8.8h6"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12.5" rx="1.5"/><path d="M3 9h18M9 4v12.5M3 20h5M11 20h4"/></symbol>
     <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M6.5 3h7l4 4v13a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M12 11v6M9 14h6"/></symbol>
     <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.2 6.2a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.4"/></symbol>
     <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.5 6 .7-4.4 4.1 1.2 6-5.4-3-5.4 3 1.2-6-4.4-4.1 6-.7z"/></symbol>

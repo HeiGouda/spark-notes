@@ -111,7 +111,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
             <h4>文件树</h4>
             <ul>
               <li>单击打开笔记；用鼠标拖动笔记或文件夹，可以移到别的文件夹里。</li>
-              <li>右键笔记或文件夹可以重命名（F2）、删除（{{ isMac ? "Cmd+Backspace" : "Delete" }}）、收藏、复制路径、{{ isMac ? "在访达中显示" : "在资源管理器中打开" }}。</li>
+              <li>右键笔记或文件夹可以重命名（F2）、隐藏、删除（{{ isMac ? "Cmd+Backspace" : "Delete" }}）、收藏、复制路径、{{ isMac ? "在访达中显示" : "在资源管理器中打开" }}。</li>
+              <li>隐藏的笔记和文件夹只是不在文件树里显示，搜索和链接照常可用；在 <a href="#" @click.prevent="openSettings('hidden')">设置 → 已隐藏</a> 里恢复。</li>
               <li>删除的内容会先进入回收站，不会立刻消失。</li>
             </ul>
             <h4>标签页</h4>
@@ -119,6 +120,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
               <li>单击笔记打开的是“预览”标签页（标题为斜体），再打开别的笔记会替换它；开始编辑或双击标签页后会固定下来。</li>
               <li>拖动标签页可以调整顺序；右键可以关闭其他或关闭右侧的标签页；点鼠标中键直接关闭。</li>
               <li>切换标签页 <Key id="tab.next" />，关闭当前标签页 <Key id="tab.close" />，后退 / 前进 <Key id="nav.back" /> <Key id="nav.forward" />。</li>
+              <li><b>表格簿</b>：把同一主题的笔记、思维导图、流程图放在一起。在“新建”菜单里选“新建表格簿”，打开后窗口左下角是各张表，点“+”新建、点标签切换（<Key id="sheet.next" /> / <Key id="sheet.prev" />）、双击改名、拖动排序、右键复制或删除。表格簿在顶部只占一个标签页，关闭它会一起关闭里面打开的表。</li>
             </ul>
             <h4>找到笔记</h4>
             <ul>
@@ -147,7 +149,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
 
           <template v-else-if="section === 'ai'">
             <h4>先配置 AI</h4>
-            <p>在 <a href="#" @click.prevent="openSettings('ai')">设置 → AI</a> 里选择服务商，填写 API Key 和模型名，点“测试连接”确认可用。也可以使用本机运行的模型（Ollama、LM Studio），这时不需要 API Key。</p>
+            <p>在 <a href="#" @click.prevent="openSettings('ai')">设置 → AI</a> 里点“添加模型”：选择服务商（常见服务商的接口地址和主力模型已预设好），填写 API Key，选择或输入模型名，点“测试连接”确认可用。可以添加多个模型（包括不同服务商的），在列表上方选一个作为默认模型。也可以使用本机运行的模型（Ollama、LM Studio），这时不需要 API Key。</p>
             <p>只有在你点击 AI 功能时，才会把相关内容发送给 AI 服务商。</p>
             <h4>可以做什么</h4>
             <ul>
@@ -164,6 +166,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
               <li>点标题栏右侧的月亮 / 太阳图标，在上次使用的浅色主题和深色主题之间切换。</li>
               <li>在菜单“视图”里可以隐藏侧栏、格式工具栏和状态栏，获得更干净的写作界面。</li>
               <li>界面缩放在 <a href="#" @click.prevent="openSettings('look')">设置 → 外观</a> 里修改；正文的字体、字号、行高和宽度在 <a href="#" @click.prevent="openSettings('editor')">设置 → 编辑器</a> 里修改。</li>
+              <li>在笔记里按住 {{ isMac ? "Cmd" : "Ctrl" }} 滚动鼠标滚轮可以直接调整正文字号；正文宽度可以切换为“自适应”，铺满整个编辑区。</li>
             </ul>
             <h4>快捷键</h4>
             <p>本指南里显示的都是你当前使用的快捷键。在 <a href="#" @click.prevent="openSettings('keys')">设置 → 快捷键</a> 里可以查看全部快捷键：点击某一行，再按下新的组合键就能修改。把鼠标停在按钮上，也会提示对应的快捷键。</p>

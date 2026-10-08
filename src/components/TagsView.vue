@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { api, type NoteRef, type TagCount } from "../lib/api";
+import { bookOf, sheetLabel } from "../lib/book";
 import { useVaultStore } from "../stores/vault";
 import { useTabsStore } from "../stores/tabs";
 import { useSearchStore } from "../stores/search";
@@ -112,7 +113,7 @@ async function toggle(tag: string) {
           >
             <span class="spacer" />
             <Icon name="file" />
-            <span class="name">{{ n.title }}</span>
+            <span class="name">{{ bookOf(n.path) ? sheetLabel(n.path) : n.title }}</span>
           </li>
         </template>
       </template>

@@ -63,6 +63,12 @@ mark { background: var(--hl); color: inherit; font-weight: 600; border-radius: 2
 .m-tabs button.on svg { stroke-width: 2.2; }
 .page.bare { padding-bottom: env(safe-area-inset-bottom); }
 
+/* 表格簿里的表切换条（只读） */
+.sheet-strip { flex: none; display: flex; gap: 6px; padding: 6px 10px; overflow-x: auto; border-top: 1px solid var(--line); background: var(--paper); scrollbar-width: none; }
+.sheet-strip::-webkit-scrollbar { display: none; }
+.sheet-pill { flex: none; max-width: 160px; padding: 2px 12px; border: 1px solid var(--line-strong); border-radius: 14px; font-size: 13px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-pill.on { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+
 /* 表单 */
 .form { padding: 16px 18px 28px; }
 .field { margin-bottom: 14px; }

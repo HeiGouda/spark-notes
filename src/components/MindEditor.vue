@@ -35,6 +35,7 @@ const emit = defineEmits<{
   zoom: [value: number];
   collapse: [paths: string[]];
   stats: [nodes: number, edges: number, selected: number];
+  aiGenerate: [];
 }>();
 
 const NEW_TEXT = "新节点";
@@ -1180,7 +1181,21 @@ const find = {
   readonly: () => !!props.readonly,
 };
 
-defineExpose({ run, selectText, focus: focusSink, find, svgElement: () => host.value?.querySelector("svg") ?? null });
+/** 整张图换成 AI 生成的结果（根节点、分支和结构），算一步操作 */
+function replaceDoc(d: MindDoc) {
+  mutate((x) => {
+    x.root = structuredClone(d.root);
+    x.canvas = { ...x.canvas, ...d.canvas };
+  });
+  collapsed.value = new Set();
+  select(doc.value.root.id);
+  void nextTick(center);
+}
+
+/** 只有中心主题的新图：提示可以用 AI 生成 */
+const isBlank = computed(() => !props.readonly && !props.bare && !doc.value.root.children.length && !doc.value.root.summaries?.length);
+
+defineExpose({ run, selectText, focus: focusSink, find, replaceDoc, svgElement: () => host.value?.querySelector("svg") ?? null });
 
 const canDelete = computed(() => !props.readonly && topSelection().length > 0);
 const bracketColor = (id: string) => colors.value.get(id)?.line;
@@ -1347,6 +1362,11 @@ const bracketColor = (id: string) => colors.value.get(id)?.line;
         <div v-if="dragging" class="mind-ghost" :style="{ left: `${(offsetX + dragPos.x) * zoom + 12}px`, top: `${(offsetY + dragPos.y) * zoom + 8}px` }">
           {{ moving.length > 1 ? `拖动 ${moving.length} 个` : findMind(doc, dragging)?.text.split("\n")[0] }}
         </div>
+      </div>
+      <!-- 放在滚动区域之外，画布滚动时仍在视图中间 -->
+      <div v-if="isBlank" class="flow-empty mind-empty">
+        选中主题按 Tab 添加子主题，或
+        <button class="dbtn flow-empty-ai" type="button" @mousedown.stop @click="emit('aiGenerate')"><Icon name="sparkle" sm />用 AI 生成</button>
       </div>
       <DiagramZoom v-if="!bare" :zoom="zoom" @zoom="zoomTo" @step="stepZoom" @fit="zoomFit" />
     </div>

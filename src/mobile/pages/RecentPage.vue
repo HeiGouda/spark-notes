@@ -5,16 +5,14 @@ import { DOC_TAG, docKind } from "../../lib/doctype";
 import type { IconName } from "../icons";
 import { folderLabel, recentOpened, timeLabel } from "../browse";
 import { useMobile } from "../store";
-import { go } from "../nav";
+import { openDoc as open } from "../nav";
+import { isBookPath } from "../../lib/book";
 
 const store = useMobile();
 const notes = computed(() => recentOpened(store.tree, store.currentId ? (store.recent[store.currentId] ?? []) : []));
 
-function open(path: string) {
-  go((docKind(path) ?? "note") === "note" ? { p: "note", path } : { p: "diagram", path });
-}
-
 function iconOf(path: string): IconName {
+  if (isBookPath(path)) return "book";
   const k = docKind(path);
   return !k || k === "note" ? "note" : k;
 }

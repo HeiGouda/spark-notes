@@ -4,7 +4,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { api, type AiEvent, type ChatMessage } from "../lib/api";
 import { useSettingsStore } from "./settings";
 import { useNoticeStore } from "./notice";
-import { sendBudget } from "../lib/aiModels";
+import { sendBudget, type AiModelEntry } from "../lib/aiModels";
 
 /** 用户取消了请求 */
 export class AiCancelled extends Error {
@@ -24,27 +24,18 @@ let seq = 0;
 /** AI 功能（需求文档 5.16）：只在用户主动点击时调用 */
 export const useAiStore = defineStore("ai", () => {
   const settings = useSettingsStore();
-  const hasKey = ref(false);
   const summaryOpen = ref(false);
   const structureOpen = ref(false);
   const noConfigOpen = ref(false);
 
-  const configured = computed(() => !!settings.aiBaseUrl.trim() && !!settings.aiModel.trim());
+  const configured = computed(() => !!settings.defaultModel);
 
   /** 默认模型本次可发送的 token 数（需求文档 5.16） */
   function defaultBudget(): number {
-    return sendBudget(settings.contextOf(settings.aiModel).tokens);
+    return sendBudget(settings.contextOf(settings.defaultModel).tokens);
   }
 
-  async function refreshKey() {
-    try {
-      hasKey.value = await api.aiHasKey();
-    } catch (e) {
-      useNoticeStore().report("读取 API Key 失败", e);
-    }
-  }
-
-  /** 未配置时弹出提示并返回 false */
+  /** 还没有添加模型时弹出提示并返回 false */
   function ensureConfigured(): boolean {
     if (configured.value) return true;
     noConfigOpen.value = true;
@@ -52,7 +43,8 @@ export const useAiStore = defineStore("ai", () => {
   }
 
   /** 流式请求；onText 收到目前为止的全文。不指定模型时用默认模型 */
-  function run(messages: ChatMessage[], onText: (full: string) => void, model = settings.aiModel): AiRun {
+  function run(messages: ChatMessage[], onText: (full: string) => void, model: AiModelEntry | null = settings.defaultModel): AiRun {
+    if (!model) return { done: Promise.reject(new Error("还没有添加 AI 模型，请在 设置 → AI 里添加")), cancel: () => {} };
     const id = `ai-${Date.now()}-${++seq}`;
     let cancelled = false;
     let text = "";
@@ -63,7 +55,7 @@ export const useAiStore = defineStore("ai", () => {
       onText(text);
     };
     const done = api
-      .aiChat(id, settings.aiBaseUrl, model, messages, channel)
+      .aiChat(id, model.baseUrl, model.name, messages, channel)
       .then(
         () => {
           if (cancelled) throw new AiCancelled();
@@ -84,5 +76,5 @@ export const useAiStore = defineStore("ai", () => {
     };
   }
 
-  return { hasKey, configured, summaryOpen, structureOpen, noConfigOpen, refreshKey, ensureConfigured, run, defaultBudget };
+  return { configured, summaryOpen, structureOpen, noConfigOpen, ensureConfigured, run, defaultBudget };
 });

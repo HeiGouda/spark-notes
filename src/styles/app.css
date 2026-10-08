@@ -109,7 +109,15 @@ ul { list-style: none }
 .result-snip mark { background: var(--hl); color: var(--ink); border-radius: 2px; padding: 0 1px }
 .row-count { margin-left: auto; font-size: 11px; color: var(--muted) }
 .row.is-missing .name { text-decoration: line-through; color: var(--muted) }
-.outline-level { flex: none; width: 20px; font: 600 10px/1 var(--f-code); color: var(--muted); opacity: .75 }
+/* 大纲：最浅一级最大最粗，逐级变小变浅；每级缩进处画一条细竖线，看得出父子关系 */
+.outline-row { position: relative }
+.outline-row::before { content: ""; position: absolute; top: 0; bottom: 0; left: 10px; width: calc(var(--d, 0) * 16px); background: repeating-linear-gradient(to right, var(--line-strong) 0 1px, transparent 1px 16px); pointer-events: none }
+.outline-row.ol-l0 { height: 30px; font-size: 13.5px; font-weight: 600; color: var(--ink) }
+.outline-row.ol-l0:not(:first-child) { margin-top: 4px }
+.outline-row.ol-l1 { font-size: 13px; font-weight: 500; color: var(--ink) }
+.outline-row.ol-l2 { font-size: 12.5px; color: var(--ink-2) }
+.outline-row.ol-l3 { font-size: 12px; color: var(--muted) }
+.outline-row.is-active { color: var(--ink); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent) }
 .side-empty { padding: 16px 14px; font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 10px; align-items: flex-start }
 .side-error { padding: 8px 14px; font-size: 12px; color: var(--danger); word-break: break-all }
 .plain-btn { height: 28px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--r-btn); background: var(--paper); color: var(--ink); font-size: 12.5px; cursor: pointer }
@@ -346,19 +354,32 @@ ul { list-style: none }
 .key-edit { display: flex; align-items: center; gap: 6px }
 .key-edit input { flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink); font: 12.5px var(--f-ui); outline: none }
 .key-edit input:focus { border-color: var(--accent) }
-.test-row { display: flex; align-items: center; gap: 10px; margin-top: 6px }
-.model-table { display: flex; flex-direction: column; gap: 4px }
-.mt-row { display: grid; grid-template-columns: 1fr 130px 112px 26px; align-items: center; gap: 6px }
-.mt-row input { min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink); font: 12.5px var(--f-code); outline: none }
-.mt-row input:focus { border-color: var(--accent) }
-.mt-row input::placeholder { color: var(--muted) }
-.mt-row .btn { width: 26px; height: 26px }
-.mt-head { font-size: 11.5px; font-weight: 600; color: var(--muted) }
 .mt-src { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap }
 .mt-unknown { color: #C9832E }
-.mt-def { padding: 0 5px; border-radius: 3px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-style: normal; line-height: 18px }
-.mt-actions { display: flex; gap: 6px; margin-top: 2px }
+.mt-def { flex: none; padding: 0 5px; border-radius: 3px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-style: normal; line-height: 18px }
 .test-ok { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ok) }
+/* 设置 → AI：模型列表与添加 / 编辑对话框（需求文档 5.16） */
+.aim-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 6px }
+.aim-head .git-hint { flex: 1; margin: 4px 0 0 }
+.aim-head .btn-primary { flex: none; display: inline-flex; align-items: center; gap: 4px }
+.aim-default { width: 320px; max-width: 100% }
+.aim-table { display: flex; flex-direction: column }
+.aim-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.3fr) 118px 76px; align-items: center; gap: 8px; min-height: 34px; padding: 0 4px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ink) }
+.aim-row:not(.aim-th):hover { background: var(--hover) }
+.aim-th { min-height: 28px; font-size: 11.5px; font-weight: 600; color: var(--muted); border-bottom-color: var(--line-strong) }
+.aim-label { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis }
+.aim-cell { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink-2) }
+.aim-code { font: 12px var(--f-code); color: var(--muted) }
+.aim-acts { display: flex; justify-content: flex-end; gap: 10px }
+.scm-link.is-danger { color: var(--danger) }
+.aim-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 0; color: var(--muted); font-size: 13px }
+.aim-empty p { margin: 0 }
+.aim-dlg { width: 500px }
+.aim-body { padding-top: 10px }
+.aim-body input[type="text"] { min-width: 0 }
+.aim-name { display: flex; align-items: center; gap: 6px }
+.aim-name input { flex: 1 }
+.aim-ctx { width: 220px }
 .git-row { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2) }
 .git-num { width: 64px; height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink); font: 12.5px var(--f-ui); outline: none }
 .git-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px }
@@ -459,6 +480,7 @@ ul { list-style: none }
 .flowgen-desc:focus { border-color: var(--accent) }
 .flowgen-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px }
 .flowgen-row .flowgen-dir { flex: none; width: 240px }
+.flowgen-row .mindgen-layout { flex: none; width: 320px }
 .flowgen-note { font-size: 12px }
 .ai-tidy { width: 940px }
 .ai-dlg .keys-head .hint, .ai-dlg-actions .hint { font-size: 11.5px; color: var(--muted) }
@@ -497,6 +519,7 @@ ul { list-style: none }
 .chat-group { padding: 8px 8px 4px; font-size: 11px; font-weight: 600; color: var(--muted) }
 .chat-list .row { gap: 8px }
 .chat-list .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis }
+.chat-run { flex: none; font-size: 11px; color: var(--accent) }
 .chat-list .row .more { width: 22px; height: 22px; opacity: 0 }
 .chat-list .row:hover .more, .chat-list .row.is-active .more { opacity: .75 }
 .chat-none { padding: 12px 8px; font-size: 12.5px; color: var(--muted) }

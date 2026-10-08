@@ -1,5 +1,5 @@
 import type { TreeNode } from "../lib/api";
-import { sortTree, type CustomOrder } from "../lib/treeSort";
+import { sortTree, type CustomOrder, type SortConfig } from "../lib/treeSort";
 import type { RecentOpen } from "./prefs";
 
 function findFolder(tree: TreeNode[], path: string): TreeNode[] | null {
@@ -15,18 +15,35 @@ function findFolder(tree: TreeNode[], path: string): TreeNode[] | null {
   return nodes;
 }
 
-/** 某个文件夹（根目录为空字符串）的直接子项，按电脑上的自定义排序 */
-export function folderItems(tree: TreeNode[], path: string, order: CustomOrder): TreeNode[] {
+/** 某个文件夹（根目录为空字符串）的直接子项，按电脑上选的排序方式 */
+export function folderItems(tree: TreeNode[], path: string, order: CustomOrder, sort: SortConfig): TreeNode[] {
   const nodes = findFolder(tree, path);
-  return nodes ? sortTree(nodes, "custom", false, order, path, false) : [];
+  return nodes ? sortTree(nodes, sort.key, sort.desc, order, path, false) : [];
 }
 
+/** 所有文件；表格簿算一个文件（它的各张表不单独列出） */
 function allNotes(nodes: TreeNode[], out: TreeNode[] = []): TreeNode[] {
   for (const n of nodes) {
-    if (n.isDir) allNotes(n.children, out);
+    if (n.isDir && !n.book) allNotes(n.children, out);
     else out.push(n);
   }
   return out;
+}
+
+/** 路径对应的表格簿节点；不存在时返回 null */
+export function findBook(tree: TreeNode[], bookPath: string): TreeNode | null {
+  const parent = findFolder(tree, dirOfPath(bookPath));
+  return parent?.find((n) => n.book && n.path === bookPath) ?? null;
+}
+
+function dirOfPath(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i < 0 ? "" : p.slice(0, i);
+}
+
+/** 表格簿的第一张表；表格簿不存在或里面没有表时返回 null */
+export function firstSheet(tree: TreeNode[], bookPath: string): TreeNode | null {
+  return findBook(tree, bookPath)?.children[0] ?? null;
 }
 
 /** 收藏的笔记，保持收藏顺序；已不存在的跳过 */

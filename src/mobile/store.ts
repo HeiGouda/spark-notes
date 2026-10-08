@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, reactive, ref } from "vue";
 import { api, type TreeNode } from "../lib/api";
-import type { CustomOrder } from "../lib/treeSort";
+import { parseSortConfig, type CustomOrder, type SortConfig } from "../lib/treeSort";
 import { mobileApi, type VaultConfig, type VaultInput } from "./api";
 import { countNotes } from "./browse";
 import { DEFAULT_READER, loadPrefs, savePrefs, type FontSize, type ReaderPrefs, type RecentOpen, type VaultMeta } from "./prefs";
@@ -15,6 +15,9 @@ function applyReader(r: ReaderPrefs) {
   for (const t of THEMES) if (t.id !== "light") root.classList.toggle(t.id, t.id === r.theme);
   root.style.setProperty("--read-size", `${FONT_PX[r.size]}px`);
 }
+
+/** 电脑上还没保存过排序方式（旧版本）时按自定义顺序，与以前一致 */
+const DEFAULT_SORT: SortConfig = { key: "custom", desc: false };
 
 /** never：还没下载过；held：有删除等待确认 */
 export type SyncState = "never" | "running" | "ok" | "fail" | "held";
@@ -34,6 +37,8 @@ export const useMobile = defineStore("mobile", () => {
   const root = ref<string | null>(null);
   const tree = ref<TreeNode[]>([]);
   const order = ref<CustomOrder>({});
+  /** 跟随电脑上的排序方式（`.ttnote/config/sort.json`） */
+  const sort = ref<SortConfig>(DEFAULT_SORT);
   const favorites = ref<string[]>([]);
   const meta = ref<Record<string, VaultMeta>>({});
   const reader = ref<ReaderPrefs>({ ...DEFAULT_READER });
@@ -75,15 +80,18 @@ export const useMobile = defineStore("mobile", () => {
   async function loadTree() {
     const dir = root.value;
     if (!dir) return;
-    const [nodes, ord, favs] = await Promise.all([
+    const [scan, ord, favs, sortRaw] = await Promise.all([
       api.scanVault(dir),
       readJson<CustomOrder>(dir, "order.json", {}),
       readJson<string[]>(dir, "favorites.json", []),
+      api.readConfig(dir, "sort.json").catch(() => null),
     ]);
     if (dir !== root.value) return;
-    tree.value = nodes;
+    if (scan.warning) console.warn("读取文件时间记录失败", scan.warning);
+    tree.value = scan.nodes;
     order.value = ord;
     favorites.value = Array.isArray(favs) ? favs : [];
+    sort.value = parseSortConfig(sortRaw) ?? DEFAULT_SORT;
   }
 
   function resetSync(state: SyncState) {
@@ -95,6 +103,7 @@ export const useMobile = defineStore("mobile", () => {
     const id = currentId.value;
     tree.value = [];
     order.value = {};
+    sort.value = DEFAULT_SORT;
     favorites.value = [];
     root.value = id ? await mobileApi.vaultRoot(id) : null;
     if (!id || !root.value) return;
@@ -206,7 +215,7 @@ export const useMobile = defineStore("mobile", () => {
   }
 
   return {
-    vaults, currentId, root, tree, order, favorites, meta, reader, recent, sync, current, homePage,
+    vaults, currentId, root, tree, order, sort, favorites, meta, reader, recent, sync, current, homePage,
     init, loadTree, runSync, confirmHeld, selectVault, addVault, updateVault, removeVault, setReader, rememberOpen,
   };
 });

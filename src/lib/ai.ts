@@ -1,20 +1,111 @@
 import type { ChatMessage } from "./api";
 import { formatTokens } from "./aiModels";
 
-/** 服务商预设，只负责填好接口地址（需求文档 5.16） */
-export const AI_PRESETS = [
-  { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1" },
-  { id: "qwen", label: "通义千问", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
-  { id: "kimi", label: "Kimi", baseUrl: "https://api.moonshot.cn/v1" },
-  { id: "zhipu", label: "智谱", baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
-  { id: "siliconflow", label: "硅基流动", baseUrl: "https://api.siliconflow.cn/v1" },
-  { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
-  { id: "ollama", label: "Ollama（本机）", baseUrl: "http://localhost:11434/v1" },
-  { id: "lmstudio", label: "LM Studio（本机）", baseUrl: "http://localhost:1234/v1" },
-  { id: "custom", label: "自定义", baseUrl: "" },
-] as const;
+export interface AiPresetModel {
+  /** 请求里的 model 参数 */
+  name: string;
+  /** 默认的显示名称 */
+  label: string;
+}
 
-export type AiPresetId = (typeof AI_PRESETS)[number]["id"];
+export interface AiPreset {
+  id: string;
+  label: string;
+  /** OpenAI 兼容接口地址；“自定义”为空 */
+  baseUrl: string;
+  /** 当前主力对话模型，按 2026-10 各家官方文档；聚合平台和本机服务不预设，用“从服务商读取” */
+  models: AiPresetModel[];
+  /** 不需要 API Key（本机服务） */
+  local?: boolean;
+  /** 添加模型时显示的提示 */
+  hint?: string;
+}
+
+const m = (name: string, label: string): AiPresetModel => ({ name, label });
+
+/** 服务商预设（需求文档 5.16）：填好接口地址，并给出可选的模型 */
+export const AI_PRESETS: AiPreset[] = [
+  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", models: [m("gpt-6-astra", "GPT-6 Astra"), m("gpt-6.1-sol", "GPT-6.1 Sol"), m("gpt-6-luna", "GPT-6 Luna")] },
+  {
+    id: "anthropic",
+    label: "Anthropic Claude",
+    baseUrl: "https://api.anthropic.com/v1",
+    models: [m("claude-opus-5-5", "Claude Opus 5.5"), m("claude-sonnet-5-5", "Claude Sonnet 5.5"), m("claude-haiku-4-5", "Claude Haiku 4.5"), m("claude-fable-5-1", "Claude Fable 5.1")],
+  },
+  {
+    id: "gemini",
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    models: [m("gemini-3.1-pro-preview", "Gemini 3.1 Pro"), m("gemini-3.8-flash", "Gemini 3.8 Flash"), m("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite")],
+  },
+  { id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", models: [m("mistral-large-4", "Mistral Large 4"), m("mistral-medium-3-5", "Mistral Medium 3.5")] },
+  { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", models: [m("deepseek-v4-pro", "DeepSeek V4 Pro"), m("deepseek-flash", "DeepSeek V4.1 Flash")] },
+  {
+    id: "qwen",
+    label: "通义千问",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    models: [m("qwen3.8-max", "Qwen3.8 Max"), m("qwen3.7-plus", "Qwen3.7 Plus"), m("qwen3.8-flash", "Qwen3.8 Flash")],
+  },
+  { id: "kimi", label: "Kimi", baseUrl: "https://api.moonshot.cn/v1", models: [m("kimi-k3", "Kimi K3"), m("kimi-k2.7-code", "Kimi K2.7 Code"), m("kimi-k2.6", "Kimi K2.6")] },
+  {
+    id: "zhipu",
+    label: "智谱 GLM",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    models: [m("glm-5.3", "GLM-5.3"), m("glm-5.3-flash", "GLM-5.3-Flash"), m("glm-4.7-flash", "GLM-4.7-Flash（免费）")],
+  },
+  {
+    id: "doubao",
+    label: "豆包（火山方舟）",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    models: [
+      m("doubao-seed-2-1-pro-260628", "Doubao Seed 2.1 Pro"),
+      m("doubao-seed-2-1-turbo-260628", "Doubao Seed 2.1 Turbo"),
+      m("doubao-seed-2-0-lite-260428", "Doubao Seed 2.0 Lite"),
+    ],
+    hint: "豆包的模型名带版本日期、更新频繁，以火山方舟控制台为准。",
+  },
+  {
+    id: "ernie",
+    label: "文心（百度千帆）",
+    baseUrl: "https://qianfan.baidubce.com/v2",
+    models: [m("ernie-5.1", "ERNIE 5.1"), m("ernie-5.0", "ERNIE 5.0"), m("ernie-4.5-turbo-128k", "ERNIE 4.5 Turbo 128K")],
+  },
+  { id: "hunyuan", label: "腾讯混元", baseUrl: "https://tokenhub.tencentmaas.com/v1", models: [m("hy4-preview", "Hy4 Preview"), m("hy3", "Hy3")] },
+  {
+    id: "minimax",
+    label: "MiniMax",
+    baseUrl: "https://api.minimaxi.com/v1",
+    models: [m("MiniMax-M3", "MiniMax-M3"), m("MiniMax-M2.7", "MiniMax-M2.7"), m("MiniMax-M2.7-highspeed", "MiniMax-M2.7 极速版")],
+  },
+  {
+    id: "stepfun",
+    label: "阶跃星辰",
+    baseUrl: "https://api.stepfun.com/v1",
+    models: [m("step-5-preview", "Step 5 Preview"), m("step-3.7-flash", "Step 3.7 Flash"), m("step-3.5-flash", "Step 3.5 Flash")],
+  },
+  { id: "siliconflow", label: "硅基流动", baseUrl: "https://api.siliconflow.cn/v1", models: [], hint: "模型很多且常变，点“从服务商读取”选择。" },
+  { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", models: [], hint: "模型很多且常变，点“从服务商读取”选择。" },
+  { id: "ollama", label: "Ollama（本机）", baseUrl: "http://localhost:11434/v1", models: [], local: true, hint: "列出本机已下载的模型：点“从服务商读取”。" },
+  { id: "lmstudio", label: "LM Studio（本机）", baseUrl: "http://localhost:1234/v1", models: [], local: true, hint: "列出本机已加载的模型：点“从服务商读取”。" },
+  { id: "custom", label: "自定义", baseUrl: "", models: [] },
+];
+
+export type AiPresetId = string;
+
+export function presetOf(id: string): AiPreset {
+  return AI_PRESETS.find((p) => p.id === id) ?? AI_PRESETS[AI_PRESETS.length - 1];
+}
+
+/** 同一个接口地址：忽略首尾空白和末尾的 `/` */
+export function sameBaseUrl(a: string, b: string): boolean {
+  const norm = (u: string) => u.trim().replace(/\/+$/, "");
+  return norm(a) === norm(b);
+}
+
+/** 按接口地址认出预设（迁移旧设置时用），认不出时为“自定义” */
+export function presetByUrl(baseUrl: string): AiPreset {
+  return AI_PRESETS.find((p) => p.baseUrl && sameBaseUrl(p.baseUrl, baseUrl)) ?? presetOf("custom");
+}
 
 /** 请求超过默认模型可发送上限时的提示 */
 export function tooLongMessage(tokens: number, budget: number): string {
@@ -73,19 +164,40 @@ export function commitMessages(files: string[], diff: string, truncated: boolean
   ];
 }
 
-/** 把笔记生成思维导图（需求文档 5.18），输出 Mermaid mindmap 的纯文字子集 */
+/** 思维导图的输出格式：Mermaid mindmap 的纯文字子集 */
+const MIND_FORMAT = [
+  "只输出 Mermaid mindmap 代码，不要任何解释。",
+  "格式：第一行写 mindmap；之后每行一个节点，用两个空格表示一级缩进；第一个节点是根节点，写主题。",
+  "节点只写纯文字，不要使用括号、方括号、花括号、图标或样式写法。",
+];
+
+/** 把笔记生成思维导图（需求文档 5.18） */
 export function mindMapMessages(title: string, note: string): ChatMessage[] {
   return [
     {
       role: "system",
       content: [
-        "你把用户的笔记整理成思维导图。只输出 Mermaid mindmap 代码，不要任何解释。",
-        "格式：第一行写 mindmap；之后每行一个节点，用两个空格表示一级缩进；第一个节点是根节点，写笔记的主题。",
-        "节点只写纯文字，不要使用括号、方括号、花括号、图标或样式写法。",
+        "你把用户的笔记整理成思维导图。",
+        ...MIND_FORMAT,
         "提炼要点，每个节点不超过 20 个字，不要照抄整段原文；层级不超过 4 层；保留原文中的专有名词。",
       ].join("\n"),
     },
     { role: "user", content: `笔记标题：${title}\n\n${note}` },
+  ];
+}
+
+/** 按用户的描述（或笔记里选中的文字）生成思维导图（需求文档 5.18） */
+export function mindDescMessages(desc: string): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "你根据用户的描述生成一张思维导图：确定主题，把要点分成几个分支，再逐层展开。",
+        ...MIND_FORMAT,
+        "每个节点不超过 20 个字；层级不超过 4 层；一级分支 3 到 8 个；保留描述中的专有名词，描述里没有提到的内容可以合理补充常识性的要点。",
+      ].join("\n"),
+    },
+    { role: "user", content: desc },
   ];
 }
 

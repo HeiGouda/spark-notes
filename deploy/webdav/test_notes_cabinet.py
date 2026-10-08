@@ -107,6 +107,44 @@ class CabinetTest(unittest.TestCase):
         got = [p.name for p in cab.sort_children(list(base.iterdir()), "", order)]
         self.assertEqual(got, ["读书", "工作", "随手记.md", "产品规划.md", "a.md", "笔记2.md", "笔记10.md"])
 
+    def test_chinese_numerals_sort_by_value(self) -> None:
+        self.assertEqual([cab.cn_number(t) for t in ["十二", "二十", "一百零五", "二〇二六", "一万二千"]], ["12", "20", "105", "2026", "12000"])
+        base = self.root / "lib"
+        base.mkdir()
+        for name in ["第二讲.md", "第十讲.md", "第一讲.md", "第五讲.md"]:
+            (base / name).write_text("x", encoding="utf-8")
+        got = [p.name for p in cab.sort_children(list(base.iterdir()), "", {}, ("name", False))]
+        self.assertEqual(got, ["第一讲.md", "第二讲.md", "第五讲.md", "第十讲.md"])
+
+    def test_sort_follows_pc_sort_and_recorded_times(self) -> None:
+        base = self.root / "lib"
+        config = base / ".ttnote" / "config"
+        config.mkdir(parents=True)
+        (base / "d").mkdir()
+        for name in ["a.md", "b.md", "d/c.md"]:
+            (base / name).write_text("x", encoding="utf-8")
+        (config / "sort.json").write_text('{"key": "modified", "desc": true}', encoding="utf-8")
+        (config / "times.json").write_text(
+            "{\n"
+            '  "a.md": {"created": 1, "modified": 50},\n'
+            "<<<<<<< HEAD\n"
+            '  "b.md": {"created": 2, "modified": 10},\n'
+            "=======\n"
+            '  "b.md": {"created": 3, "modified": 90},\n'
+            ">>>>>>> theirs\n"
+            '  "d": {"created": 1, "modified": 1},\n'
+            '  "d/c.md": {"created": 5, "modified": 70}\n'
+            "}\n",
+            encoding="utf-8",
+        )
+        times = cab.load_times(base)
+        self.assertEqual(times["b.md"], (2, 90))
+        self.assertEqual(cab.load_sort(base), ("modified", True))
+        self.assertEqual(cab.entry_times(base / "d", "d", times), (1, 70))
+        got = [p.name for p in cab.sort_children([base / "a.md", base / "b.md", base / "d"], "", {}, cab.load_sort(base), times)]
+        self.assertEqual(got, ["d", "b.md", "a.md"])
+        self.assertEqual(cab.load_sort(self.root), cab.DEFAULT_SORT)
+
     def test_account_rules(self) -> None:
         existing = ["me", "phone"]
         self.assertEqual(cab.account_add_error("me", "a", "a", existing), "已经有这个用户名")

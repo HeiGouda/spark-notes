@@ -67,15 +67,21 @@ export function emptyFlow(): FlowDoc {
   return { head: [], dir: "TD", canvas: {}, nodes: [], edges: [], tail: [] };
 }
 
+/**
+ * 不支持的语句。这些词也可能是普通的节点编号（`end([结束])`、`end --> x`），
+ * 所以只在真的是这种语句的写法时才算：`end` 单独占一条语句；其余的后面要跟参数，
+ * 而不是节点形状或连线。
+ */
+const ARG = String.raw`\s+(?![-=.<~]|[(\[{>@:|])\S`;
 const UNSUPPORTED_KEYWORDS: [RegExp, string][] = [
   [/^subgraph\b/i, "子图（subgraph）"],
-  [/^end\b/i, "子图（subgraph … end）"],
-  [/^direction\b/i, "子图方向（direction）"],
-  [/^style\b/i, "样式（style）"],
-  [/^classDef\b/i, "样式（classDef）"],
-  [/^class\b/i, "样式类（class）"],
-  [/^click\b/i, "点击链接（click）"],
-  [/^linkStyle\b/i, "连线样式（linkStyle）"],
+  [/^end$/i, "子图（subgraph … end）"],
+  [new RegExp(`^direction${ARG}`, "i"), "子图方向（direction）"],
+  [new RegExp(`^style${ARG}`, "i"), "样式（style）"],
+  [new RegExp(`^classDef${ARG}`, "i"), "样式（classDef）"],
+  [new RegExp(`^class${ARG}`, "i"), "样式类（class）"],
+  [new RegExp(`^click${ARG}`, "i"), "点击链接（click）"],
+  [new RegExp(`^linkStyle${ARG}`, "i"), "连线样式（linkStyle）"],
 ];
 
 class Unsupported extends Error {}
@@ -395,12 +401,29 @@ const WRAP: Record<FlowShape, [string, string]> = {
   hexagon: ["{{", "}}"], parallelogram: ["[/", "/]"], trapezoid: ["[/", "\\]"], cylinder: ["[(", ")]"],
 };
 
-function nodeDef(n: FlowNode): string {
-  if (n.shape === "rect" && n.text === n.id) return n.id;
+function nodeDef(n: FlowNode, id: string): string {
+  if (n.shape === "rect" && n.text === id) return id;
   const [open, close] = WRAP[n.shape];
   const text = n.text;
   const slashed = (n.shape === "parallelogram" || n.shape === "trapezoid") && /[/\\]/.test(text);
-  return `${n.id}${open}${slashed ? quoteText(text) : quoteIfNeeded(text)}${close}`;
+  return `${id}${open}${slashed ? quoteText(text) : quoteIfNeeded(text)}${close}`;
+}
+
+/**
+ * 写出的节点编号：小写的 `end` 是 Mermaid 的关键字，其他 Mermaid 工具读到会出错，
+ * 写成 `end_`（已被占用时继续加下划线）。其余编号原样写出。
+ */
+function writtenIds(doc: FlowDoc): (id: string) => string {
+  const used = new Set(doc.nodes.map((n) => n.id));
+  const renamed = new Map<string, string>();
+  for (const n of doc.nodes) {
+    if (n.id !== "end" || renamed.has(n.id)) continue;
+    let next = "end_";
+    while (used.has(next)) next += "_";
+    used.add(next);
+    renamed.set(n.id, next);
+  }
+  return (id) => renamed.get(id) ?? id;
 }
 
 function labelOf(label: string): string {
@@ -414,20 +437,21 @@ export function serializeFlow(doc: FlowDoc): string {
   const canvas = formatCanvas({ scheme: doc.canvas.scheme, spacing: doc.canvas.spacing });
   if (canvas) out.push("  " + canvas);
   const linked = new Set(doc.edges.flatMap((e) => [e.from, e.to]));
+  const idOf = writtenIds(doc);
   for (const n of doc.nodes) {
     const pos = n.x !== undefined && n.y !== undefined ? { x: n.x, y: n.y } : undefined;
     const size = n.w && n.h ? { w: n.w, h: n.h } : undefined;
     const spark = formatNode(n.style, { pos, size, text: n.isText });
-    if (n.shape === "rect" && n.text === n.id && linked.has(n.id) && !n.comments.length && !spark) continue;
+    if (n.shape === "rect" && n.text === idOf(n.id) && linked.has(n.id) && !n.comments.length && !spark) continue;
     for (const c of n.comments) out.push("  " + c);
     if (spark) out.push("  " + spark);
-    out.push("  " + nodeDef(n));
+    out.push("  " + nodeDef(n, idOf(n.id)));
   }
   for (const e of doc.edges) {
     for (const c of e.comments) out.push("  " + c);
     const spark = formatEdge(e.route, e.fromSide, e.toSide, e.bends);
     if (spark) out.push("  " + spark);
-    out.push(`  ${e.from} ${ARROW[e.style]}${labelOf(e.label)} ${e.to}`);
+    out.push(`  ${idOf(e.from)} ${ARROW[e.style]}${labelOf(e.label)} ${idOf(e.to)}`);
   }
   for (const c of doc.tail) out.push("  " + c);
   return out.join("\n") + "\n";

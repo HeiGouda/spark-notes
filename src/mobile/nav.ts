@@ -1,5 +1,8 @@
 import { computed, ref } from "vue";
 import { docKind } from "../lib/doctype";
+import { isBookPath } from "../lib/book";
+import { firstSheet } from "./browse";
+import { useMobile } from "./store";
 
 export type Page =
   | { p: "welcome" }
@@ -80,10 +83,31 @@ export function back(): boolean {
   return false;
 }
 
-/** 笔记进阅读页，思维导图和流程图进图页 */
+/** 笔记进阅读页，思维导图和流程图进图页；表格簿打开它的第一张表 */
 export function openDoc(path: string, heading?: string) {
-  if ((docKind(path) ?? "note") === "note") go({ p: "note", path, heading });
-  else go({ p: "diagram", path });
+  const target = sheetPage(path, heading);
+  if (target) go(target);
+}
+
+function sheetPage(path: string, heading?: string): Page | null {
+  let file = path;
+  if (isBookPath(path)) {
+    const first = firstSheet(useMobile().tree, path);
+    if (!first) {
+      toast("这个表格簿里没有表");
+      return null;
+    }
+    file = first.path;
+  }
+  return (docKind(file) ?? "note") === "note" ? { p: "note", path: file, heading } : { p: "diagram", path: file };
+}
+
+/** 在表格簿里切换到另一张表：替换当前页，返回键仍回到列表 */
+export function switchSheet(path: string) {
+  const target = sheetPage(path);
+  if (!target) return;
+  overlay.value = null;
+  stack.value = [...stack.value.slice(0, -1), target];
 }
 
 export function go(next: Page) {

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
-import { useMindGenStore } from "../stores/mindGen";
+import { aiMindDoc, useMindGenStore } from "../stores/mindGen";
 import { useFlowGenStore } from "../stores/flowGen";
 import { parseAiFlow } from "../diagram/flowGen";
 import { docName } from "../lib/doctype";
-import { countMind, parseAiMind } from "../diagram/mindmap";
+import { countMind } from "../diagram/mindmap";
 import MindEditor from "./MindEditor.vue";
 import FlowEditor from "./FlowEditor.vue";
 import DiagramIssues from "./DiagramIssues.vue";
@@ -41,11 +41,18 @@ function parse(text: string): Parsed {
 
 const result = shallowRef<Parsed>(parse(props.tab.body));
 
-/* ---------- AI 生成中的草稿 ---------- */
+/* ---------- AI 生成思维导图：草稿标签页，或画进空白思维导图 ---------- */
 const mindGen = useMindGenStore();
-const gen = computed(() => (props.tab.draft ? mindGen.gens[props.tab.path] ?? null : null));
-const genParsed = computed(() => (gen.value ? parseAiMind(gen.value.text, props.tab.name) : null));
+const gen = computed(() => (props.tab.kind === "mind" ? mindGen.gens[props.tab.path] ?? null : null));
+const genParsed = computed(() => (gen.value ? aiMindDoc(gen.value.text, props.tab.name, gen.value.layout) : null));
 const genNodes = computed(() => (genParsed.value ? countMind(genParsed.value.doc.root) : 0));
+
+async function keepMind() {
+  const d = await mindGen.keep(props.tab.path);
+  if (!d) return;
+  await nextTick();
+  editor.value?.replaceDoc?.(d);
+}
 
 /* ---------- AI 生成流程图：草稿标签页，或画进空白流程图 ---------- */
 const flowGen = useFlowGenStore();
@@ -152,7 +159,7 @@ const editor = ref<{
   selectText: (t: string) => boolean;
   find: DiagramFind;
   svgElement: () => SVGSVGElement | null;
-  replaceDoc?: (d: FlowDoc) => void;
+  replaceDoc?: (d: FlowDoc | MindDoc) => void;
 } | null>(null);
 
 /* ---------- 导出 ---------- */
@@ -269,24 +276,24 @@ onBeforeUnmount(() => diagram.detach(handle));
       </div>
       <FlowEditor v-if="fgenParsed" ref="editor" :doc="fgenParsed.doc" readonly :zoom="zoom" @zoom="setZoom" @stats="onStats" />
     </template>
-    <template v-else-if="tab.draft">
+    <template v-else-if="gen || tab.draft">
       <div class="gen-bar" :class="{ 'is-error': gen?.status === 'error' }">
         <template v-if="!gen">
           <span>这张思维导图已丢弃</span>
         </template>
         <template v-else-if="gen.status === 'running'">
           <span class="gen-spin" />
-          <span>AI 正在根据《{{ docName(gen.source) }}》生成思维导图… 已生成 {{ genNodes }} 个节点</span>
+          <span>{{ gen.source ? `AI 正在根据《${docName(gen.source)}》生成思维导图…` : "AI 正在根据你的描述生成思维导图…" }} 已生成 {{ genNodes }} 个节点</span>
           <span class="dflex" />
           <button class="plain-btn" type="button" @click="mindGen.stop(tab.path)">停止 <kbd>Esc</kbd></button>
         </template>
         <template v-else>
           <span v-if="gen.status === 'error'">生成出错：{{ gen.error }}</span>
-          <span v-else>{{ gen.status === "stopped" ? "已停止" : "已生成" }}，共 {{ genNodes }} 个节点<template v-if="genParsed?.skipped">（跳过 {{ genParsed.skipped }} 行无法识别的内容）</template>。保留后才会写入文件。</span>
+          <span v-else>{{ gen.status === "stopped" ? "已停止" : "已生成" }}，共 {{ genNodes }} 个节点<template v-if="genParsed?.skipped">（跳过 {{ genParsed.skipped }} 行无法识别的内容）</template>。{{ gen.inplace ? "保留后才会画进这张图。" : "保留后才会写入文件。" }}</span>
           <span class="dflex" />
-          <button v-if="gen.status !== 'done'" class="plain-btn" type="button" :disabled="mindGen.saving[tab.path]" @click="mindGen.regenerate(tab.path)">重新生成</button>
+          <button v-if="gen.status !== 'done' || !gen.source" class="plain-btn" type="button" :disabled="mindGen.saving[tab.path]" @click="mindGen.regenerate(tab.path)">重新生成</button>
           <button class="plain-btn" type="button" :disabled="mindGen.saving[tab.path]" @click="mindGen.discard(tab.path)">丢弃</button>
-          <button class="btn-primary" type="button" :disabled="genNodes < 2 || mindGen.saving[tab.path]" @click="mindGen.keep(tab.path)">{{ mindGen.saving[tab.path] ? "正在保存…" : "保留" }}</button>
+          <button class="btn-primary" type="button" :disabled="genNodes < 2 || mindGen.saving[tab.path]" :title="gen.inplace ? '写进这张思维导图' : '保存为新的思维导图文件'" @click="keepMind">{{ mindGen.saving[tab.path] ? "正在保存…" : "保留" }}</button>
         </template>
       </div>
       <MindEditor
@@ -311,6 +318,7 @@ onBeforeUnmount(() => diagram.detach(handle));
       @zoom="setZoom"
       @collapse="setCollapsed"
       @stats="onStats"
+      @ai-generate="mindGen.openDialog({ kind: 'inplace', path: tab.path })"
     >
       <template #bar-end>
         <button class="dbtn" :class="{ 'is-active': ui.findOpen }" :title="tipFor('查找与替换', 'edit.find')" @mousedown.prevent @click="openFind"><Icon name="search" sm />查找</button>

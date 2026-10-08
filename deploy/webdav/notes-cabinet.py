@@ -377,9 +377,37 @@ def _han_start(text: str) -> bool:
     return False
 
 
+CN_DIGIT = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+CN_UNIT = {"十": 10, "百": 100, "千": 1000}
+CN_RUN = re.compile("[零〇一二两三四五六七八九十百千万]+")
+
+
+def cn_number(text: str) -> str:
+    """中文数字转成阿拉伯数字：十二 → 12、一百零五 → 105、二〇二六 → 2026。与电脑上的规则一致。"""
+    if not any(ch in "十百千万" for ch in text):
+        return "".join(str(CN_DIGIT[ch]) for ch in text)
+    total = section = digit = 0
+    for ch in text:
+        if ch in CN_DIGIT:
+            digit = CN_DIGIT[ch]
+        elif ch == "万":
+            total = (total + (section + digit or 1)) * 10000
+            section = digit = 0
+        else:
+            section += (digit or 1) * CN_UNIT[ch]
+            digit = 0
+    return str(total + section + digit)
+
+
+def sortable_name(text: str) -> str:
+    text = "".join(chr(ord(ch) - 0xFF10 + 48) if "０" <= ch <= "９" else ch for ch in text)
+    return CN_RUN.sub(lambda m: cn_number(m.group(0)), text)
+
+
 def name_key(filename: str) -> tuple:
-    """与电脑一致：数字、字母开头在汉字前；数字按数值比；其余不区分大小写。"""
-    shown = display_name(filename)
+    """与电脑一致：数字、字母开头在汉字前；数字（含中文数字、全角数字）按数值比；其余不区分大小写。"""
+    original = display_name(filename)
+    shown = sortable_name(original)
     parts: list[tuple] = []
     chunk: list[str] = []
     digits = False
@@ -399,7 +427,7 @@ def name_key(filename: str) -> tuple:
         digits = is_digit
         chunk.append(ch)
     flush()
-    return (1 if _han_start(shown) else 0, tuple(parts))
+    return (1 if _han_start(original) else 0, tuple(parts))
 
 
 def load_order(lib_root: Path) -> dict[str, list[str]]:
@@ -417,22 +445,112 @@ def load_order(lib_root: Path) -> dict[str, list[str]]:
     return order
 
 
-def sort_children(children: list[Path], rel: str, order: dict[str, list[str]]) -> list[Path]:
-    """文件夹在前。order.json 里列出的按该顺序，没列出的按名称排在后面。"""
-    rank = {name: i for i, name in enumerate(order.get(rel, []))}
-
-    def key(path: Path) -> tuple:
-        listed = rank.get(path.name)
-        return (0 if path.is_dir() else 1, listed if listed is not None else 10**9, name_key(path.name))
-
-    return sorted(children, key=key)
+SORT_KEYS = {"name", "modified", "created", "custom"}
+# 电脑上还没保存过排序方式（旧版本）时按自定义顺序，与以前一致
+DEFAULT_SORT = ("custom", False)
 
 
-def file_meta(path: Path) -> str:
+def load_sort(lib_root: Path) -> tuple[str, bool]:
+    """电脑上选的排序方式（.ttnote/config/sort.json）：名称、修改时间、创建时间或自定义，以及是否降序。"""
+    path = lib_root / ".ttnote" / "config" / "sort.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return DEFAULT_SORT
+    if not isinstance(data, dict) or data.get("key") not in SORT_KEYS:
+        return DEFAULT_SORT
+    return data["key"], data.get("desc") is True
+
+
+def _stamp(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, dict):
+        return None
+    created, modified = value.get("created"), value.get("modified")
+    if not isinstance(created, int) or not isinstance(modified, int):
+        return None
+    return created, modified
+
+
+def load_times(lib_root: Path) -> dict[str, tuple[int, int]]:
+    """电脑记下的创建时间和修改时间（毫秒，.ttnote/config/times.json）。同步、检出会改掉文件自己的时间，不能用。
+    整体读不出来时（Git 合并留下冲突标记等）逐行读，同一文件取最早的创建时间和最晚的修改时间。"""
+    path = lib_root / ".ttnote" / "config" / "times.json"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return {}
+    try:
+        data = json.loads(text)
+        items = list(data.items()) if isinstance(data, dict) else []
+    except json.JSONDecodeError:
+        items = []
+        for line in text.splitlines():
+            line = line.strip().rstrip(",")
+            if not line.startswith('"'):
+                continue
+            try:
+                items.extend(json.loads("{" + line + "}").items())
+            except json.JSONDecodeError:
+                continue
+    times: dict[str, tuple[int, int]] = {}
+    for key, value in items:
+        stamp = _stamp(value)
+        if not isinstance(key, str) or stamp is None:
+            continue
+        old = times.get(key)
+        times[key] = stamp if old is None else (min(old[0], stamp[0]), max(old[1], stamp[1]))
+    return times
+
+
+def entry_times(path: Path, rel: str, times: dict[str, tuple[int, int]]) -> tuple[int, int]:
+    """(创建, 修改) 毫秒。文件夹的修改时间取其中最近修改的文件；没有记录时用文件自己的修改时间。"""
+    try:
+        own = int(path.stat().st_mtime * 1000)
+    except OSError:
+        own = 0
+    created, modified = times.get(rel, (own, own))
+    if path.is_dir():
+        prefix = rel + "/"
+        inner = [m for k, (_, m) in times.items() if k.startswith(prefix)]
+        modified = max(inner) if inner else created
+    return created, modified
+
+
+def sort_children(
+    children: list[Path],
+    rel: str,
+    order: dict[str, list[str]],
+    sort: tuple[str, bool] = DEFAULT_SORT,
+    times: dict[str, tuple[int, int]] | None = None,
+) -> list[Path]:
+    """与电脑一致：文件夹在前。自定义时 order.json 里列出的按该顺序，没列出的按名称排在后面，不分升降序；
+    按时间排时时间相同的按名称升序。"""
+    key, desc = sort
+
+    def first_dirs(p: Path) -> int:
+        return 0 if p.is_dir() else 1
+
+    by_name = sorted(children, key=lambda p: name_key(p.name))
+    if key == "custom":
+        rank = {name: i for i, name in enumerate(order.get(rel, []))}
+        return sorted(by_name, key=lambda p: (first_dirs(p), rank.get(p.name, 10**9)))
+    if key == "name":
+        return sorted(sorted(by_name, key=lambda p: name_key(p.name), reverse=desc), key=first_dirs)
+    which = 1 if key == "modified" else 0
+    times = times or {}
+
+    def at(p: Path) -> int:
+        child_rel = f"{rel}/{p.name}" if rel else p.name
+        return entry_times(p, child_rel, times)[which]
+
+    return sorted(sorted(by_name, key=at, reverse=desc), key=first_dirs)
+
+
+def file_meta(path: Path, modified_ms: int | None = None) -> str:
     if path.is_dir():
         return ""
     st = path.stat()
-    when = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+    when = datetime.fromtimestamp(modified_ms / 1000 if modified_ms else st.st_mtime).strftime("%Y-%m-%d %H:%M")
     return f"{human_size(st.st_size)} · {when}"
 
 
@@ -779,7 +897,8 @@ def library_main(root: Path, lib: str, rel: str, query: str) -> str:
         if child.name.startswith(".") or (lib == ROOT_LIB and child.name == SPARK):
             continue
         children.append(child)
-    children = sort_children(children, rel, load_order(lib_root))
+    times = load_times(lib_root)
+    children = sort_children(children, rel, load_order(lib_root), load_sort(lib_root), times)
     if query:
         children = [c for c in children if query in c.name]
     label, sub = lib_label(lib)
@@ -816,7 +935,7 @@ def library_main(root: Path, lib: str, rel: str, query: str) -> str:
         action = (
             f"<a class='danger' href='{qurl(PREFIX + '/confirm', action='trash', lib=lib, p=child_rel)}'>移入回收站</a>"
         )
-        rows.append(row(kind_of(child), name, e(file_meta(child)), action))
+        rows.append(row(kind_of(child), name, e(file_meta(child, times.get(child_rel, (0, 0))[1])), action))
     return head + "<ul>" + "".join(rows) + "</ul>"
 
 
@@ -834,7 +953,7 @@ def open_main(root: Path, lib: str, rel: str) -> str:
         f"<div class='top'><div><p><a class='back' href='{browse(lib, parent)}'>返回</a></p>"
         f"<h1>{e(path.name)}<small>{e(lib_label(lib)[0] + (' / ' + rel if rel else ''))}</small></h1></div>"
         f"<a class='danger' href='{qurl(PREFIX + '/confirm', action='trash', lib=lib, p=rel)}'>移入回收站</a></div>"
-        f"<p class='note'>{e(kind_of(path))} · {e(file_meta(path))}</p>"
+        f"<p class='note'>{e(kind_of(path))} · {e(file_meta(path, load_times(lib_root).get(rel, (0, 0))[1]))}</p>"
     )
     suffix = path.suffix.lower()
     if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}:

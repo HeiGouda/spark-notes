@@ -21,15 +21,21 @@ const tree: TreeNode[] = [
 const names = (nodes: TreeNode[]) => nodes.map((n) => n.name);
 
 describe("folderItems", () => {
-  it("文件夹在前，按 order.json 的顺序排，没列出的按名称排在后面", () => {
+  const custom = { key: "custom", desc: false } as const;
+
+  it("自定义排序：文件夹在前，按 order.json 的顺序排，没列出的按名称排在后面", () => {
     const order = { "": ["随手记.md", "读书", "产品规划.md"], 工作: ["会议记录.md"] };
-    expect(names(folderItems(tree, "", order))).toEqual(["读书", "工作", "随手记", "产品规划"]);
-    expect(names(folderItems(tree, "工作", order))).toEqual(["设计", "会议记录", "周报"]);
-    expect(names(folderItems(tree, "工作/设计", order))).toEqual(["同步设计"]);
+    expect(names(folderItems(tree, "", order, custom))).toEqual(["读书", "工作", "随手记", "产品规划"]);
+    expect(names(folderItems(tree, "工作", order, custom))).toEqual(["设计", "会议记录", "周报"]);
+    expect(names(folderItems(tree, "工作/设计", order, custom))).toEqual(["同步设计"]);
+  });
+
+  it("跟随电脑上选的排序方式，例如按修改时间降序", () => {
+    expect(names(folderItems(tree, "", {}, { key: "modified", desc: true }))).toEqual(["读书", "工作", "产品规划", "随手记"]);
   });
 
   it("文件夹不存在时返回空列表", () => {
-    expect(folderItems(tree, "不存在", {})).toEqual([]);
+    expect(folderItems(tree, "不存在", {}, custom)).toEqual([]);
   });
 });
 

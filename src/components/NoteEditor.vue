@@ -4,11 +4,13 @@ import { useSettingsStore } from "../stores/settings";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import BacklinksPanel from "./BacklinksPanel.vue";
+import Icon from "./Icon.vue";
 import { externalUrl } from "../editor/link";
 import { parseWiki } from "../editor/wikilink";
 import { goToHeading, goToText } from "../editor/navigate";
-import { linkCandidates, linkDisplay, resolveLink } from "../lib/links";
+import { contentCandidates, linkCandidates, linkDisplay, resolveLink } from "../lib/links";
 import { DOC_LABEL } from "../lib/doctype";
+import { isBookPath } from "../lib/book";
 import { inlineTags, mergeTags, parseTagInput } from "../lib/tags";
 import { useUiStore } from "../stores/ui";
 import { dispatchShortcut, runCommand, shortcutOf } from "../lib/commands";
@@ -26,6 +28,7 @@ import { useEditorStore } from "../stores/editor";
 import { useNoticeStore } from "../stores/notice";
 import { useContextMenuStore } from "../stores/contextMenu";
 import { useFlowGenStore } from "../stores/flowGen";
+import { useMindGenStore } from "../stores/mindGen";
 
 const props = defineProps<{ tab: Tab }>();
 
@@ -46,7 +49,7 @@ function formatCommandId(id: string): string {
   return /^h\d$/.test(id) ? `format.${id}` : commandIdOf(id);
 }
 
-/* ---------- 右键菜单：选中文字时可以用来生成流程图，没有选中时保持系统菜单 ---------- */
+/* ---------- 右键菜单：选中文字时可以用来生成流程图、思维导图，没有选中时保持系统菜单 ---------- */
 const ctxMenu = useContextMenuStore();
 function onEditorMenu(e: MouseEvent) {
   const text = editorStore.path === props.tab.path ? editorStore.selectionText().trim() : "";
@@ -57,6 +60,7 @@ function onEditorMenu(e: MouseEvent) {
     { kind: "item", label: "粘贴", command: "edit.paste" },
     { kind: "sep" },
     { kind: "item", label: "用选中文字生成流程图", action: () => useFlowGenStore().openDialog({ kind: "folder", folder: dirOf(props.tab.path) }, text) },
+    { kind: "item", label: "用选中文字生成思维导图", action: () => useMindGenStore().openDialog({ kind: "folder", folder: dirOf(props.tab.path) }, text) },
   ]);
 }
 
@@ -143,7 +147,7 @@ async function mountEditor(markdown: string) {
           openUrl(url).catch((err) => useNoticeStore().report("打开链接失败", err));
           return;
         }
-        const path = resolveLink(href, props.tab.path, vault.docPaths);
+        const path = resolveLink(href, props.tab.path, vault.linkPaths);
         if (path) {
           void tabs.open(path);
           return;
@@ -165,7 +169,13 @@ async function mountEditor(markdown: string) {
       onError: (context, err) => useNoticeStore().report(context, err),
       attachments: { resolve: resolveSrc, save: saveFile },
       wiki: {
-        candidates: (q) => linkCandidates(q, vault.docPaths, props.tab.path),
+        candidates: (q) => linkCandidates(q, vault.linkPaths, props.tab.path),
+        search: async (q, limit) => {
+          if (!vault.root) return [];
+          const hits = await api.search(vault.root, q, limit);
+          const snippets = new Map(hits.map((h) => [h.path, h.snippet]));
+          return contentCandidates(hits.map((h) => h.path), vault.linkPaths, props.tab.path).map((c) => ({ ...c, snippet: snippets.get(c.path) }));
+        },
         open: (value) => void openWiki(value),
       },
     });
@@ -247,8 +257,13 @@ async function openWiki(value: string) {
     if (heading && editor) goToHeading(editor, heading);
     return;
   }
-  const path = resolveLink(target, props.tab.path, vault.docPaths);
+  const path = resolveLink(target, props.tab.path, vault.linkPaths);
   if (path) return tabs.openAt(path, heading ? { heading } : {});
+  // 表格簿只能在文件树里新建，链接指向不存在的表格簿时不提示创建笔记
+  if (isBookPath(target)) {
+    useNoticeStore().report("无法打开链接", `表格簿“${linkDisplay(target).label}”不存在`);
+    return;
+  }
   const { label, kind } = linkDisplay(target.replace(/\.mmd$/i, ""));
   const what = DOC_LABEL[kind ?? "note"];
   const create = await ask(`${what}“${label}”不存在，是否创建？`, {
@@ -331,7 +346,39 @@ watch(() => settings.spellcheck, (on) => {
   host.value?.querySelector(".pm")?.setAttribute("spellcheck", on ? "true" : "false");
 });
 
+/* ---------- 回到顶部、Ctrl+滚轮调字号 ---------- */
+const scroller = ref<HTMLElement | null>(null);
+const showTop = ref(false);
+const sizeHint = ref(false);
+let hintTimer = 0;
+/** 触控板捏合会连续发出很小的 deltaY，累计到一格滚轮的量再调一次 */
+let wheelAcc = 0;
+
+function onScroll() {
+  const el = scroller.value;
+  if (el) showTop.value = el.scrollTop > el.clientHeight;
+}
+
+function toTop() {
+  scroller.value?.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function onWheel(e: WheelEvent) {
+  if ((!e.ctrlKey && !e.metaKey) || !settings.wheelFontSize) return;
+  e.preventDefault();
+  if (Math.sign(e.deltaY) !== Math.sign(wheelAcc)) wheelAcc = 0;
+  wheelAcc += e.deltaY;
+  if (Math.abs(wheelAcc) < 50) return;
+  const next = settings.editorFontSize + (wheelAcc < 0 ? 1 : -1);
+  wheelAcc = 0;
+  if (next >= 13 && next <= 24) settings.patchEditor({ editorFontSize: next });
+  sizeHint.value = true;
+  clearTimeout(hintTimer);
+  hintTimer = window.setTimeout(() => (sizeHint.value = false), 1000);
+}
+
 onBeforeUnmount(() => {
+  clearTimeout(hintTimer);
   destroyed = true;
   mountId++;
   if (!editor) return;
@@ -341,42 +388,46 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="editor">
-    <article class="doc">
-      <h1
-        ref="titleEl"
-        class="doc-title"
-        contenteditable="plaintext-only"
-        spellcheck="false"
-        title="修改标题即重命名笔记"
-        @keydown="onTitleKey"
-        @blur="commitTitle"
-        @paste="onTitlePaste"
-      >{{ tab.name }}</h1>
-      <div class="doc-meta">
-        <span v-for="t in tab.tags" :key="`fm:${t}`" class="chip">
-          <button class="chip-name" type="button" :title="`搜索带有 #${t} 的笔记`" @click="ui.search(`#${t}`)">{{ t }}</button>
-          <button class="chip-x" type="button" :title="`移除标签“${t}”`" @click="removeTag(t)">×</button>
-        </span>
-        <button v-for="t in bodyTags" :key="`body:${t}`" class="chip" type="button" :title="`搜索带有 #${t} 的笔记\n这个标签写在正文里，在正文中修改或删除`" @click="ui.search(`#${t}`)">{{ t }}</button>
-        <input
-          v-if="addingTag"
-          ref="tagInput"
-          v-model="tagDraft"
-          class="tag-input"
-          list="note-tag-options"
-          placeholder="输入标签，回车添加"
+  <div class="editor-pane">
+    <div ref="scroller" class="editor" @scroll.passive="onScroll" @wheel="onWheel">
+      <article class="doc">
+        <h1
+          ref="titleEl"
+          class="doc-title"
+          contenteditable="plaintext-only"
           spellcheck="false"
-          @keydown.enter.prevent="commitTag()"
-          @keydown.esc.prevent.stop="cancelTag()"
-          @blur="commitTag()"
-        />
-        <button v-else class="tag-add" type="button" title="添加标签（多个用空格分隔）" @click="startTag()">+ 标签</button>
-        <datalist id="note-tag-options"><option v-for="t in knownTags" :key="t" :value="t" /></datalist>
-        <span v-if="tab.created" class="date">创建于 {{ tab.created }}</span>
-      </div>
-      <div ref="host" @contextmenu="onEditorMenu" />
-    </article>
-    <BacklinksPanel :path="tab.path" />
+          title="修改标题即重命名笔记"
+          @keydown="onTitleKey"
+          @blur="commitTitle"
+          @paste="onTitlePaste"
+        >{{ tab.name }}</h1>
+        <div class="doc-meta">
+          <span v-for="t in tab.tags" :key="`fm:${t}`" class="chip">
+            <button class="chip-name" type="button" :title="`搜索带有 #${t} 的笔记`" @click="ui.search(`#${t}`)">{{ t }}</button>
+            <button class="chip-x" type="button" :title="`移除标签“${t}”`" @click="removeTag(t)">×</button>
+          </span>
+          <button v-for="t in bodyTags" :key="`body:${t}`" class="chip" type="button" :title="`搜索带有 #${t} 的笔记\n这个标签写在正文里，在正文中修改或删除`" @click="ui.search(`#${t}`)">{{ t }}</button>
+          <input
+            v-if="addingTag"
+            ref="tagInput"
+            v-model="tagDraft"
+            class="tag-input"
+            list="note-tag-options"
+            placeholder="输入标签，回车添加"
+            spellcheck="false"
+            @keydown.enter.prevent="commitTag()"
+            @keydown.esc.prevent.stop="cancelTag()"
+            @blur="commitTag()"
+          />
+          <button v-else class="tag-add" type="button" title="添加标签（多个用空格分隔）" @click="startTag()">+ 标签</button>
+          <datalist id="note-tag-options"><option v-for="t in knownTags" :key="t" :value="t" /></datalist>
+          <span v-if="tab.created" class="date">创建于 {{ tab.created }}</span>
+        </div>
+        <div ref="host" @contextmenu="onEditorMenu" />
+      </article>
+      <BacklinksPanel :path="tab.path" />
+    </div>
+    <div v-if="sizeHint" class="doc-size-hint">字号 {{ settings.editorFontSize }}px</div>
+    <button v-if="showTop" class="to-top" type="button" title="回到顶部" @click="toTop"><Icon name="up" /></button>
   </div>
 </template>

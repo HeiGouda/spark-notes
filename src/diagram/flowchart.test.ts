@@ -72,6 +72,31 @@ describe("parseFlow", () => {
     expect(r.issues[5].message).toContain("连线写法");
   });
 
+  it("end、class 等词当节点编号时不算子图或样式语句（AI 生成的流程图常用 end 做结束节点）", () => {
+    const doc = ok(`flowchart TD
+  start([开始]) --> end([结束])
+  end --> style
+  class --> style
+  style[样式]
+  class[类]
+`);
+    expect(doc.nodes.map((n) => n.id)).toEqual(["start", "end", "style", "class"]);
+    expect(edges(doc)).toEqual(["start->end", "end->style", "class->style"]);
+    const bad = parseFlow("flowchart TD\n  A --> B\n  end\n  class A hot\n  style A fill:#f96\n  direction LR\n  click A \"x\"\n  linkStyle 0 stroke:red\n  classDef hot fill:red\n");
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.issues.map((i) => i.line)).toEqual([3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it("写出时把关键字 end 改成 end_，重新读回内容不变", () => {
+    const doc = ok("flowchart TD\n  s([开始]) --> end([结束])\n  end --> s\n  end_[占用]\n");
+    const text = serializeFlow(doc);
+    expect(text).not.toMatch(/(^|\s)end(\s|\(|\[|$)/m);
+    const again = ok(text);
+    expect(again.nodes.map((n) => [n.id, n.text])).toEqual([["s", "开始"], ["end__", "结束"], ["end_", "占用"]]);
+    expect(edges(again)).toEqual(["s->end__", "end__->s"]);
+    expect(serializeFlow(again)).toBe(text);
+  });
+
   it("开头不是 flowchart 时无法识别", () => {
     const r = parseFlow("sequenceDiagram\n  A->>B: hi\n");
     expect(r.ok).toBe(false);
