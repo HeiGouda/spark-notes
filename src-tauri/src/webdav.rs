@@ -638,6 +638,12 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
+/// 手机上删除笔记时，云端文件移到哪里（和同步时删除的位置一致）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn cloud_trash_path(rel: &str) -> String {
+    TrashStamp::now().cloud_path(rel)
+}
+
 /// 被覆盖或删除的云端文件放到 `.spark-trash/<日期>/<时分秒>/<原路径>`
 struct TrashStamp {
     day: String,
@@ -842,6 +848,8 @@ fn encode_segment(seg: &str) -> String {
 
 pub struct UreqDav {
     agent: ureq::Agent,
+    /// 不跟随重定向，给移动和删除文件夹用：ureq 跟随 301 时会把 MOVE、DELETE 改成 GET
+    plain: ureq::Agent,
     /// 服务地址，不带结尾的 /
     server: String,
     /// 远程目录的各级名字
@@ -861,10 +869,120 @@ impl UreqDav {
     pub fn new(url: &str, remote_dir: &str, username: &str, password: &str) -> Result<Self, String> {
         let base = join_base(url, remote_dir)?;
         let token = base64_encode(format!("{username}:{password}").as_bytes());
-        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(60)).build();
+        // 不设整个请求的总时限：手机网速慢时几 MB 的书一分钟传不完，会被半路掐断。
+        // 只限制连接和每次读写的等待时间，数据一直在流动就继续。
+        let builder = || {
+            ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(20))
+                .timeout_read(Duration::from_secs(60))
+                .timeout_write(Duration::from_secs(60))
+        };
+        // 默认会在重定向时丢掉 Authorization。建回收目录、移动和删除经常被服务器
+        // 转一次地址，跟过去的请求没带密码，服务器就回 401，看起来像密码错了。
+        let agent = builder().redirect_auth_headers(ureq::RedirectAuthHeaders::SameHost).build();
+        let plain = builder().redirects(0).build();
         let server = url.trim().trim_end_matches('/').to_string();
         let dir = remote_dir.split('/').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
-        Ok(Self { agent, server, dir, base, auth: format!("Basic {token}"), missing: Cell::new(false) })
+        Ok(Self { agent, plain, server, dir, base, auth: format!("Basic {token}"), missing: Cell::new(false) })
+    }
+
+    /// `dir` 为 true 时两边地址都带结尾的 /（文件夹）
+    fn send_move(&self, from: &str, to: &str, dir: bool) -> Result<ureq::Response, ureq::Error> {
+        let slash = if dir { "/" } else { "" };
+        self.plain.request("MOVE", &format!("{}{slash}", self.url_for(from)))
+            .set("Authorization", &self.auth)
+            .set("Destination", &format!("{}{slash}", self.url_for(to)))
+            .set("Overwrite", "T")
+            .call()
+    }
+
+    /// 列出 `url` 这个文件夹下面的所有文件和子文件夹；文件夹不存在时返回 `None`
+    fn list_at(&self, url: &str) -> Result<Option<Vec<RemoteEntry>>, String> {
+        // 有的服务不支持 Depth: infinity（坚果云等），改成逐层 Depth: 1
+        let first = match self.propfind(url, "infinity") {
+            Err(e) if e.status != Some(401) => self.propfind(url, "1"),
+            other => other,
+        };
+        let Some(text) = first.map_err(|e| e.message)? else { return Ok(None) };
+        let prefix = list_prefix(&self.base);
+        let mut entries = parse_propfind(&text, &prefix)?;
+        let mut seen: HashSet<String> = entries.iter().map(|e| e.rel.clone()).collect();
+        // 只拿到一层的服务不会列出子目录里的文件，没展开过的目录逐个再读
+        let mut queue: Vec<String> = entries
+            .iter()
+            .filter(|d| d.is_dir && descend(&d.rel) && !entries.iter().any(|e| e.rel.starts_with(&format!("{}/", d.rel))))
+            .map(|d| d.rel.clone())
+            .collect();
+        while let Some(dir) = queue.pop() {
+            let url = format!("{}/", self.url_for(&dir));
+            let Some(text) = self.propfind(&url, "1").map_err(|e| e.message)? else { continue };
+            for entry in parse_propfind(&text, &prefix)? {
+                if !seen.insert(entry.rel.clone()) {
+                    continue;
+                }
+                if entry.is_dir && descend(&entry.rel) {
+                    queue.push(entry.rel.clone());
+                }
+                entries.push(entry);
+            }
+        }
+        Ok(Some(entries))
+    }
+
+    /// 服务器不能移动文件夹时，把里面的东西逐个复制到 `to`
+    fn copy_dir(&self, from: &str, to: &str) -> Result<(), String> {
+        let from = from.trim_matches('/');
+        let to = to.trim_matches('/');
+        let mut entries = self.list_at(&format!("{}/", self.url_for(from)))?.unwrap_or_default();
+        // 按路径排序，上级文件夹总在它里面的文件之前建好
+        entries.sort_by(|a, b| a.rel.cmp(&b.rel));
+        self.ensure_dir(to)?;
+        for entry in entries {
+            let Some(rest) = entry.rel.strip_prefix(from).and_then(|r| r.strip_prefix('/')) else { continue };
+            let target = format!("{to}/{rest}");
+            if entry.is_dir {
+                self.ensure_dir(&target)?;
+            } else {
+                self.put(&target, &self.get(&entry.rel)?)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn delete_dir(&self, rel: &str) -> Result<(), String> {
+        match self.plain.delete(&format!("{}/", self.url_for(rel))).set("Authorization", &self.auth).call() {
+            Ok(r) if (200..300).contains(&r.status()) => Ok(()),
+            Ok(r) => Err(format!("删除远端文件夹失败：HTTP {}", r.status())),
+            Err(ureq::Error::Status(404, _)) => Ok(()),
+            Err(e) => Err(http_err("删除远端文件夹失败", e)),
+        }
+    }
+
+    /// 下载一个文件，边下载边报告已收到的字节数和总大小（服务器没给大小时为 `None`）
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn get_with_progress(&self, rel: &str, on_progress: &dyn Fn(u64, Option<u64>)) -> Result<Vec<u8>, String> {
+        let response = self.agent.get(&self.url_for(rel)).set("Authorization", &self.auth).call().map_err(|e| http_err("下载失败", e))?;
+        let total = response.header("Content-Length").and_then(|v| v.trim().parse::<u64>().ok());
+        let mut reader = response.into_reader();
+        let mut bytes = Vec::with_capacity(total.unwrap_or(0).min(512 * 1024 * 1024) as usize);
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut last = 0u64;
+        on_progress(0, total);
+        loop {
+            let n = reader.read(&mut buf).map_err(|e| format!("下载失败：{e}"))?;
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..n]);
+            let done = bytes.len() as u64;
+            // 每 256KB 报一次，避免消息太多
+            if done - last >= 256 * 1024 {
+                last = done;
+                on_progress(done, total);
+            }
+        }
+        on_progress(bytes.len() as u64, total);
+        Ok(bytes)
     }
 
     /// 远程目录不存在时返回 `None`
@@ -931,57 +1049,36 @@ pub(crate) fn base64_encode(bytes: &[u8]) -> String {
 impl Dav for UreqDav {
     fn list(&self) -> Result<Vec<RemoteEntry>, String> {
         self.missing.set(false);
-        // 有的服务不支持 Depth: infinity（坚果云等），改成逐层 Depth: 1
-        let first = match self.propfind(&self.base, "infinity") {
-            Err(e) if e.status != Some(401) => self.propfind(&self.base, "1"),
-            other => other,
-        };
-        let Some(text) = first.map_err(|e| e.message)? else {
-            self.missing.set(true);
-            return Ok(Vec::new());
-        };
-        let prefix = list_prefix(&self.base);
-        let mut entries = parse_propfind(&text, &prefix)?;
-        let mut seen: HashSet<String> = entries.iter().map(|e| e.rel.clone()).collect();
-        // 只拿到一层的服务不会列出子目录里的文件，没展开过的目录逐个再读
-        let mut queue: Vec<String> = entries
-            .iter()
-            .filter(|d| d.is_dir && descend(&d.rel) && !entries.iter().any(|e| e.rel.starts_with(&format!("{}/", d.rel))))
-            .map(|d| d.rel.clone())
-            .collect();
-        while let Some(dir) = queue.pop() {
-            let url = format!("{}/", self.url_for(&dir));
-            let Some(text) = self.propfind(&url, "1").map_err(|e| e.message)? else { continue };
-            for entry in parse_propfind(&text, &prefix)? {
-                if !seen.insert(entry.rel.clone()) {
-                    continue;
-                }
-                if entry.is_dir && descend(&entry.rel) {
-                    queue.push(entry.rel.clone());
-                }
-                entries.push(entry);
-            }
-        }
-        Ok(entries)
+        let entries = self.list_at(&self.base)?;
+        self.missing.set(entries.is_none());
+        Ok(entries.unwrap_or_default())
     }
 
     fn move_to(&self, from: &str, to: &str) -> Result<(), String> {
         ensure_parent(self, to)?;
-        let moved = self.agent.request("MOVE", &self.url_for(from))
-            .set("Authorization", &self.auth)
-            .set("Destination", &self.url_for(to))
-            .set("Overwrite", "T")
-            .call();
-        match moved {
-            Ok(_) | Err(ureq::Error::Status(404, _)) => Ok(()),
-            Err(e) => {
-                // 不支持 MOVE 的服务：复制过去再删除原文件
-                let first = http_err("移到云端回收文件夹失败", e);
-                let bytes = self.get(from).map_err(|_| first.clone())?;
-                self.put(to, &bytes).map_err(|_| first.clone())?;
-                self.delete(from)
+        let mut dir = false;
+        let mut moved = self.send_move(from, to, false);
+        // 文件夹地址不带结尾的 / 时，服务器会重定向到带 / 的地址
+        if let Ok(r) = &moved {
+            if (300..400).contains(&r.status()) && r.header("Location").is_some_and(|l| l.trim_end().ends_with('/')) {
+                dir = true;
+                moved = self.send_move(from, to, true);
             }
         }
+        let first = match moved {
+            Ok(r) if (200..300).contains(&r.status()) => return Ok(()),
+            Err(ureq::Error::Status(404, _)) => return Ok(()),
+            Ok(r) => format!("移到云端回收文件夹失败：HTTP {}", r.status()),
+            Err(e) => http_err("移到云端回收文件夹失败", e),
+        };
+        // 不支持 MOVE 的服务（反向代理后面的 Apache 也会拒绝）：复制过去再删除原来的
+        if dir {
+            self.copy_dir(from, to).map_err(|e| format!("{first}；改为复制也失败：{e}"))?;
+            return self.delete_dir(from);
+        }
+        let bytes = self.get(from).map_err(|_| first.clone())?;
+        self.put(to, &bytes).map_err(|_| first.clone())?;
+        self.delete(from)
     }
 
     fn ensure_root(&self) -> Result<(), String> {
@@ -1060,6 +1157,29 @@ fn http_err(context: &str, err: ureq::Error) -> String {
     }
 }
 
+/// `spark/` 下面一层的文件夹名，每个是一个笔记库。隐藏文件夹和文件不算
+fn child_dirs(xml: &str, prefix: &str) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = parse_propfind(xml, prefix)?
+        .into_iter()
+        .filter(|e| e.is_dir && !e.rel.contains('/') && !e.rel.starts_with('.'))
+        .map(|e| e.rel)
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+/// 手机添加笔记库时，连上服务器后列出 `spark/` 里已有的笔记库供选择。云端没有 `spark/` 时返回空
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn list_libraries(url: &str, username: &str, password: &str) -> Result<Vec<String>, String> {
+    let dav = UreqDav::new(url, "spark", username, password)?;
+    match dav.propfind(&dav.base, "1") {
+        Ok(Some(text)) => child_dirs(&text, &list_prefix(&dav.base)),
+        Ok(None) => Ok(Vec::new()),
+        Err(e) => Err(e.message),
+    }
+}
+
 pub fn test_connection(url: &str, remote_dir: &str, username: &str, password: &str) -> Result<RemoteInfo, String> {
     let dav = UreqDav::new(url, remote_dir, username, password)?;
     let files: Vec<RemoteEntry> = dav.list()?.into_iter().filter(|e| !e.is_dir && should_sync(&e.rel)).collect();
@@ -1125,6 +1245,119 @@ mod tests {
         assert!(entries.iter().any(|e| e.rel == "工作/周报.md" && !e.is_dir && e.etag == "e1"), "{entries:?}");
     }
 
+    /// 本机起一个像反向代理后面的 Apache 一样的 WebDAV：没带密码回 401，文件夹地址不带 / 时 301，MOVE 一律 502
+    fn serve_apache_like(files: Vec<(&str, &str)>) -> (String, std::sync::Arc<std::sync::Mutex<BTreeMap<String, Option<Vec<u8>>>>>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::sync::{Arc, Mutex};
+        let mut tree: BTreeMap<String, Option<Vec<u8>>> = BTreeMap::new();
+        for (path, body) in files {
+            let mut acc = String::new();
+            let parts: Vec<&str> = path.split('/').collect();
+            for (i, part) in parts.iter().enumerate() {
+                acc = if acc.is_empty() { part.to_string() } else { format!("{acc}/{part}") };
+                if i + 1 < parts.len() {
+                    tree.entry(acc.clone()).or_insert(None);
+                } else {
+                    tree.insert(acc.clone(), Some(body.as_bytes().to_vec()));
+                }
+            }
+        }
+        let tree = Arc::new(Mutex::new(tree));
+        let shared = tree.clone();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut parts = line.split_whitespace();
+                let method = parts.next().unwrap_or("").to_string();
+                let target = parts.next().unwrap_or("").to_string();
+                let (mut len, mut authed, mut depth) = (0usize, false, String::new());
+                loop {
+                    let mut h = String::new();
+                    reader.read_line(&mut h).unwrap();
+                    let h = h.trim_end();
+                    if h.is_empty() {
+                        break;
+                    }
+                    let lower = h.to_ascii_lowercase();
+                    if let Some(v) = lower.strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                    authed |= lower.starts_with("authorization: basic");
+                    if let Some(v) = lower.strip_prefix("depth:") {
+                        depth = v.trim().to_string();
+                    }
+                }
+                let mut body = vec![0u8; len];
+                reader.read_exact(&mut body).unwrap();
+                let slash = target.ends_with('/');
+                let rel = percent_decode(target.trim_start_matches("/dav/").trim_end_matches('/'));
+                let mut tree = shared.lock().unwrap();
+                let (status, extra, text): (&str, String, String) = if !authed {
+                    ("401 Unauthorized", "WWW-Authenticate: Basic realm=\"WebDAV\"\r\n".into(), String::new())
+                } else if !slash && !rel.is_empty() && matches!(tree.get(&rel), Some(None)) {
+                    ("301 Moved Permanently", format!("Location: http://{addr}{target}/\r\n"), String::new())
+                } else {
+                    match method.as_str() {
+                        "MOVE" => ("502 Bad Gateway", String::new(), "Destination URI refers to different scheme or port".into()),
+                        "PROPFIND" if depth == "infinity" => ("403 Forbidden", String::new(), String::new()),
+                        "PROPFIND" => {
+                            let under = |k: &String| if rel.is_empty() { !k.contains('/') } else { k.strip_prefix(&format!("{rel}/")).is_some_and(|r| !r.contains('/')) };
+                            let mut xml = String::from(r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">"#);
+                            for (k, v) in tree.iter().filter(|(k, _)| **k == rel || under(k)) {
+                                let kind = if v.is_none() { "<d:collection/>" } else { "" };
+                                xml.push_str(&format!("<d:response><d:href>/dav/{}{}</d:href><d:propstat><d:prop><d:resourcetype>{kind}</d:resourcetype></d:prop></d:propstat></d:response>", percent_encode_path(k), if v.is_none() { "/" } else { "" }));
+                            }
+                            xml.push_str("</d:multistatus>");
+                            ("207 Multi-Status", String::new(), xml)
+                        }
+                        "MKCOL" if tree.contains_key(&rel) => ("405 Method Not Allowed", String::new(), String::new()),
+                        "MKCOL" => {
+                            tree.insert(rel.clone(), None);
+                            ("201 Created", String::new(), String::new())
+                        }
+                        "PUT" => {
+                            tree.insert(rel.clone(), Some(body));
+                            ("201 Created", String::new(), String::new())
+                        }
+                        "GET" => match tree.get(&rel) {
+                            Some(Some(b)) => ("200 OK", String::new(), String::from_utf8_lossy(b).into_owned()),
+                            _ => ("404 Not Found", String::new(), String::new()),
+                        },
+                        "DELETE" => {
+                            tree.retain(|k, _| *k != rel && !k.starts_with(&format!("{rel}/")));
+                            ("204 No Content", String::new(), String::new())
+                        }
+                        _ => ("405 Method Not Allowed", String::new(), String::new()),
+                    }
+                };
+                let _ = write!(stream, "HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
+            }
+        });
+        (format!("http://{addr}/dav"), tree)
+    }
+
+    #[test]
+    fn moves_folder_into_trash_when_server_redirects_and_rejects_move() {
+        let (url, tree) = serve_apache_like(vec![("读书笔记/社会性动物 (第12版)/社会性动物.md", "感悟"), ("读书笔记/社会性动物 (第12版)/图/a.png", "png"), ("周报.md", "周报")]);
+        let dav = UreqDav::new(&url, "", "u", "p").unwrap();
+        dav.move_to("读书笔记/社会性动物 (第12版)", ".spark-trash/2026-10-09/170000/读书笔记/社会性动物 (第12版)").unwrap();
+        dav.move_to("周报.md", ".spark-trash/2026-10-09/170000/周报.md").unwrap();
+        let tree = tree.lock().unwrap();
+        assert!(!tree.keys().any(|k| k.starts_with("读书笔记/社会性动物")), "{:?}", tree.keys());
+        assert!(!tree.contains_key("周报.md"));
+        let trash = ".spark-trash/2026-10-09/170000";
+        assert_eq!(tree[&format!("{trash}/读书笔记/社会性动物 (第12版)/社会性动物.md")].as_deref(), Some("感悟".as_bytes()));
+        assert_eq!(tree[&format!("{trash}/读书笔记/社会性动物 (第12版)/图/a.png")].as_deref(), Some("png".as_bytes()));
+        assert_eq!(tree[&format!("{trash}/周报.md")].as_deref(), Some("周报".as_bytes()));
+    }
+
     #[test]
     fn cloud_trash_is_never_synced() {
         assert!(!should_sync(".spark-trash/2026-09-28/153000/周报.md"));
@@ -1167,6 +1400,20 @@ mod tests {
 </d:multistatus>"#;
         let entries = parse_propfind(xml, "/dav/notes/").unwrap();
         assert!(entries.iter().any(|e| e.rel == "周报.md" && e.etag == "abc" && !e.is_dir));
+    }
+
+    #[test]
+    fn lists_only_library_folders_one_level_down() {
+        let xml = r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response><d:href>/dav/spark/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+  <d:response><d:href>/dav/spark/%E7%94%9F%E6%B4%BB/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+  <d:response><d:href>/dav/spark/%E5%B7%A5%E4%BD%9C/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+  <d:response><d:href>/dav/spark/.spark-trash/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+  <d:response><d:href>/dav/spark/readme.txt</d:href><d:propstat><d:prop><d:getcontentlength>3</d:getcontentlength><d:resourcetype></d:resourcetype></d:prop></d:propstat></d:response>
+</d:multistatus>"#;
+        assert_eq!(child_dirs(xml, "/dav/spark/").unwrap(), vec!["工作".to_string(), "生活".to_string()]);
+        assert!(child_dirs(r#"<d:multistatus xmlns:d="DAV:"></d:multistatus>"#, "/dav/spark/").unwrap().is_empty());
     }
 
     #[test]

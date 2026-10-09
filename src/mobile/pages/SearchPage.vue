@@ -6,7 +6,7 @@ import { docKind } from "../../lib/doctype";
 import { folderLabel } from "../browse";
 import type { IconName } from "../icons";
 import { useMobile } from "../store";
-import { openDoc } from "../nav";
+import { back, openDoc } from "../nav";
 
 const store = useMobile();
 const query = ref("");
@@ -55,12 +55,13 @@ function iconOf(path: string): IconName {
 
 <template>
   <div class="page">
-    <div class="top" style="padding: 0 12px">
+    <div class="top" style="padding: 0 8px 0 14px; border-bottom: 0">
       <div class="inp" style="flex: 1; height: 40px; border-radius: 20px">
         <span style="padding-left: 12px; color: var(--muted); display: grid"><Icon name="search" :size="18" /></span>
         <input ref="box" v-model="query" type="search" :placeholder="`搜索 ${store.current?.name ?? ''}`" style="height: 36px" />
         <button v-if="query" class="ib" style="width: 34px; height: 34px" @click="clear"><Icon name="x" :size="16" /></button>
       </div>
+      <button class="btn text" style="height: 40px" @click="back()">取消</button>
     </div>
     <div class="scroll">
       <div v-if="error" class="m-empty">搜索出错：{{ error }}</div>

@@ -13,6 +13,7 @@ mod index;
 mod mobile;
 mod notes;
 mod secret;
+mod shelf;
 #[cfg(target_os = "android")]
 mod secret_android;
 mod times;
@@ -791,11 +792,63 @@ pub fn run() {
             #[cfg(target_os = "android")]
             mobile::commands::mobile_vault_test,
             #[cfg(target_os = "android")]
+            mobile::commands::mobile_vault_libraries,
+            #[cfg(target_os = "android")]
             mobile::commands::mobile_sync_check,
             #[cfg(target_os = "android")]
             mobile::commands::mobile_sync,
             #[cfg(target_os = "android")]
-            mobile::commands::mobile_network_metered
+            mobile::commands::mobile_network_metered,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_move_to_back,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_note_delete,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_system_bars,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_selection_menu,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_list,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_usage,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_import,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_remove,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_remove_downloads,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_cloud,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_upload,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_download,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_delete_cloud,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_book_file,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_save_point,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_progress,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_covers,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_read_point,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_cover_save,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_sync_point,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_push_point,
+            #[cfg(target_os = "android")]
+            shelf::commands::vault_text_read,
+            #[cfg(target_os = "android")]
+            shelf::commands::vault_text_write,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_text_read,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_text_write
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5,7 +5,7 @@ import { parseSortConfig, type CustomOrder, type SortConfig } from "../lib/treeS
 import { mobileApi, type VaultConfig, type VaultInput } from "./api";
 import { countNotes } from "./browse";
 import { DEFAULT_READER, loadPrefs, savePrefs, type FontSize, type ReaderPrefs, type RecentOpen, type VaultMeta } from "./prefs";
-import { THEMES } from "../lib/themes";
+import { THEMES, isDarkTheme } from "../lib/themes";
 
 export const FONT_PX: Record<FontSize, number> = { small: 14, medium: 16, large: 18, xlarge: 20 };
 
@@ -14,6 +14,8 @@ function applyReader(r: ReaderPrefs) {
   const root = document.documentElement;
   for (const t of THEMES) if (t.id !== "light") root.classList.toggle(t.id, t.id === r.theme);
   root.style.setProperty("--read-size", `${FONT_PX[r.size]}px`);
+  // 状态栏的图标颜色跟着主题：深色主题用浅色图标
+  void mobileApi.systemBars(!isDarkTheme(r.theme)).catch(() => {});
 }
 
 /** 电脑上还没保存过排序方式（旧版本）时按自定义顺序，与以前一致 */

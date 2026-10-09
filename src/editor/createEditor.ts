@@ -19,6 +19,7 @@ import { tableBarPlugin } from "./tableBar";
 import { headingsOf, type Heading } from "./navigate";
 import { suggestHandlesKey, wikiClick, wikiPlugins, wikiStringifyHandlers, type WikiHost } from "./wikilink";
 import { highlightPlugins, highlightStringifyHandlers } from "./highlight";
+import { annoMarkerPlugins } from "./annoMarker";
 import { floatBarPlugin, slashHandlesKey, slashPlugin, type FormatHost } from "./popups";
 import { findPlugin } from "./find";
 import { aiBlockPlugin } from "./aiBlock";
@@ -244,6 +245,7 @@ export async function createEditor(opts: EditorOptions): Promise<Editor> {
     .use(commonmarkPlugins)
     .use(wikiPlugins(opts.wiki))
     .use(highlightPlugins)
+    .use(annoMarkerPlugins)
     .use(gfm)
     .use(tableBarPlugin())
     .use(history)

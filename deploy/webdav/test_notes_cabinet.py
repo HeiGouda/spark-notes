@@ -2,9 +2,10 @@
 
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -28,12 +29,66 @@ class CabinetTest(unittest.TestCase):
         (self.root / "spark" / ".hidden").mkdir()
         (self.root / "旧笔记.md").write_text("旧", encoding="utf-8")
         (self.root / ".secret").write_text("no", encoding="utf-8")
+        (self.root / "spark-books").mkdir()
+        (self.root / "spark-books" / "三体.epub").write_bytes(b"book")
+        (self.root / "spark-books" / ".spark" / "progress.json").parent.mkdir()
+        (self.root / "spark-books" / ".spark" / "progress.json").write_text("{}", encoding="utf-8")
         self.assertEqual(cab.libraries(self.root), ["工作", "生活"])
         self.assertEqual([p.name for p in cab.loose_entries(self.root)], ["旧笔记.md"])
+        self.assertEqual([p.name for p in cab.shelf_books(self.root)], ["三体.epub"])
+        self.assertIn("三体.epub", cab.shelf_main(self.root, "token"))
+
+    def test_shelf_upload_rename_and_trash(self) -> None:
+        (self.root / "spark" / "工作").mkdir(parents=True)
+        saved = cab.store_shelf_book(self.root, "三体.epub", b"one")
+        self.assertEqual(saved.name, "三体.epub")
+        again = cab.store_shelf_book(self.root, "三体.epub", b"two", "rename")
+        self.assertEqual(again.name, "三体 (2).epub")
+        cab.store_shelf_book(self.root, "三体.epub", b"three", "overwrite")
+        self.assertEqual((self.root / "spark-books" / "三体.epub").read_bytes(), b"three")
+        self.assertTrue(list((self.root / "spark-books" / ".spark-trash").rglob("三体.epub")))
+        with self.assertRaises(PermissionError):
+            cab.store_shelf_book(self.root, "图片.png", b"no")
+        cab.shelf_trash_book(self.root, "三体 (2).epub")
+        self.assertFalse((self.root / "spark-books" / "三体 (2).epub").exists())
         with self.assertRaises(PermissionError):
             cab.loose_target(self.root, "spark")
         with self.assertRaises(PermissionError):
             cab.loose_target(self.root, "../spark")
+
+    def test_shelf_check_tells_clash_and_alt_name(self) -> None:
+        free = cab.check_shelf_name(self.root, "三体.epub")
+        self.assertEqual(free, {"name": "三体.epub", "exists": False, "alt": "三体.epub"})
+        cab.store_shelf_book(self.root, "三体.epub", b"one")
+        cab.store_shelf_book(self.root, "三体.epub", b"two", "rename")
+        taken = cab.check_shelf_name(self.root, "三体.epub")
+        self.assertTrue(taken["exists"])
+        self.assertEqual(taken["alt"], "三体 (3).epub")
+        # 路径只取文件名，格式不对的不接受
+        self.assertEqual(cab.check_shelf_name(self.root, "a/b/三体.epub")["name"], "三体.epub")
+        with self.assertRaises(PermissionError):
+            cab.check_shelf_name(self.root, "图片.png")
+        with self.assertRaises(PermissionError):
+            cab.check_shelf_name(self.root, ".hidden.epub")
+
+    def test_shelf_page_follows_prototype(self) -> None:
+        cab.store_shelf_book(self.root, "三体.epub", b"x" * 2048)
+        page = cab.shelf_main(self.root, "tok")
+        for text in ("上传书", "书名", "格式", "大小", "上传时间", "下载", "移入回收站", "EPUB", "单个文件不超过 300MB"):
+            self.assertIn(text, page)
+        # 可以一次选多个文件；上传脚本单独提供，不能写成内联脚本
+        self.assertIn("multiple", page)
+        self.assertIn(f"src='{cab.SHELF_JS_PATH}'", page)
+        self.assertNotIn("<script>", page)
+        self.assertIn("xhr.upload.onprogress", cab.SHELF_JS)
+        self.assertIn("书架里已经有", cab.SHELF_JS)
+
+    def test_upload_time_is_month_day_clock(self) -> None:
+        path = self.root / "a.txt"
+        path.write_text("x", encoding="utf-8")
+        stamp = datetime(2026, 10, 2, 20, 11).timestamp()
+        os.utime(path, (stamp, stamp))
+        self.assertEqual(cab.upload_time(path), "10月2日 20:11")
 
     def test_child_rejects_dot_and_parent(self) -> None:
         lib = self.root / "spark" / "工作"

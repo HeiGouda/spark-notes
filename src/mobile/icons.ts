@@ -26,6 +26,19 @@ export const ICONS = {
   aa: '<path d="M3 18l5-12 5 12M5 14h6"/><path d="M14 18l3.5-8 3.5 8M15.2 15.5h4.6"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/>',
+  sort: '<path d="M4 7h16M7 12h10M10 17h4"/>',
+  /** 对话页的按钮：历史、更多、在助手中打开、发送、停止；统一用 24 格、1.7 线宽，大小由 Icon 的 size 决定 */
+  menu: '<path d="M4 7h16M4 12h16M4 17h10"/>',
+  more: '<circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+  expand: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
+  up: '<path d="M12 19V6M6 12l6-6 6 6"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/>',
+  /** 阅读页：书签、写想法、夜读 / 浅色 */
+  bookmark: '<path d="M7 3.5h10v17l-5-3.6-5 3.6z"/>',
+  pen: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14 8l2 2"/>',
+  moon: '<path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
+  spark: '<path d="M12 2.5l1.6 6.4L20 10.5l-6.4 1.6L12 18.5l-1.6-6.4L4 10.5l6.4-1.6z"/><path d="M18 15.5l.7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7z"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;

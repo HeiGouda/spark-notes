@@ -253,10 +253,13 @@ md.renderer.rules.task = (tokens, idx) =>
 md.renderer.rules.link_open = renderLinkOpen;
 md.renderer.rules.image = imageRule(md.renderer.rules.image!);
 
+const SPARK_ANNO_LINE = /^[ \t]*<!--\s*spark-anno\s+\S+\s+\S+\s+\S+\s*-->[ \t]*$/gm;
+
 export function renderNote(source: string, opts: RenderOptions): Rendered {
   const { frontMatter, body } = splitFrontMatter(source);
   const env: Env = { opts, headings: [] };
-  const html = md.render(body, env);
+  // 读书笔记里记位置的注释紧跟在引用块后面，不去掉会被当成引用的正文显示出来
+  const html = md.render(body.replace(SPARK_ANNO_LINE, ""), env);
   const tags = [...new Set([...parseMeta(frontMatter).tags, ...inlineTags(body)])];
   return { html, headings: env.headings, tags };
 }

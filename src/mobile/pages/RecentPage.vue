@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Icon from "../Icon.vue";
+import { back } from "../nav";
 import { DOC_TAG, docKind } from "../../lib/doctype";
 import type { IconName } from "../icons";
 import { folderLabel, recentOpened, timeLabel } from "../browse";
@@ -20,8 +21,9 @@ function iconOf(path: string): IconName {
 
 <template>
   <div class="page">
-    <div class="top pad">
-      <h1>最近<small>打开过的 · {{ store.current?.name }}</small></h1>
+    <div class="top">
+      <button class="ib" @click="back()"><Icon name="back" /></button>
+      <h1>最近打开<small>打开过的 · {{ store.current?.name }}</small></h1>
     </div>
     <div class="scroll">
       <button v-for="r in notes" :key="r.node.path" class="row" @click="open(r.node.path)">

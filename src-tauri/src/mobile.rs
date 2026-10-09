@@ -109,12 +109,60 @@ pub fn update_vault(base: &Path, id: &str, input: &VaultInput) -> Result<VaultCo
     Ok(updated)
 }
 
+/// 只在这台手机上删掉、云端还留着的文件和文件夹。同步时当作云端没有它，不再下载。
+/// 放在笔记库目录外面，不会被扫描进文件树
+fn hidden_path(base: &Path, id: &str) -> PathBuf {
+    vaults_dir(base).join(format!("{id}.hidden.json"))
+}
+
+pub fn load_hidden(base: &Path, id: &str) -> Result<Vec<String>, String> {
+    match fs::read_to_string(hidden_path(base, id)) {
+        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("隐藏列表损坏：{e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("读取隐藏列表失败：{e}")),
+    }
+}
+
+pub fn add_hidden(base: &Path, id: &str, rel: &str) -> Result<(), String> {
+    let mut list = load_hidden(base, id)?;
+    if !list.iter().any(|r| r == rel) {
+        list.push(rel.to_string());
+        list.sort();
+    }
+    atomic_write(&hidden_path(base, id), &serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?)
+}
+
+/// `rel` 本身或它所在的文件夹被隐藏了
+pub fn is_hidden(hidden: &[String], rel: &str) -> bool {
+    hidden.iter().any(|h| rel == h || rel.strip_prefix(h.as_str()).is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// 删除手机上的一篇笔记（或一个表格簿、文件夹）。`cloud` 有值时先把云端的移进云端回收站，
+/// 电脑下次同步时也会删除；没有值时只删本地，并记进隐藏列表，以后同步不再下载
+pub fn delete_note(root: &Path, rel: &str, cloud: Option<&dyn Dav>) -> Result<(), String> {
+    let rel = rel.trim().trim_matches('/');
+    if rel.is_empty() || rel.split('/').any(|p| p.is_empty() || p == "." || p == ".." || p.starts_with('.')) {
+        return Err("路径不对".into());
+    }
+    if let Some(dav) = cloud {
+        dav.move_to(rel, &webdav::cloud_trash_path(rel))?;
+    }
+    let path = root.join(rel);
+    if path.is_dir() {
+        fs::remove_dir_all(&path).map_err(|e| format!("删除本地文件失败：{e}"))?;
+    } else if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("删除本地文件失败：{e}"))?;
+    }
+    Ok(())
+}
+
 /// 配置和本地副本一起删除；云端不受影响
 pub fn remove_vault(base: &Path, id: &str) -> Result<(), String> {
     let mut vaults = list_vaults(base)?;
     let root = vault_root(base, id)?;
     vaults.retain(|v| v.id != id);
     save_vaults(base, &vaults)?;
+    let _ = fs::remove_file(hidden_path(base, id));
     if root.exists() {
         fs::remove_dir_all(&root).map_err(|e| format!("删除本地副本失败：{e}"))?;
     }
@@ -132,13 +180,20 @@ pub fn vault_root(base: &Path, id: &str) -> Result<PathBuf, String> {
 /// 只转发读操作的 WebDAV。手机端永远不写服务器，写操作一律报错。
 pub struct ReadOnlyDav<D: Dav> {
     inner: D,
+    /// 只在手机上删掉的文件，列目录时当作云端没有
+    hidden: Vec<String>,
     /// 最近一次列目录时各文件的大小，用来估算下载量
     sizes: RefCell<HashMap<String, u64>>,
 }
 
 impl<D: Dav> ReadOnlyDav<D> {
     pub fn new(inner: D) -> Self {
-        Self { inner, sizes: RefCell::new(HashMap::new()) }
+        Self { inner, hidden: Vec::new(), sizes: RefCell::new(HashMap::new()) }
+    }
+
+    pub fn with_hidden(mut self, hidden: Vec<String>) -> Self {
+        self.hidden = hidden;
+        self
     }
 }
 
@@ -146,7 +201,10 @@ const READ_ONLY: &str = "手机端只读，不会写入云端";
 
 impl<D: Dav> Dav for ReadOnlyDav<D> {
     fn list(&self) -> Result<Vec<RemoteEntry>, String> {
-        let entries = self.inner.list()?;
+        let mut entries = self.inner.list()?;
+        if !self.hidden.is_empty() {
+            entries.retain(|e| !is_hidden(&self.hidden, &e.rel));
+        }
         *self.sizes.borrow_mut() = entries.iter().filter_map(|e| Some((e.rel.clone(), e.size?))).collect();
         Ok(entries)
     }
@@ -342,7 +400,26 @@ pub mod commands {
         let v = find(base, id)?;
         let password = read_secret(&account(id))?.ok_or("没有保存密码，请在「我的」里重新填写")?;
         let dav = UreqDav::new(&v.url, &v.remote_dir, &v.username, &password)?;
-        Ok((vault_root(base, id)?, ReadOnlyDav::new(dav)))
+        Ok((vault_root(base, id)?, ReadOnlyDav::new(dav).with_hidden(load_hidden(base, id)?)))
+    }
+
+    /// 手机上删除笔记。`cloud` 为 true 时云端的也移进回收站，否则只删本机并且以后不再下载
+    #[tauri::command]
+    pub async fn mobile_note_delete(app: AppHandle, id: String, rel: String, cloud: bool) -> Result<(), String> {
+        blocking(move || {
+            let base = base(&app)?;
+            let root = vault_root(&base, &id)?;
+            if cloud {
+                let v = find(&base, &id)?;
+                let password = read_secret(&account(&id))?.ok_or("没有保存密码，请在「我的」里重新填写")?;
+                let dav = UreqDav::new(&v.url, &v.remote_dir, &v.username, &password)?;
+                delete_note(&root, &rel, Some(&dav))
+            } else {
+                delete_note(&root, &rel, None)?;
+                add_hidden(&base, &id, rel.trim().trim_matches('/'))
+            }
+        })
+        .await
     }
 
     #[tauri::command]
@@ -408,6 +485,12 @@ pub mod commands {
         .await
     }
 
+    /// 添加笔记库：连上服务器，列出 `spark/` 里已有的笔记库让用户选，不保存任何东西
+    #[tauri::command]
+    pub async fn mobile_vault_libraries(url: String, username: String, password: String) -> Result<Vec<String>, String> {
+        blocking(move || webdav::list_libraries(url.trim(), username.trim(), &password)).await
+    }
+
     /// 不保存，只测试连接。`id` 有值且 `password` 为空时用已保存的密码
     #[tauri::command]
     pub async fn mobile_vault_test(id: Option<String>, input: VaultInput, password: String) -> Result<webdav::RemoteInfo, String> {
@@ -451,6 +534,22 @@ pub mod commands {
     #[tauri::command]
     pub async fn mobile_network_metered() -> Result<bool, String> {
         blocking(crate::secret_android::network_metered).await
+    }
+
+    #[tauri::command]
+    pub async fn mobile_system_bars(light: bool) -> Result<(), String> {
+        blocking(move || crate::secret_android::set_system_bars(light)).await
+    }
+
+    #[tauri::command]
+    pub async fn mobile_selection_menu(hidden: bool) -> Result<(), String> {
+        blocking(move || crate::secret_android::set_selection_menu(hidden)).await
+    }
+
+    /// 首页连按两次返回时回到桌面（返回键交给前端处理后，系统不会自己退出）
+    #[tauri::command]
+    pub async fn mobile_move_to_back() -> Result<(), String> {
+        blocking(crate::secret_android::move_to_back).await
     }
 }
 
@@ -560,6 +659,45 @@ mod tests {
         assert_eq!(read(tmp.path(), "新的.md"), "新");
         assert!(gone.iter().all(|rel| tmp.path().join(rel).is_file()));
         assert!(no_leftovers(tmp.path()));
+    }
+
+    #[test]
+    fn hidden_matches_file_and_folder_contents_only() {
+        let hidden = vec!["工作/周报.md".to_string(), "旧".to_string()];
+        assert!(is_hidden(&hidden, "工作/周报.md"));
+        assert!(is_hidden(&hidden, "旧/a.md"));
+        assert!(is_hidden(&hidden, "旧"));
+        assert!(!is_hidden(&hidden, "旧的.md"));
+        assert!(!is_hidden(&hidden, "工作/周报.md.bak"));
+    }
+
+    #[test]
+    fn note_deleted_only_on_phone_is_not_downloaded_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cloud = Cloud::new(&[("a.md", "1"), ("书/b.md", "2")]);
+        done(go(tmp.path(), &ReadOnlyDav::new(&cloud), &[]).unwrap());
+        delete_note(tmp.path(), "a.md", None).unwrap();
+        assert!(!tmp.path().join("a.md").exists());
+        let report = done(go(tmp.path(), &ReadOnlyDav::new(&cloud).with_hidden(vec!["a.md".into()]), &[]).unwrap());
+        assert_eq!(report.downloaded, 0);
+        assert!(!tmp.path().join("a.md").exists());
+        assert_eq!(read(tmp.path(), "书/b.md"), "2");
+        // 不隐藏时下一次同步又会下载回来
+        done(go(tmp.path(), &ReadOnlyDav::new(&cloud), &[]).unwrap());
+        assert_eq!(read(tmp.path(), "a.md"), "1");
+    }
+
+    #[test]
+    fn deleting_with_cloud_moves_it_to_cloud_trash_and_rejects_bad_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "1").unwrap();
+        let cloud = Cloud::new(&[("a.md", "1")]);
+        delete_note(tmp.path(), "a.md", Some(&&cloud)).unwrap();
+        assert_eq!(cloud.writes.get(), 1);
+        assert!(!tmp.path().join("a.md").exists());
+        for bad in ["", "../x.md", ".ttnote/config.json", "a//b.md"] {
+            assert!(delete_note(tmp.path(), bad, None).is_err(), "{bad}");
+        }
     }
 
     #[test]

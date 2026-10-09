@@ -1,6 +1,6 @@
 [package]
 name = "spark"
-version = "0.1.0"
+version = "2.1.0"
 description = "Spark"
 authors = ["Spark Notes contributors"]
 license = "MIT"

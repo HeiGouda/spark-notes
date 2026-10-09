@@ -1,0 +1,1036 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>低保真原型：手机端书架、阅读与助手</title>
+<style>
+  :root { --ink: #222; --mid: #777; --line: #999; --soft: #e9e9e9; --bg: #fafafa; --note: #c0392b; --pick: #2f6fd6; --hl: #f6e27a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fff; color: var(--ink); font: 13px/1.6 "Microsoft YaHei", "PingFang SC", sans-serif; }
+  header.page { padding: 24px 32px 8px; border-bottom: 1px dashed var(--line); }
+  header.page h1 { margin: 0 0 4px; font-size: 20px; }
+  header.page p { margin: 0 0 4px; color: var(--mid); }
+  nav.toc { padding: 8px 32px; color: var(--mid); }
+  nav.toc a { color: var(--pick); margin-right: 16px; white-space: nowrap; }
+  section.board { padding: 24px 32px 40px; border-bottom: 1px dashed var(--line); }
+  section.board > h2 { margin: 0 0 4px; font-size: 16px; }
+  section.board > .sub { margin: 0 0 16px; color: var(--mid); }
+  .row { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .row + .row { margin-top: 32px; }
+  .cap { font-size: 12px; color: var(--mid); margin: 6px 0 0; max-width: 280px; }
+
+  /* 线框元素 */
+  .frame { border: 1.5px solid var(--ink); border-radius: 6px; background: #fff; }
+  .hint { color: var(--mid); font-size: 11.5px; }
+  .box { border: 1.2px solid var(--line); border-radius: 4px; padding: 4px 8px; background: #fff; min-height: 26px; }
+  .btn { display: inline-block; border: 1.2px solid var(--ink); border-radius: 12px; padding: 1px 10px; background: #fff; font-size: 12px; white-space: nowrap; }
+  .btn.pri { background: var(--ink); color: #fff; }
+  .btn.dg { color: var(--note); border-color: var(--note); }
+  .muted { color: var(--mid); }
+  .badge { display: inline-block; font-size: 10px; border: 1px solid var(--ink); border-radius: 3px; padding: 0 4px; margin-left: 4px; line-height: 1.4; font-weight: normal; }
+  .flex { display: flex; align-items: center; gap: 6px; }
+  .grow { flex: 1; }
+  .ph { display: inline-block; height: 7px; background: var(--soft); border-radius: 4px; vertical-align: middle; }
+  code { font-family: Consolas, monospace; font-size: 12px; }
+
+  /* 标注 */
+  .n { display: inline-flex; width: 18px; height: 18px; border-radius: 50%; background: var(--note); color: #fff; font-size: 11px; align-items: center; justify-content: center; font-weight: bold; margin: 0 3px; vertical-align: middle; flex: none; line-height: 1; }
+  .notes { width: 380px; }
+  .notes ol { margin: 0; padding-left: 0; list-style: none; }
+  .notes li { margin: 0 0 8px; padding-left: 26px; position: relative; }
+  .notes li .n { position: absolute; left: 0; top: 2px; margin: 0; }
+  .ask { border: 1.5px dashed var(--note); border-radius: 6px; padding: 8px 12px; margin-top: 12px; color: var(--note); }
+  .ask b { color: var(--note); }
+
+  /* 手机 */
+  .phone { width: 280px; height: 560px; border: 1.5px solid var(--ink); border-radius: 24px; padding: 10px 8px 8px; display: flex; flex-direction: column; position: relative; overflow: hidden; background: #fff; }
+  .phone .bar { display: flex; align-items: center; gap: 8px; padding: 4px 6px 8px; border-bottom: 1px solid var(--soft); font-weight: bold; min-height: 34px; }
+  .phone .bar .ic { font-weight: normal; color: var(--ink); width: 20px; text-align: center; }
+  .phone .bar small { display: block; font-weight: normal; color: var(--mid); font-size: 10.5px; line-height: 1.2; }
+  .phone .st { font-size: 11px; color: var(--mid); background: var(--bg); padding: 3px 8px; border-bottom: 1px solid var(--soft); display: flex; gap: 6px; }
+  .phone .st.bad { color: var(--note); }
+  .phone .body { flex: 1; overflow: hidden; position: relative; }
+  .phone .sec { font-size: 11px; color: var(--mid); padding: 8px 8px 3px; display: flex; }
+  .phone .sec a { margin-left: auto; color: var(--pick); }
+  .phone .li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-bottom: 1px solid var(--soft); }
+  .phone .li i { font-style: normal; width: 22px; height: 22px; border-radius: 5px; background: var(--soft); display: grid; place-items: center; font-size: 12px; color: #555; flex: none; }
+  .phone .li .m { flex: 1; min-width: 0; }
+  .phone .li .m div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .phone .li .m .s { font-size: 10.5px; color: var(--mid); }
+  .phone .li .d { color: var(--mid); font-size: 11px; }
+  .phone .tabs { display: flex; border-top: 1.2px solid var(--ink); padding-top: 4px; }
+  .phone .tabs span { flex: 1; text-align: center; font-size: 10.5px; color: var(--mid); line-height: 1.3; }
+  .phone .tabs span b { display: block; font-size: 15px; font-weight: normal; }
+  .phone .tabs span.on { color: var(--ink); font-weight: bold; }
+  .phone .search { margin: 8px; border: 1.2px solid var(--line); border-radius: 16px; padding: 3px 12px; color: var(--mid); display: flex; gap: 6px; }
+  .phone .search.on { border-color: var(--pick); color: var(--ink); }
+  .phone .rec { display: flex; gap: 6px; padding: 0 8px 4px; overflow: hidden; }
+  .phone .rec span { flex: none; width: 84px; border: 1.2px solid var(--line); border-radius: 6px; padding: 4px 6px; font-size: 11px; line-height: 1.35; }
+  .phone .rec span em { display: block; font-style: normal; color: var(--mid); font-size: 10px; }
+  .phone .text { padding: 8px 12px; font-size: 12px; color: #444; line-height: 1.75; }
+  .phone .text p { margin: 0 0 8px; }
+  .phone .text h4 { margin: 0 0 6px; font-size: 13.5px; color: var(--ink); }
+  .phone .text mark { background: var(--hl); padding: 0 1px; }
+  .phone .text u.sel { text-decoration: none; background: #cfe0fb; }
+  .phone .text u.hl { text-decoration: none; border-bottom: 2px solid #e2a400; }
+  .phone .foot { font-size: 10.5px; color: var(--mid); padding: 2px 12px 4px; display: flex; }
+
+  /* 浮层 */
+  .phone .mask { position: absolute; inset: 0; background: rgba(0,0,0,.28); }
+  .phone .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1.5px solid var(--ink); border-radius: 14px 14px 0 0; padding: 4px 0 8px; }
+  .phone .sheet .grab { width: 34px; height: 4px; background: var(--line); border-radius: 2px; margin: 2px auto 6px; }
+  .phone .sheet h5 { margin: 0; padding: 0 10px 6px; font-size: 13px; }
+  .phone .dialog { position: absolute; left: 14px; right: 14px; top: 50%; transform: translateY(-50%); background: #fff; border: 1.5px solid var(--ink); border-radius: 12px; padding: 12px; }
+  .phone .dialog h5 { margin: 0 0 6px; font-size: 13.5px; }
+  .phone .dialog p { margin: 0 0 6px; font-size: 12px; color: #555; }
+  .phone .dialog .acts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+  .seg { display: flex; border: 1.2px solid var(--line); border-radius: 7px; overflow: hidden; margin: 0 10px 8px; font-size: 11px; }
+  .seg span { flex: 1; text-align: center; padding: 2px 0; border-left: 1px solid var(--soft); }
+  .seg span:first-child { border-left: 0; }
+  .seg span.on { background: var(--ink); color: #fff; }
+  .lab { font-size: 10.5px; color: var(--mid); padding: 0 10px 2px; }
+  .chipbar { display: flex; gap: 6px; padding: 6px 8px; }
+  .chipbar span { border: 1.2px solid var(--line); border-radius: 11px; padding: 0 9px; font-size: 11px; color: #555; }
+  .chipbar span.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  /* 书架 */
+  .shelf { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 8px; padding: 6px 10px; }
+  .book .cv { height: 92px; border: 1.2px solid var(--ink); border-radius: 3px; position: relative; background: repeating-linear-gradient(135deg, #fff 0 6px, #f3f3f3 6px 12px); display: grid; place-items: center; font-size: 10.5px; text-align: center; padding: 4px; }
+  .book .cv.gen { background: #f2efe6; font-weight: bold; }
+  .book .cv .st { position: absolute; top: 3px; right: 3px; font-size: 9.5px; border: 1px solid var(--ink); border-radius: 3px; background: #fff; padding: 0 3px; line-height: 1.35; }
+  .book .cv .pb { position: absolute; left: 6px; right: 6px; bottom: 6px; height: 4px; background: #fff; border: 1px solid var(--ink); border-radius: 2px; }
+  .book .cv .pb i { display: block; height: 100%; background: var(--ink); }
+  .book .cv.dim { opacity: .55; }
+  .book .t { font-size: 11px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .book .p { font-size: 10px; color: var(--mid); }
+
+  /* 阅读器 */
+  .rbar { position: absolute; left: 0; right: 0; background: #fff; border: 0 solid var(--ink); z-index: 2; }
+  .rbar.top { top: 0; border-bottom-width: 1.2px; padding: 6px 8px; display: flex; align-items: center; gap: 8px; }
+  .rbar.bot { bottom: 0; border-top-width: 1.2px; padding: 6px 10px 6px; }
+  .slider { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mid); margin: 2px 0 8px; }
+  .slider .tr { flex: 1; height: 4px; background: var(--soft); border-radius: 2px; position: relative; }
+  .slider .tr i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ink); border-radius: 2px; }
+  .slider .tr b { position: absolute; top: -5px; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 1.5px solid var(--ink); margin-left: -7px; }
+  .slider .bub { position: absolute; bottom: 14px; transform: translateX(-50%); background: var(--ink); color: #fff; border-radius: 5px; padding: 2px 7px; white-space: nowrap; font-size: 10.5px; }
+  .ricons { display: flex; justify-content: space-around; font-size: 11px; text-align: center; }
+  .ricons span b { display: block; font-size: 15px; font-weight: normal; }
+  .popmenu { position: absolute; background: var(--ink); color: #fff; border-radius: 7px; display: flex; font-size: 11.5px; z-index: 3; }
+  .popmenu span { padding: 4px 9px; border-left: 1px solid #555; white-space: nowrap; }
+  .popmenu span:first-child { border-left: 0; }
+  .popmenu span.new { outline: 2px solid var(--note); outline-offset: -2px; }
+  .handle { display: inline-block; width: 2px; height: 14px; background: var(--pick); vertical-align: -2px; position: relative; }
+  .handle::after { content: ""; position: absolute; left: -3px; bottom: -6px; width: 8px; height: 8px; border-radius: 50%; background: var(--pick); }
+  .vscroll { position: absolute; right: 2px; top: 6px; bottom: 6px; width: 4px; }
+  .vscroll i { position: absolute; right: 0; width: 4px; height: 70px; border-radius: 2px; background: #999; }
+  .vscroll.drag i { width: 8px; background: var(--ink); }
+  .vbub { position: absolute; right: 16px; background: var(--ink); color: #fff; border-radius: 5px; padding: 2px 8px; font-size: 10.5px; white-space: nowrap; }
+  .toast { position: absolute; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; border-radius: 12px; padding: 2px 12px; font-size: 11px; white-space: nowrap; z-index: 4; }
+
+  /* 对话 */
+  .msg { margin: 8px 10px; font-size: 12px; line-height: 1.6; }
+  .msg.me { margin-left: 50px; background: var(--soft); border-radius: 10px 10px 2px 10px; padding: 5px 9px; }
+  .msg.ai { color: #333; }
+  .msg .ops { color: var(--mid); font-size: 10.5px; margin-top: 2px; }
+  .msg .q { border-left: 3px solid var(--line); padding-left: 6px; color: #555; margin-bottom: 3px; }
+  .composer { border-top: 1.2px solid var(--ink); padding: 6px 8px 4px; }
+  .composer .in { border: 1.2px solid var(--line); border-radius: 10px; padding: 4px 8px; min-height: 34px; font-size: 12px; color: var(--mid); }
+  .composer .in .q { border-left: 3px solid var(--line); padding-left: 6px; color: #555; margin-bottom: 2px; }
+  .composer .ctl { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-bottom: 4px; }
+  .composer .in { display: flex; align-items: flex-end; gap: 6px; padding-right: 4px; }
+  .composer .in .tx { flex: 1; min-width: 0; align-self: center; }
+  .composer .send { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: #fff; display: grid; place-items: center; font-size: 13px; margin-bottom: 1px; }
+  .composer .send.off { background: var(--soft); color: var(--mid); }
+  .composer .use { font-size: 10px; color: var(--mid); margin-top: 3px; }
+  .composer .use i { display: inline-block; width: 60px; height: 4px; background: var(--soft); vertical-align: middle; position: relative; border-radius: 2px; }
+  .composer .use i::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 12%; background: var(--ink); border-radius: 2px; }
+
+  /* 我的：分组卡片 */
+  .phone .body.gray { background: #f3f3f3; margin: 0 -8px; padding: 0 8px; }
+  .hero { margin: 10px 2px 6px; background: #fff; border: 1.2px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; gap: 10px; align-items: center; }
+  .hero .logo { width: 40px; height: 40px; border-radius: 10px; background: var(--ink); color: #fff; display: grid; place-items: center; font-weight: bold; font-size: 17px; flex: none; }
+  .hero .s { font-size: 10.5px; color: var(--mid); }
+  .grp-t { font-size: 10.5px; color: var(--mid); padding: 8px 12px 3px; }
+  .grp { margin: 0 2px 4px; background: #fff; border: 1.2px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .grp .li:last-child { border-bottom: 0; }
+  .grp .li .v { margin-left: auto; color: var(--mid); font-size: 11px; white-space: nowrap; }
+  .grp .li.link { color: var(--pick); }
+  .grp .li.dgr { color: var(--note); justify-content: center; }
+  .grp .fld { padding: 7px 10px; }
+  .ghint { font-size: 10.5px; color: var(--mid); padding: 2px 12px 4px; }
+
+  /* 表单 */
+  .fld { padding: 0 10px 7px; }
+  .fld label { display: block; font-size: 10.5px; color: var(--mid); }
+  .fld .box { font-size: 12px; min-height: 24px; padding: 2px 8px; }
+
+  /* 浏览器（笔记柜） */
+  .web { width: 760px; overflow: hidden; }
+  .web .url { border-bottom: 1.2px solid var(--ink); padding: 4px 10px; background: var(--bg); color: var(--mid); font-size: 12px; }
+  .web .wrap { display: flex; height: 330px; }
+  .web .nav { width: 190px; border-right: 1.2px solid var(--ink); background: var(--bg); padding: 8px 6px; }
+  .web .nav div { padding: 4px 8px; border-radius: 4px; line-height: 1.35; }
+  .web .nav div small { display: block; color: var(--mid); font-size: 11px; }
+  .web .nav div.on { background: var(--soft); font-weight: bold; }
+  .web .nav div.new { outline: 2px solid var(--note); outline-offset: -2px; }
+  .web .main { flex: 1; padding: 12px 16px; }
+  .web table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .web th, .web td { text-align: left; border-bottom: 1px solid var(--soft); padding: 5px 4px; }
+  .web th { color: var(--mid); font-weight: normal; }
+
+  pre.tree { margin: 0; padding: 12px 16px; font: 12px/1.7 Consolas, "Microsoft YaHei", monospace; background: var(--bg); white-space: pre-wrap; }
+  pre.tree em { color: var(--mid); font-style: normal; }
+</style>
+</head>
+<body>
+<header class="page">
+  <h1>低保真原型：手机端书架、电子书阅读、读书笔记与助手</h1>
+  <p>只表达布局、内容和交互，不代表最终配色和尺寸；最终样式沿用现有安卓版界面（<code>src/mobile/mobile.css</code>）。红色编号对应右侧说明，<b style="color:var(--note)">红色虚线框是需要你确认的地方</b>。</p>
+  <p>范围：只改安卓端。手机只能写“读书数据”（书、读书笔记、书签、进度），普通笔记、思维导图、流程图仍然只读。桌面这一期不能看书。</p>
+</header>
+<nav class="toc">
+  <a href="#tabs">1. 底部标签与文件页</a>
+  <a href="#note">2. 笔记阅读页</a>
+  <a href="#shelf">3. 书架</a>
+  <a href="#reader">4. 电子书阅读</a>
+  <a href="#anno">5. 划线、想法、书签</a>
+  <a href="#ai">6. 助手与 AI 弹窗</a>
+  <a href="#me">7. 我的</a>
+  <a href="#sync">8. 同步状态</a>
+  <a href="#cabinet">9. 笔记柜书架</a>
+  <a href="#disk">10. 云端文件结构</a>
+</nav>
+
+<!-- ======================= 1. 底部标签与文件页 ======================= -->
+<section class="board" id="tabs">
+  <h2>1. 底部标签与文件页（“最近”和“搜索”并入文件页）</h2>
+  <p class="sub">底部标签从“文件 / 最近 / 搜索 / 我的”改为“文件 / 书架 / 助手 / 我的”。</p>
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="bar"><span>工作 ▾</span><span class="grow"></span><span class="ic">🕘</span><span class="n">2</span></div>
+        <div class="st"><span>上次同步 今天 09:12</span><span class="grow"></span><span class="badge">只读</span></div>
+        <div class="body">
+          <div class="search">⌕ 搜索 工作 <span class="n" style="margin-left:auto">1</span></div>
+          <div class="sec">收藏</div>
+          <div class="li"><i>≡</i><div class="m"><div>WebDAV 设计</div><div class="s">工作 · 9月28日</div></div><span class="d">★</span></div>
+          <div class="sec">全部</div>
+          <div class="li"><i>▸</i><div class="m"><div>读书笔记</div><div class="s">3 项</div></div><span class="d">›</span></div>
+          <div class="li"><i>▸</i><div class="m"><div>项目</div><div class="s">12 项</div></div><span class="d">›</span></div>
+          <div class="li"><i>▦</i><div class="m"><div>周报<span class="badge">4 张表</span></div><div class="s">今天 08:40</div></div></div>
+          <div class="li"><i>≡</i><div class="m"><div>收件箱</div><div class="s">昨天 21:15</div></div></div>
+        </div>
+        <div class="tabs"><span class="on"><b>▤</b>文件</span><span><b>▥</b>书架</span><span><b>✦</b>助手</span><span><b>☺</b>我的</span><span class="n" style="position:absolute;right:6px;bottom:30px">3</span></div>
+      </div>
+      <p class="cap">图 1-a：文件页（库的根目录）</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar" style="border:0;padding-bottom:0"></div>
+        <div class="search on" style="margin-top:-28px">⌕ 同步冲突<span style="border-left:1.5px solid var(--ink);height:14px;align-self:center"></span><span style="margin-left:auto">✕</span><span class="muted" style="margin-left:8px">取消</span></div>
+        <div class="body">
+          <div class="sec">找到 3 条</div>
+          <div class="li"><i>≡</i><div class="m"><div><span class="muted">周报 › </span>本周</div><div class="s">…修复 WebDAV <mark>同步冲突</mark>提示…</div><div class="s">工作 / 周报</div></div></div>
+          <div class="li"><i>≡</i><div class="m"><div>WebDAV 设计</div><div class="s">…<mark>同步冲突</mark>的处理规则…</div><div class="s">工作</div></div></div>
+          <div class="li"><i>≡</i><div class="m"><div>人类简史</div><div class="s">…想法：<mark>同步冲突</mark>…</div><div class="s">读书笔记 / 人类简史</div></div></div>
+        </div>
+        <div class="tabs"><span class="on"><b>▤</b>文件</span><span><b>▥</b>书架</span><span><b>✦</b>助手</span><span><b>☺</b>我的</span></div>
+      </div>
+      <p class="cap">图 1-b：点搜索框后进入搜索状态，结果替换下方内容</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">最近打开<small>打开过的 · 工作</small></span></div>
+        <div class="body">
+          <div class="li"><i>▦</i><div class="m"><div>周报<span class="badge">表格簿</span></div><div class="s">工作 · 今天 08:40</div></div></div>
+          <div class="li"><i>≡</i><div class="m"><div>人类简史</div><div class="s">读书笔记 / 人类简史 · 昨天 22:10</div></div></div>
+          <div class="li"><i>⇢</i><div class="m"><div>上线流程<span class="badge">流程图</span></div><div class="s">工作 · 9月25日</div></div></div>
+          <div class="li"><i>≡</i><div class="m"><div>WebDAV 设计</div><div class="s">工作 · 9月24日</div></div></div>
+        </div>
+      </div>
+      <p class="cap">图 1-c：点右上角“🕘”进入最近打开列表（就是现在“最近”页的内容）</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>搜索框固定在库根目录的文件页顶部，占位文字“搜索 库名”。点它进入搜索状态（图 1-b）：顶部只剩输入框和“取消”，库切换、“🕘”、收藏、目录都收起。搜索规则、结果样式和现在的搜索页完全一样（标题和正文，支持 <code>#标签</code>，最多 50 条）。“取消”或返回键回到图 1-a 并清空关键词。</li>
+        <li><span class="n">2</span>右上角“🕘”最近打开：点击进入二级页面（图 1-c），内容和现在的“最近”页一样，有返回按钮。文件页本身不显示最近打开的内容。</li>
+        <li><span class="n">3</span>底部标签：文件、书架、助手、我的。原来的“最近”“搜索”两个标签去掉。</li>
+        <li>进入子文件夹后（顶部是“‹ 文件夹名”），不显示搜索框和“🕘”，和现在的子文件夹页一样。</li>
+        <li>收藏、目录、下拉刷新、同步状态行都不变。</li>
+      </ol>
+      <div class="ask"><b>待确认 B：</b>搜索只放在库的根目录。在子文件夹里不显示搜索框，要搜索时先返回根目录。可以吗？我的建议：可以，搜索本来就是搜整个库。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 2. 笔记阅读页 ======================= -->
+<section class="board" id="note">
+  <h2>2. 笔记阅读页：右侧滚动条、记住位置、AI 按钮</h2>
+  <p class="sub">普通笔记的阅读页，在现有页面基础上只加这三样。</p>
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">WebDAV 设计</span><span class="ic">✦<span class="n" style="position:absolute;margin:-8px 0 0 -2px">3</span></span><span class="ic">☰</span><span class="ic">Aa</span></div>
+        <div class="body">
+          <div class="text">
+            <p class="hint">工作 · 9月28日 <span class="badge">#同步</span></p>
+            <h4>同步机制</h4>
+            <p>本地记录上次同步时各文件的状态 <span class="ph" style="width:120px"></span></p>
+            <p><span class="ph" style="width:220px"></span> <span class="ph" style="width:160px"></span></p>
+            <p><span class="ph" style="width:200px"></span> <span class="ph" style="width:90px"></span></p>
+            <h4>防丢数据</h4>
+            <p><span class="ph" style="width:230px"></span> <span class="ph" style="width:150px"></span></p>
+            <p><span class="ph" style="width:180px"></span></p>
+            <p><span class="ph" style="width:220px"></span> <span class="ph" style="width:120px"></span></p>
+          </div>
+          <div class="vscroll"><i style="top:90px"></i></div>
+          <span class="n" style="position:absolute;right:12px;top:110px">1</span>
+        </div>
+      </div>
+      <p class="cap">图 2-a：滚动时右侧出现滚动条</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">WebDAV 设计</span><span class="ic">✦</span><span class="ic">☰</span><span class="ic">Aa</span></div>
+        <div class="body">
+          <div class="text">
+            <h4>云端回收文件夹</h4>
+            <p><span class="ph" style="width:230px"></span> <span class="ph" style="width:150px"></span></p>
+            <p><span class="ph" style="width:200px"></span> <span class="ph" style="width:90px"></span></p>
+            <p><span class="ph" style="width:220px"></span></p>
+            <h4>所有失败都明确提示</h4>
+            <p><span class="ph" style="width:180px"></span> <span class="ph" style="width:150px"></span></p>
+          </div>
+          <div class="vscroll drag"><i style="top:300px"></i></div>
+          <div class="vbub" style="top:310px">所有失败都明确提示 · 68%</div>
+          <span class="n" style="position:absolute;right:30px;top:340px">2</span>
+          <div class="toast" style="top:6px">已回到上次看到的位置 <span class="n">4</span></div>
+        </div>
+      </div>
+      <p class="cap">图 2-b：按住滚动条拖动</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>滚动条在正文区右边缘，细条，长度按“屏幕高度 ÷ 全文高度”算，最短 40px。开始滚动时出现，停止滚动 1.5 秒后淡出。笔记短到不需要滚动时不显示。</li>
+        <li><span class="n">2</span>按住滚动条（触摸区域比看到的细条宽，约 24px）可以上下拖动，拖动时变粗，左边气泡显示当前所在的标题和百分比；松手停在那里。点击滚动条轨道的空白处不跳转，避免误触。</li>
+        <li><span class="n">3</span>顶部新增 AI 按钮“✦”，放在大纲左边。点击弹出 AI 弹窗（见第 6 部分），不附带这篇笔记的任何内容。</li>
+        <li><span class="n">4</span>记住位置：退出阅读页、切到后台时记下滚动位置，只存在手机本地，不同步。下次打开同一篇时回到那里，并短暂提示“已回到上次看到的位置”。从双链跳到某个标题时，按标题定位，不回到上次位置。笔记内容被同步改过后，仍按原来的百分比回到大致位置。</li>
+      </ol>
+      <div class="ask"><b>待确认 C：</b>滚动条停止滚动后淡出（上图），还是一直显示？我的建议：淡出，跟安卓系统和主流阅读应用一致。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 3. 书架 ======================= -->
+<section class="board" id="shelf">
+  <h2>3. 书架</h2>
+  <p class="sub">书架只连一个云端目录（默认 <code>spark-books</code>），用“读书笔记库”的 WebDAV 地址和账号。<b>书架页只显示手机里的书</b>（导入的 + 从云端下载过的）；云端的书点右上角“云端”查看。</p>
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="bar"><span>书架</span><span class="grow"></span><span class="btn" style="font-weight:normal">☁ 云端</span><span class="n" style="margin:0 0 0 -6px">2</span><span class="ic">⇅<span class="n" style="position:absolute;margin:-8px 0 0 -2px">3</span></span><span class="ic">＋<span class="n" style="position:absolute;margin:-8px 0 0 -2px">4</span></span></div>
+        <div class="body">
+          <div class="shelf">
+            <div class="book"><div class="cv">封面<span class="pb"><i style="width:23%"></i></span></div><div class="t">人类简史</div><div class="p">读到 23%</div></div>
+            <div class="book"><div class="cv">封面<span class="st">本地</span></div><div class="t">三体</div><div class="p">未读</div></div>
+            <div class="book"><div class="cv gen">平凡的世界<span class="pb"><i style="width:61%"></i></span></div><div class="t">平凡的世界</div><div class="p">读到 61% · TXT</div></div>
+            <div class="book"><div class="cv">封面<span class="pb"><i style="width:40%;background:var(--pick)"></i></span></div><div class="t">枪炮、病菌与钢铁</div><div class="p">下载中 40%</div></div>
+            <div class="book"><div class="cv">封面<span class="st">上传中</span></div><div class="t">思考，快与慢</div><div class="p">上传中…</div></div>
+            <span class="n" style="position:absolute;left:96px;top:6px">1</span>
+          </div>
+        </div>
+        <div class="tabs"><span><b>▤</b>文件</span><span class="on"><b>▥</b>书架</span><span><b>✦</b>助手</span><span><b>☺</b>我的</span></div>
+      </div>
+      <p class="cap">图 3-a：书架（只有手机里的书，封面网格，每行 3 本）</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">云端书架<small>spark-books · 9 本 · 412MB</small></span></div>
+        <div class="st"><span>已刷新 今天 09:12 · 下拉刷新</span></div>
+        <div class="body">
+          <div class="li"><i>书</i><div class="m"><div>人类简史</div><div class="s">EPUB · 4.2MB · 读到 23%</div></div><span class="d">已在书架</span></div>
+          <div class="li"><i>书</i><div class="m"><div>枪炮、病菌与钢铁</div><div class="s">EPUB · 22MB</div></div><span class="d" style="color:var(--pick)">下载中 40%</span></div>
+          <div class="li"><i>书</i><div class="m"><div>置身事内</div><div class="s">EPUB · 32MB</div></div><span class="btn">下载</span></div>
+          <div class="li"><i>书</i><div class="m"><div>原则</div><div class="s">MOBI · 8MB · 读到 5%</div></div><span class="btn">下载</span></div>
+          <div class="li"><i>书</i><div class="m"><div>平凡的世界</div><div class="s">TXT · 3.1MB · 读到 61%</div></div><span class="d">已在书架</span></div>
+          <div class="li"><i>书</i><div class="m"><div>思考，快与慢</div><div class="s">EPUB · 6MB</div></div><span class="d">上传中…</span></div>
+          <div class="li" style="color:var(--mid)"><i>书</i><div class="m"><div>深入理解计算机系统</div><div class="s">PDF · 38MB</div></div><span class="d">后续支持</span></div>
+          <span class="n" style="position:absolute;right:60px;top:110px">6</span>
+        </div>
+      </div>
+      <p class="cap">图 3-f：点“☁ 云端”进入云端书架</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span>书架</span><span class="grow"></span><span class="btn" style="font-weight:normal">☁ 云端</span><span class="ic">⇅</span><span class="ic">＋</span></div>
+        <div class="body">
+          <div class="shelf">
+            <div class="book"><div class="cv">封面</div><div class="t">人类简史</div></div>
+            <div class="book"><div class="cv">封面</div><div class="t">三体</div></div>
+            <div class="book"><div class="cv gen">平凡的世界</div><div class="t">平凡的世界</div></div>
+          </div>
+        </div>
+        <div class="mask"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="li" style="border:0"><i>书</i><div class="m"><div><b>人类简史</b></div><div class="s">尤瓦尔·赫拉利 · EPUB · 4.2MB · 已上传</div></div></div>
+          <div class="li">移除下载<span class="d grow" style="text-align:right">从书架拿掉，云端还在</span></div>
+          <div class="li" style="color:var(--note)">从云端删除</div>
+          <div class="li">读书笔记<span class="d grow" style="text-align:right">打开 读书笔记/人类简史</span></div>
+          <div class="li" style="border:0;justify-content:center;color:var(--mid)">取消</div>
+        </div>
+        <span class="n" style="position:absolute;right:10px;top:250px">5</span>
+      </div>
+      <p class="cap">图 3-b：长按一本书</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>书架页只有手机里的书，每本一个格子：封面、书名、阅读进度。封面取电子书自带的；TXT 和没有封面的书，用书名生成一张纯色封面。右上角角标：<b>本地</b>＝还没上传到云端；<b>上传中</b>。已上传的书不显示角标。底部细条是阅读进度；在云端书架里点了下载的书会立刻出现在这里，细条变成下载进度。点一本书直接打开。</li>
+        <li><span class="n">2</span>“☁ 云端”：进入云端书架（图 3-f）。读书笔记库默认就是当前笔记库；只有一个笔记库都还没有时按钮不可点，点了提示先选库（图 3-e）。</li>
+        <li><span class="n">3</span>排序菜单：最近阅读（默认）/ 导入时间 / 书名。书名排序和文件树一样，数字按数值比。</li>
+        <li><span class="n">4</span>“＋”导入：打开系统文件选择器，可以多选，只接受 EPUB、TXT、MOBI、AZW3（第二批加 PDF）。文件复制进应用自己的目录，状态是“本地”。导入后不会自动上传，需要在长按菜单里点“上传到云端”。</li>
+        <li><span class="n">5</span>书架页的长按菜单（图 3-b）：顶部是书籍信息。
+          <br>· 还没上传的书：上传到云端、删除（确认后删掉手机里的文件）；
+          <br>· 已上传的书：移除下载（从书架拿掉，只删手机里的副本，云端书架里还能再下载）、从云端删除。
+          <br>“从云端删除”要确认，书移进云端书架的回收站（<code>spark-books/.spark-trash/</code>），在笔记柜里能恢复，手机里的副本一并移除。所有删除都<b>保留</b>读书笔记和阅读进度。“读书笔记”跳到文件页里这本书的笔记文件夹，还没有笔记时不显示这一项。</li>
+        <li><span class="n">6</span>云端书架（图 3-f）：列出 <code>spark-books/</code> 里的所有书，按书名排序，每行是格式、大小和云端记录的阅读进度。右侧：已经在书架上的显示“已在书架”，点它直接打开；没下载的是“下载”按钮，下载过程中显示进度，下载完加入书架（不自动打开）；第二批才支持的格式显示“后续支持”，不能下载。长按一行：下载、从云端删除。下拉刷新重新读一次云端目录，别的工具（比如笔记柜、电脑上映射的 WebDAV 盘）放进去的书刷新后也会出现，子文件夹里的书摊平显示。</li>
+      </ol>
+      <div class="ask"><b>待确认 D：</b>导入后要不要自动上传到云端？我按你上一轮的意思画成了“导入后状态是本地，手动点上传”。如果你希望导入后自动上传，这里改成导入即上传，没网时排队。</div>
+      <div class="ask"><b>待确认 M：</b>书架只显示手机里的书之后，原来的“全部 / 已下载 / 仅本地”筛选栏就没有用了，我把它去掉了，还没上传的书靠“本地”角标区分。可以吗？</div>
+      <div class="ask"><b>待确认 N：</b>在云端书架里点“下载”，下载完是只加入书架（上图的写法），还是加入后直接打开？我的建议：只加入书架，这样可以一次连点好几本下载。</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">云端书架<small>spark-books · 9 本 · 412MB</small></span></div>
+        <div class="body">
+          <div class="li"><i>书</i><div class="m"><div>人类简史</div><div class="s">EPUB · 4.2MB · 读到 23%</div></div><span class="d">已在书架</span></div>
+          <div class="li"><i>书</i><div class="m"><div>置身事内</div><div class="s">EPUB · 32MB</div></div><span class="btn">下载</span></div>
+        </div>
+        <div class="mask"></div>
+        <div class="dialog">
+          <h5>下载《置身事内》？</h5>
+          <p>当前在使用移动数据，这本书 32MB。</p>
+          <div class="acts"><span class="btn">取消</span><span class="btn pri">下载</span></div>
+        </div>
+      </div>
+      <p class="cap">图 3-c：按流量计费的网络下，超过 20MB 先确认；Wi‑Fi 下直接下载</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span>书架</span><span class="grow"></span><span class="btn" style="font-weight:normal">☁ 云端</span><span class="ic">⇅</span><span class="ic">＋</span></div>
+        <div class="body"><div class="shelf">
+          <div class="book"><div class="cv">封面</div><div class="t">人类简史</div></div>
+        </div></div>
+        <div class="mask"></div>
+        <div class="dialog">
+          <h5>云端已有《三体.epub》</h5>
+          <p>云端书架里已经有同名文件（18MB，9月30日上传）。</p>
+          <div class="acts"><span class="btn">取消</span><span class="btn">另存为“三体 (2)”</span><span class="btn pri">覆盖</span></div>
+        </div>
+      </div>
+      <p class="cap">图 3-d：上传时云端有同名文件。覆盖前云端旧文件先移进书架回收站</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span>书架</span><span class="grow"></span><span class="btn" style="font-weight:normal;opacity:.4">☁ 云端</span><span class="ic">⇅</span><span class="ic">＋</span></div>
+        <div class="body">
+          <div class="shelf">
+            <div class="book"><div class="cv">封面<span class="st">本地</span></div><div class="t">三体</div></div>
+          </div>
+          <div style="margin:20px 14px;border:1.2px solid var(--line);border-radius:8px;padding:10px;font-size:12px;color:#555">
+            还没有选择读书笔记库。选好之后，可以连接云端书架、上传书，以及记录划线、想法和书签。
+            <div style="margin-top:8px"><span class="btn pri">选择读书笔记库</span></div>
+          </div>
+        </div>
+        <div class="tabs"><span><b>▤</b>文件</span><span class="on"><b>▥</b>书架</span><span><b>✦</b>助手</span><span><b>☺</b>我的</span></div>
+      </div>
+      <p class="cap">图 3-e：还没选读书笔记库。可以导入、阅读本地书；“云端”变灰，上传、划线、想法、书签都会提示先选库</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 4. 电子书阅读 ======================= -->
+<section class="board" id="reader">
+  <h2>4. 电子书阅读（第一批：EPUB、TXT、MOBI、AZW3）</h2>
+  <p class="sub">排版引擎用 foliate-js。默认左右翻页，阅读设置里可以切到上下滚动。</p>
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="body">
+          <div class="text" style="padding-top:14px">
+            <h4>第三章　亚当和夏娃的一天</h4>
+            <p>想要了解我们的天性、历史和心理，就必须回到狩猎采集者的时代。<span class="ph" style="width:80px"></span></p>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:200px"></span> <span class="ph" style="width:220px"></span></p>
+            <p><span class="ph" style="width:230px"></span> <u class="hl">我们的语言发展成为一种八卦的工具</u>，<span class="ph" style="width:120px"></span></p>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:180px"></span> <span class="ph" style="width:220px"></span></p>
+            <p><span class="ph" style="width:200px"></span> <span class="ph" style="width:240px"></span></p>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:150px"></span></p>
+          </div>
+          <span class="n" style="position:absolute;left:8px;top:240px">1</span>
+          <span class="n" style="position:absolute;left:125px;top:240px">2</span>
+          <span class="n" style="position:absolute;right:8px;top:240px">1</span>
+          <div style="position:absolute;left:0;top:60px;bottom:30px;width:30%;border:1px dashed var(--line)"></div>
+          <div style="position:absolute;right:0;top:60px;bottom:30px;width:30%;border:1px dashed var(--line)"></div>
+          <div style="position:absolute;right:16px;top:-4px;width:8px;height:22px;background:var(--note);clip-path:polygon(0 0,100% 0,100% 100%,50% 75%,0 100%)" title="书签"></div>
+        </div>
+        <div class="foot"><span>第三章　亚当和夏娃的一天</span><span class="grow"></span><span>23% <span class="n">3</span></span></div>
+      </div>
+      <p class="cap">图 4-a：沉浸阅读。虚线是点击区域（只为说明，界面上看不到）</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="body">
+          <div class="text" style="padding-top:44px;opacity:.5">
+            <h4>第三章　亚当和夏娃的一天</h4>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:200px"></span></p>
+            <p><span class="ph" style="width:230px"></span> <span class="ph" style="width:120px"></span></p>
+          </div>
+          <div class="rbar top"><span>‹</span><span class="grow" style="font-weight:bold">人类简史</span><span>🔖</span><span>✦</span><span>⋯</span><span class="n">4</span></div>
+          <div class="rbar bot">
+            <div class="slider"><span>上一章</span><span class="tr"><i style="width:23%"></i><b style="left:23%"></b><span class="bub" style="left:23%">第三章 · 23%</span></span><span>下一章</span><span class="n">5</span></div>
+            <div class="ricons"><span><b>☰</b>目录</span><span><b>✎</b>笔记</span><span><b>Aa</b>设置</span><span><b>☾</b>夜读</span><span class="n" style="align-self:center">6</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="cap">图 4-b：点中间显示菜单</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>翻页：点屏幕左边约 30% 区域翻到上一页，点右边约 30% 翻到下一页，也可以左右滑动。音量键翻页放到后续版本。</li>
+        <li><span class="n">2</span>点中间区域：显示或隐藏菜单（图 4-b）。长按文字进入选字（第 5 部分）。点已有的划线弹出划线菜单。</li>
+        <li><span class="n">3</span>页脚：当前章节名和全书进度百分比。重排版的书页码不稳定，所以不显示页码。</li>
+        <li><span class="n">4</span>顶部菜单：返回书架、书名、书签开关（当前页已有书签时为实心，右上角露出红色书签角）、AI 按钮“✦”（打开 AI 弹窗，不附带书的内容）、“⋯”里放“书籍信息”“在书内搜索”。</li>
+        <li><span class="n">5</span>进度滑块：拖动时气泡显示章节名和百分比，松手跳过去，并出现“↩ 回到第 X 页”的小按钮，点它回到拖动前的位置（多看、微信读书都有）。两侧“上一章 / 下一章”直接跳章。</li>
+        <li><span class="n">6</span>目录、笔记（本书的划线和想法、书签，见图 5-d）、阅读设置（图 4-d）、夜读一键切换。</li>
+        <li>打开书时回到上次读到的位置（规则见图 4-e）。状态栏和系统导航栏在沉浸阅读时隐藏，菜单出现时一起出现。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="body"><div class="text" style="opacity:.4"><h4>第三章</h4><p><span class="ph" style="width:240px"></span></p></div></div>
+        <div class="mask"></div>
+        <div class="sheet" style="top:70px">
+          <div class="grab"></div>
+          <div class="seg" style="margin-top:2px"><span class="on">目录</span><span>笔记 18</span><span>书签 3</span></div>
+          <div class="li" style="font-size:12px">第一章　认知革命<span class="d grow" style="text-align:right">3%</span></div>
+          <div class="li" style="font-size:12px">第二章　知善恶树<span class="d grow" style="text-align:right">11%</span></div>
+          <div class="li" style="font-size:12px;font-weight:bold">● 第三章　亚当和夏娃的一天<span class="d grow" style="text-align:right">19%</span></div>
+          <div class="li" style="font-size:12px;padding-left:24px">　狩猎采集者的富足社会<span class="d grow" style="text-align:right">22%</span></div>
+          <div class="li" style="font-size:12px">第四章　毁天灭地的人类洪水<span class="d grow" style="text-align:right">27%</span></div>
+          <div class="li" style="font-size:12px">第五章　史上最大骗局<span class="d grow" style="text-align:right">33%</span></div>
+        </div>
+      </div>
+      <p class="cap">图 4-c：目录。当前章节加粗并带圆点，打开时自动滚到当前章节；顶部可切到“笔记”“书签”</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="body"><div class="text" style="opacity:.4"><h4>第三章</h4><p><span class="ph" style="width:240px"></span></p></div></div>
+        <div class="mask"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <h5>阅读设置</h5>
+          <div class="lab">字号</div><div class="seg"><span>A−</span><span class="on">18</span><span>A＋</span></div>
+          <div class="lab">行距</div><div class="seg"><span>紧凑</span><span class="on">标准</span><span>宽松</span></div>
+          <div class="lab">页边距</div><div class="seg"><span>窄</span><span class="on">标准</span><span>宽</span></div>
+          <div class="lab">主题</div><div class="seg"><span class="on">浅色</span><span>纸张</span><span>护眼</span><span>夜读</span><span>纯黑</span></div>
+          <div class="lab">翻页方式 <span class="n">1</span></div><div class="seg"><span class="on">左右翻页</span><span>上下滚动</span></div>
+          <div class="lab">字体 <span class="n">2</span></div><div class="seg"><span class="on">书籍自带</span><span>宋体</span><span>黑体</span></div>
+        </div>
+      </div>
+      <p class="cap">图 4-d：阅读设置（所有书共用一份，存在手机本地）</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="body">
+          <div class="text" style="padding-top:14px">
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:200px"></span></p>
+            <p><span class="ph" style="width:230px"></span> <span class="ph" style="width:120px"></span></p>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:180px"></span></p>
+            <p><span class="ph" style="width:200px"></span></p>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:200px"></span></p>
+            <p><span class="ph" style="width:230px"></span> <span class="ph" style="width:120px"></span></p>
+          </div>
+          <div class="vscroll"><i style="top:120px"></i></div>
+          <div class="toast" style="bottom:10px">已回到上次读到的位置 · 第三章</div>
+        </div>
+        <div class="foot"><span>第三章　亚当和夏娃的一天</span><span class="grow"></span><span>23%</span></div>
+      </div>
+      <p class="cap">图 4-e：上下滚动模式（右侧同样有滚动条）；打开书时回到上次位置</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>翻页方式：左右翻页（默认）或上下滚动。上下滚动时，右侧滚动条的行为和笔记阅读页一样（第 2 部分）；点屏幕中间照样显示菜单。</li>
+        <li><span class="n">2</span>字体：书籍自带 / 宋体 / 黑体，用系统字体，不打包字体文件。</li>
+        <li>主题和现有的阅读设置一样，有五种。</li>
+        <li>阅读进度：翻页后 2 秒、退出阅读页、切到后台时记下当前位置，存到手机本地，并上传到云端书架的 <code>.spark/progress.json</code>（见第 10 部分），换手机、重装后也能接着读。</li>
+      </ol>
+      <div class="ask"><b>待确认 E：</b>打开一本书时，如果云端记录的进度比手机本地的<b>新</b>（比如重装后或换了手机），直接跳到云端的位置，还是先问“在另一台设备上读到第五章 41%，要跳过去吗？”我的建议：只有一台手机时两者没有区别，所以直接用最新的那个位置，再提示“已回到上次读到的位置”。</div>
+      <div class="ask"><b>待确认 F：</b>阅读设置里的“字体”这一行要不要？我的建议：要，中文书换成宋体或黑体差别很大，而且只用系统字体，不增加安装包体积。</div>
+      <div class="ask"><b>待确认 L：</b>电子书的阅读设置和笔记的阅读设置（“我的 → 阅读”）分成两份，还是共用一份？我的建议：分成两份，电子书一般要更大的字号和页边距，改一边不该影响另一边。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 5. 划线、想法、书签 ======================= -->
+<section class="board" id="anno">
+  <h2>5. 划线、想法、书签</h2>
+  <p class="sub">划线和想法写进读书笔记库里的 <code>读书笔记/&lt;书名&gt;/&lt;书名&gt;.md</code>，这份 md 是正本；书签和进度存在云端书架的 JSON 里。</p>
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="body">
+          <div class="text" style="padding-top:14px">
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:200px"></span></p>
+            <p><span class="ph" style="width:200px"></span> <span class="handle"></span><u class="sel">我们的语言发展成为一种八卦的工具</u><span class="handle"></span>，<span class="ph" style="width:80px"></span></p>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:180px"></span></p>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:200px"></span></p>
+          </div>
+          <div class="popmenu" style="left:24px;top:22px"><span>划线</span><span>写想法</span><span>复制</span><span class="new">问 AI</span></div>
+          <span class="n" style="position:absolute;left:4px;top:24px">1</span>
+        </div>
+        <div class="foot"><span>第三章</span><span class="grow"></span><span>23%</span></div>
+      </div>
+      <p class="cap">图 5-a：长按选字，拖两端的蓝色把手调整范围</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="body">
+          <div class="text" style="padding-top:14px">
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:200px"></span></p>
+            <p><span class="ph" style="width:200px"></span> <u class="hl">我们的语言发展成为一种八卦的工具</u>✎，<span class="ph" style="width:80px"></span></p>
+            <p><span class="ph" style="width:240px"></span> <span class="ph" style="width:180px"></span></p>
+          </div>
+          <div class="popmenu" style="left:16px;top:22px"><span>写想法</span><span>复制</span><span>问 AI</span><span>删除划线</span></div>
+          <span class="n" style="position:absolute;left:4px;top:24px">2</span>
+        </div>
+        <div class="mask" style="top:140px"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div style="margin:0 10px 6px;border-left:3px solid var(--line);padding-left:6px;font-size:11.5px;color:#555">我们的语言发展成为一种八卦的工具</div>
+          <div class="box" style="margin:0 10px;min-height:64px;font-size:12px">八卦是大规模协作的基础<span style="border-left:1.5px solid var(--ink)"></span></div>
+          <div class="flex" style="padding:6px 10px 0"><span class="hint">保存到 读书笔记/人类简史</span><span class="grow"></span><span class="btn">取消</span><span class="btn pri">保存</span><span class="n">3</span></div>
+        </div>
+      </div>
+      <p class="cap">图 5-b：点已有划线弹出菜单；“写想法”从底部弹出输入框</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>选字菜单：<b>划线</b>（直接保存，变成下划线）、<b>写想法</b>（先划线，再弹出图 5-b 的输入框）、<b>复制</b>、<b>问 AI</b>（打开 AI 弹窗，把选中的文字以引用的形式填进输入框，用户可以修改或删掉，点发送才发出去，见图 6-d）。</li>
+        <li><span class="n">2</span>点已有划线：写想法（已有想法时是“编辑想法”）、复制、问 AI、删除划线（删除时连想法一起删，要确认）。带想法的划线末尾有一个小“✎”。</li>
+        <li><span class="n">3</span>保存划线或想法：立即写进本地的读书笔记 md，并自动上传（第 8 部分）。第一次在这本书里记笔记时，自动建出 <code>读书笔记/&lt;书名&gt;/</code> 文件夹和 md。</li>
+        <li>划线只有一种颜色，样式是下划线。多种颜色放到后续版本。</li>
+      </ol>
+      <div class="ask"><b>待确认 G：</b>划线样式用<b>下划线</b>（微信读书的做法，上图），还是<b>黄色底色</b>（Apple Books、Kindle 的做法）？我的建议：下划线，夜读主题下也不刺眼。</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="body"><div class="text" style="opacity:.4"><h4>第三章</h4></div></div>
+        <div class="mask"></div>
+        <div class="sheet" style="top:70px">
+          <div class="grab"></div>
+          <div class="seg"><span>目录</span><span class="on">笔记 18</span><span>书签 3</span></div>
+          <div class="sec" style="padding:2px 10px">第一章　认知革命</div>
+          <div class="li" style="display:block;font-size:11.5px"><div style="border-left:3px solid var(--line);padding-left:6px;color:#555">认知革命让智人能够讨论虚构的事物</div><div class="hint">10月8日 21:40</div></div>
+          <div class="sec" style="padding:2px 10px">第三章　亚当和夏娃的一天</div>
+          <div class="li" style="display:block;font-size:11.5px"><div style="border-left:3px solid var(--line);padding-left:6px;color:#555">我们的语言发展成为一种八卦的工具</div><div>八卦是大规模协作的基础</div><div class="hint">今天 09:30</div></div>
+          <div class="li" style="display:block;font-size:11.5px;color:var(--mid)"><div style="border-left:3px solid var(--line);padding-left:6px">狩猎采集者的饮食比农民更多样</div><div class="hint">在书中找不到这段文字 <span class="n">1</span></div></div>
+          <div style="padding:6px 10px;font-size:11px;color:var(--pick)">在文件页打开读书笔记 › <span class="n">2</span></div>
+        </div>
+      </div>
+      <p class="cap">图 5-c：本书的笔记列表，按章节分组，点击跳到书中位置</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="body"><div class="text" style="opacity:.4"><h4>第三章</h4></div></div>
+        <div class="mask"></div>
+        <div class="sheet" style="top:70px">
+          <div class="grab"></div>
+          <div class="seg"><span>目录</span><span>笔记 18</span><span class="on">书签 3</span></div>
+          <div class="li" style="display:block;font-size:11.5px"><div>第一章　认知革命 · 4%</div><div class="hint">“大约在 7 万年前到 3 万年前，智人出现了新的…” · 10月7日</div></div>
+          <div class="li" style="display:block;font-size:11.5px"><div>第三章　亚当和夏娃的一天 · 21%</div><div class="hint">“想要了解我们的天性、历史和心理…” · 昨天</div></div>
+          <div class="li" style="display:block;font-size:11.5px"><div>第七章　记忆过载 · 52%</div><div class="hint">“人类的大脑不是一个良好的存储…” · 今天 <span class="n">3</span></div></div>
+        </div>
+      </div>
+      <p class="cap">图 5-d：书签列表。左滑一条可以删除</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>md 里被手工改过、在书里找不到原位置的条目，照样列出来，变灰并注明“在书中找不到这段文字”，点击没有反应，书里不画线。不会删掉它，也不会报错。</li>
+        <li><span class="n">2</span>“在文件页打开读书笔记”跳到读书笔记库里的 <code>读书笔记/人类简史/人类简史.md</code>，用普通笔记阅读页查看。</li>
+        <li><span class="n">3</span>书签：点顶部“🔖”添加或去掉当前页的书签。列表显示章节、百分比、这一页开头的一句话和时间。书签不进 md（你上一轮选的 B），存在云端书架的 JSON 里。</li>
+        <li>手机和电脑都能改读书笔记 md：手机写之前先读云端最新版本，只把手机这一次的增删合进去，所以电脑上改过的想法文字、删掉的条目都会保留。万一合并不了（比如同一条两边都改了），按现有冲突规则两份都保留，并在同步状态行提示。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 6. 助手 ======================= -->
+<section class="board" id="ai">
+  <h2>6. 助手与 AI 弹窗</h2>
+  <p class="sub">通用对话，不属于任何一本书，也不自动附带任何内容。“助手”标签页和阅读页的弹窗共用同一套会话；会话只存在手机本地，不同步。交互照搬桌面的 AI 对话（需求文档 5.17）。</p>
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">☰<span class="n" style="position:absolute;margin:-8px 0 0 -2px">1</span></span><span class="grow" style="text-align:center">语言与协作</span><span class="ic">✚<span class="n" style="position:absolute;margin:-8px 0 0 -2px">2</span></span></div>
+        <div class="body">
+          <div class="msg me">八卦为什么能促进大规模协作？</div>
+          <div class="msg ai">赫拉利的观点是：八卦让人们知道群体里谁值得信任…<br><span class="ph" style="width:200px"></span><br><span class="ph" style="width:160px"></span>
+            <div class="ops">复制 · 保存为笔记 · 重新生成 · Claude Sonnet 5.5 <span class="n">3</span></div></div>
+        </div>
+        <div class="composer">
+          <div class="ctl"><span class="btn">Claude Sonnet 5.5 ▾</span><span class="n">4</span></div>
+          <div class="in"><span class="tx">输入消息</span><span class="send off">↑</span><span class="n" style="margin:0 -4px 3px 0">5</span></div>
+          <div class="use">上下文 约 1.2K / 200K <i></i> <span class="n">6</span></div>
+        </div>
+        <div class="tabs"><span><b>▤</b>文件</span><span><b>▥</b>书架</span><span class="on"><b>✦</b>助手</span><span><b>☺</b>我的</span></div>
+      </div>
+      <p class="cap">图 6-a：助手页</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">历史对话</span><span class="ic">✚</span></div>
+        <div class="body">
+          <div class="sec">今天</div>
+          <div class="li"><div class="m"><div>语言与协作</div><div class="s">Claude Sonnet 5.5</div></div><span class="d">⋯</span></div>
+          <div class="li"><div class="m"><div>农业革命的代价 <span class="badge">生成中</span></div><div class="s">DeepSeek V4 Pro</div></div><span class="d">⋯</span></div>
+          <div class="sec">昨天</div>
+          <div class="li"><div class="m"><div>帮我解释“想象的共同体”</div><div class="s">Claude Sonnet 5.5</div></div><span class="d">⋯</span></div>
+          <div class="sec">更早</div>
+          <div class="li"><div class="m"><div>WebDAV 和 S3 的区别</div><div class="s">GPT-6.1 Sol</div></div><span class="d">⋯</span></div>
+          <div class="frame" style="position:absolute;right:4px;top:46px;width:80px;font-size:12px"><div style="padding:4px 10px">重命名</div><div style="padding:4px 10px;color:var(--note)">删除</div></div>
+        </div>
+        <div class="tabs"><span><b>▤</b>文件</span><span><b>▥</b>书架</span><span class="on"><b>✦</b>助手</span><span><b>☺</b>我的</span></div>
+      </div>
+      <p class="cap">图 6-b：点“☰”进入历史对话（全屏列表），点“⋯”重命名或删除</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>“☰”打开历史对话（图 6-b）：按“今天 / 昨天 / 更早”分组，最新的在前；正在生成的标“生成中”；“⋯”里是重命名、删除（删除前确认，删除正在生成的会话会停止它）。点一条回到图 6-a 显示这个会话。</li>
+        <li><span class="n">2</span>“✚”新对话：空白上下文。新会话用第一条消息自动命名。</li>
+        <li><span class="n">3</span>每条回复下方：复制、<b>保存为笔记</b>、最后一条有“重新生成”，并显示所用的模型。桌面上的“插入到笔记”在手机上没有（手机不能编辑普通笔记）。</li>
+        <li><span class="n">4</span>模型切换在输入框上方，点击从底部弹出模型列表（名称、服务商、上下文长度），只影响当前会话。</li>
+        <li><span class="n">5</span>发送按钮在输入框内部最右边：输入框为空时是灰色不可点，有内容时变黑；生成中变成“■”停止。输入框随内容变高，最多 5 行，按钮始终贴在右下角。回车换行，只能点按钮发送（手机键盘上回车发送容易误触）。</li>
+        <li><span class="n">6</span>输入框下方是上下文用量，规则和桌面一样。手机上暂不支持图片和文件附件。阅读页的 AI 弹窗用同一个输入区。</li>
+        <li>切到别的会话或离开助手页不停止生成；回来能看到已生成的内容。</li>
+      </ol>
+      <div class="ask"><b>待确认 O：</b>手机键盘上的回车键是换行（上面的写法，只能点按钮发送），还是像桌面一样回车直接发送？我的建议：换行，手机上回车发送很容易误发。</div>
+      <div class="ask"><b>待确认 H：</b>“保存为笔记”要不要？手机不能写普通笔记，所以它只能存进读书笔记库的某个文件夹（比如 <code>读书笔记/AI 对话/</code>），这又扩大了“手机能写什么”的范围。我的建议：第一期不做，只保留“复制”。</div>
+      <div class="ask"><b>待确认 I：</b>手机上的消息要不要支持附图片（比如拍书页提问）？我的建议：第一期不做，放进后续版本。</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="body"><div class="text" style="opacity:.4;padding-top:14px"><h4>第三章　亚当和夏娃的一天</h4><p><span class="ph" style="width:240px"></span></p></div></div>
+        <div class="mask"></div>
+        <div class="sheet" style="top:70px;display:flex;flex-direction:column">
+          <div class="grab"></div>
+          <div class="flex" style="padding:0 10px 6px;border-bottom:1px solid var(--soft)"><b class="grow">语言与协作 ▾</b><span>☰</span><span>✚</span><span>⤢</span><span>✕</span><span class="n">1</span></div>
+          <div style="flex:1;overflow:hidden">
+            <div class="msg me">八卦为什么能促进大规模协作？</div>
+            <div class="msg ai">赫拉利的观点是：八卦让人们知道群体里谁值得信任…<br><span class="ph" style="width:180px"></span><div class="ops">复制 · 重新生成 · Claude Sonnet 5.5</div></div>
+          </div>
+          <div class="composer" style="border-top:1px solid var(--soft)">
+            <div class="ctl"><span class="btn">Claude Sonnet 5.5 ▾</span></div>
+            <div class="in"><span class="tx">输入消息</span><span class="send off">↑</span></div>
+            <div class="use">上下文 约 1.2K / 200K <i></i></div>
+          </div>
+        </div>
+      </div>
+      <p class="cap">图 6-c：阅读页点“✦”，从底部弹出，约占屏幕 85%</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="body"><div class="text" style="opacity:.4;padding-top:14px"><h4>第三章</h4></div></div>
+        <div class="mask"></div>
+        <div class="sheet" style="top:70px;display:flex;flex-direction:column">
+          <div class="grab"></div>
+          <div class="flex" style="padding:0 10px 6px;border-bottom:1px solid var(--soft)"><b class="grow">新对话</b><span>☰</span><span>✚</span><span>⤢</span><span>✕</span></div>
+          <div style="flex:1;display:grid;place-items:center;color:var(--mid);font-size:12px">有什么想问的？</div>
+          <div class="composer" style="border-top:1px solid var(--soft)">
+            <div class="ctl"><span class="btn">Claude Sonnet 5.5 ▾</span></div>
+            <div class="in" style="color:var(--ink)"><span class="tx"><div class="q">我们的语言发展成为一种八卦的工具</div>这句话怎么理解？<span style="border-left:1.5px solid var(--ink)"></span></span><span class="send">↑</span><span class="n" style="margin:0 -4px 3px 0">2</span></div>
+            <div class="use">上下文 约 0.1K / 200K <i></i></div>
+          </div>
+        </div>
+      </div>
+      <p class="cap">图 6-d：选字后点“问 AI”：新建一个对话，选中的文字作为引用填进输入框</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="body"><div class="text" style="opacity:.4;padding-top:14px"><h4>第三章</h4></div></div>
+        <div class="mask"></div>
+        <div class="dialog">
+          <h5>尚未配置 AI</h5>
+          <p>先在“我的 → AI 模型”里添加一个模型，填写接口地址和 API Key。</p>
+          <div class="acts"><span class="btn">取消</span><span class="btn pri">去添加模型</span></div>
+        </div>
+      </div>
+      <p class="cap">图 6-e：还没添加模型时，点任何 AI 入口（包括“助手”标签）都先这样提示</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>弹窗顶部：会话标题（点击展开最近 5 个会话快速切换）、“☰”历史对话（在弹窗内切换成图 6-b 的列表）、“✚”新对话、“⤢”在助手中打开（关掉弹窗、切到助手标签，停在同一个会话）、“✕”关闭。下拉面板或点遮罩也能关闭。关闭不停止正在生成的回复。</li>
+        <li><span class="n">2</span>“问 AI”：<b>新建</b>一个对话，选中的文字以引用块的形式填进输入框，光标在引用下面。点发送前用户能修改或删掉引用。</li>
+        <li>弹窗每次打开时停在上次在弹窗里看的会话；第一次打开时是新对话。</li>
+      </ol>
+      <div class="ask"><b>待确认 J：</b>“问 AI”是新建对话（上图），还是把引用填进当前正在看的那个对话？我的建议：新建，每个问题上下文干净，也不会把不相关的历史一起发出去。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 7. 我的 ======================= -->
+<section class="board" id="me">
+  <h2>7. 我的</h2>
+  <p class="sub">重新整理：一级页面只放分组好的入口，每行左边图标、中间名称、右边当前值和“›”；具体设置都收进二级页面。分组用白色圆角卡片，衬在浅灰底上。</p>
+  <div class="row">
+    <div>
+      <div class="phone">
+        <div class="bar"><span>我的</span></div>
+        <div class="body gray">
+          <div class="hero"><span class="logo">S</span><div><b>Spark</b> <span class="hint">0.2.0</span><div class="s">当前笔记库 工作 · 上次同步 今天 09:12</div></div><span class="n" style="margin-left:auto">1</span></div>
+          <div class="grp-t">笔记库 <span class="n">2</span></div>
+          <div class="grp">
+            <div class="li"><i>☁</i><div class="m"><div>工作<span class="badge">当前</span></div><div class="s">spark/工作 · 1,284 篇</div></div><span class="v">›</span></div>
+            <div class="li"><i>☁</i><div class="m"><div>生活</div><div class="s">spark/生活 · 尚未下载</div></div><span class="v">›</span></div>
+            <div class="li link"><i>＋</i><div class="m"><div>添加笔记库</div></div></div>
+          </div>
+          <div class="grp-t">阅读与助手 <span class="n">3</span></div>
+          <div class="grp">
+            <div class="li"><i>▥</i><div class="m"><div>书架</div></div><span class="v">工作 · 286MB ›</span></div>
+            <div class="li"><i>✦</i><div class="m"><div>AI 模型</div></div><span class="v">2 个 ›</span></div>
+            <div class="li"><i>Aa</i><div class="m"><div>阅读设置</div></div><span class="v">中 · 纸张 ›</span></div>
+          </div>
+          <div class="grp" style="margin-top:10px">
+            <div class="li"><i>ⓘ</i><div class="m"><div>关于与同步规则</div></div><span class="v">›</span><span class="n">4</span></div>
+          </div>
+        </div>
+        <div class="tabs"><span><b>▤</b>文件</span><span><b>▥</b>书架</span><span><b>✦</b>助手</span><span class="on"><b>☺</b>我的</span></div>
+      </div>
+      <p class="cap">图 7-a：我的（一级页面）</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">书架</span></div>
+        <div class="body gray">
+          <div class="grp-t">读书笔记库</div>
+          <div class="grp">
+            <div class="li"><div class="m"><div>工作</div><div class="s">spark/工作</div></div><span class="v" style="color:var(--ink)">✓</span></div>
+            <div class="li"><div class="m"><div>生活</div><div class="s">spark/生活</div></div></div>
+          </div>
+          <div class="ghint">书架用这个库的 WebDAV 账号连接，划线和想法写进它的“读书笔记”文件夹。</div>
+          <div class="grp-t">云端书架目录</div>
+          <div class="grp"><div class="fld"><div class="box">spark-books</div></div></div>
+          <div class="ghint">和 spark/ 在同一层。改了之后，书架会按新目录重新读取。</div>
+          <div class="grp-t">存储空间</div>
+          <div class="grp">
+            <div class="li"><div class="m"><div>已下载的书</div></div><span class="v">7 本 · 286MB</span></div>
+            <div class="li dgr">移除所有下载</div>
+          </div>
+          <div class="ghint">只删手机里下载的副本。还没上传的书、读书笔记和进度不受影响。</div>
+        </div>
+      </div>
+      <p class="cap">图 7-b：书架设置</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">AI 模型</span></div>
+        <div class="body gray">
+          <div class="grp-t">默认模型</div>
+          <div class="grp"><div class="li"><div class="m"><div>Claude Sonnet 5.5</div></div><span class="v">▾</span></div></div>
+          <div class="ghint">助手里的新对话用这个模型，对话里可以临时切换。</div>
+          <div class="grp-t">全部模型</div>
+          <div class="grp">
+            <div class="li"><div class="m"><div>Claude Sonnet 5.5<span class="badge">默认</span></div><div class="s">Anthropic · claude-sonnet-5-5 · 200K</div></div><span class="v">›</span></div>
+            <div class="li"><div class="m"><div>DeepSeek V4 Pro</div><div class="s">DeepSeek · deepseek-v4-pro · 128K</div></div><span class="v">›</span></div>
+            <div class="li link"><i>＋</i><div class="m"><div>添加模型</div></div></div>
+          </div>
+          <div class="ghint">模型列表只存在这台手机上，不和电脑同步。</div>
+        </div>
+      </div>
+      <p class="cap">图 7-c：AI 模型</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="bar"><span class="ic">‹</span><span class="grow">添加模型</span><span class="btn pri" style="font-weight:normal">保存</span></div>
+        <div class="body gray">
+          <div class="grp-t">服务</div>
+          <div class="grp">
+            <div class="li"><div class="m"><div>服务商</div></div><span class="v">Anthropic Claude ▾</span></div>
+            <div class="fld"><label>接口地址</label><div class="box">https://api.anthropic.com/v1/</div></div>
+            <div class="fld"><label>API Key</label><div class="box muted">sk-ant-…</div></div>
+          </div>
+          <div class="ghint">API Key 存在手机的系统密钥库里。</div>
+          <div class="grp-t">模型</div>
+          <div class="grp">
+            <div class="fld"><label>模型 <span style="color:var(--pick);float:right">从服务商读取</span></label><div class="box">claude-sonnet-5-5 ▾</div></div>
+            <div class="fld"><label>显示名称（可选）</label><div class="box">Claude Sonnet 5.5</div></div>
+            <div class="fld"><label>上下文长度（可选）</label><div class="box muted">自动：200K（内置表）</div></div>
+          </div>
+          <div class="flex" style="padding:8px 4px"><span class="btn">测试连接</span><span class="hint" style="color:#2a8a3a">连接成功</span></div>
+        </div>
+      </div>
+      <p class="cap">图 7-d：添加或编辑模型（字段和规则照搬桌面；编辑时底部多一个“删除这个模型”）</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li><span class="n">1</span>顶部卡片：应用名、版本、当前笔记库和上次同步时间，只展示，不能点。</li>
+        <li><span class="n">2</span>笔记库：每行是库名（当前库带标记）、远端目录和笔记数量。点一行进入现有的“编辑笔记库”页；原来行内的“编辑”“删除”按钮去掉，“删除这个笔记库”移到编辑页最底部（红色，要确认）。切换当前库仍在文件页顶部。</li>
+        <li><span class="n">3</span>阅读与助手，三个二级页面：
+          <br>· <b>书架</b>（图 7-b）：读书笔记库（单选，云端还没有这个库的目录时不能选；换库时提示“已有的读书笔记留在原来的库里，不会搬过去”）、云端书架目录、存储空间和“移除所有下载”（要确认）。
+          <br>· <b>AI 模型</b>（图 7-c、7-d）：默认模型、模型列表、添加和编辑。服务商预设、校验规则、Key 按接口地址共用，都和桌面一样。
+          <br>· <b>阅读设置</b>：现有的字号和主题，内容不变，只是挪进二级页面（电子书的阅读设置是否也放这里，看待确认 L）。</li>
+        <li><span class="n">4</span>关于与同步规则：版本、MIT 许可证、同步规则。同步规则改为：“普通笔记、导图和流程图只从云端下载，不修改。书架里的书、读书笔记、书签和阅读进度会上传到云端。”应用名里的“安卓只读版”去掉“只读”。</li>
+      </ol>
+      <div class="ask"><b>待确认 P：</b>这是低保真稿，只定结构和分组；图标、颜色和圆角的最终样子沿用现有安卓界面的配色。如果你想要更明显的视觉变化（比如每个入口一个彩色图标块），请告诉我，或者给我一个参考截图。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 8. 同步状态 ======================= -->
+<section class="board" id="sync">
+  <h2>8. 手机写云端时的状态提示</h2>
+  <p class="sub">读书数据（划线、想法、书签、进度）改动后自动上传；书本身的上传和删除由用户点击触发。失败一律明确提示，不静默。</p>
+  <div class="row">
+    <div>
+      <div class="phone" style="height:200px">
+        <div class="bar"><span>书架</span></div>
+        <div class="st"><span>2 条读书笔记等待上传 · 没有网络</span></div>
+        <div class="body"></div>
+      </div>
+      <p class="cap">图 8-a：没网时排队，联网后自动补传</p>
+    </div>
+    <div>
+      <div class="phone" style="height:200px">
+        <div class="bar"><span>书架</span></div>
+        <div class="st bad"><span>读书笔记上传失败：认证失败，请检查密码</span><span class="grow"></span><span>重试</span></div>
+        <div class="body"></div>
+      </div>
+      <p class="cap">图 8-b：失败时红色提示原因，可以重试</p>
+    </div>
+    <div>
+      <div class="phone" style="height:200px">
+        <div class="bar"><span>工作 ▾</span></div>
+        <div class="st"><span>《人类简史》的读书笔记在电脑和手机上同时改了，已保留两份</span><span class="grow"></span><span>查看</span></div>
+        <div class="body"></div>
+      </div>
+      <p class="cap">图 8-c：合并不了，按冲突规则保留两份</p>
+    </div>
+    <div class="notes">
+      <ol>
+        <li>状态行出现在书架页和文件页顶部（就是现在的同步状态行）。阅读页里不打断阅读，只在页脚右侧显示一个小的“↑”或红点，点开菜单时顶部显示具体原因。</li>
+        <li>上传时用 ETag 比对：云端读书笔记 md 在手机上次读取之后被改过，就重新读一遍、合并、再上传。</li>
+        <li>普通笔记的同步规则不变：仍然只下载。手机从云端同步时，读书笔记库的 <code>读书笔记/</code> 里如果还有没传上去的改动，这些文件先跳过，不被云端覆盖。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 9. 笔记柜 ======================= -->
+<section class="board" id="cabinet">
+  <h2>9. 笔记柜（浏览器）里的书架</h2>
+  <p class="sub">左侧新增“书架”入口；<code>spark-books/</code> 不再出现在“未归库”里。</p>
+  <div class="row">
+    <div>
+      <div class="frame web">
+        <div class="url">https://example.com/dav/</div>
+        <div class="wrap">
+          <div class="nav">
+            <div>工作<small>spark/工作</small></div>
+            <div>生活<small>spark/生活</small></div>
+            <div class="on new">书架<small>spark-books · 9 本</small></div>
+            <div>回收站<small>按库的保留天数</small></div>
+            <div>未归库<small>根目录上的旧文件</small></div>
+            <div>账号<small>当前 admin</small></div>
+          </div>
+          <div class="main">
+            <div class="flex" style="margin-bottom:8px"><b style="font-size:15px">书架</b><span class="muted">spark-books · 9 本 · 412MB</span><span class="grow"></span><span class="btn pri">上传书 <span class="n">1</span></span></div>
+            <table>
+              <tr><th>书名</th><th>格式</th><th>大小</th><th>上传时间</th><th></th></tr>
+              <tr><td>人类简史.epub</td><td>EPUB</td><td>4.2MB</td><td>10月2日 20:11</td><td><a style="color:var(--pick)">下载</a> · <a style="color:var(--note)">移入回收站</a> <span class="n">2</span></td></tr>
+              <tr><td>平凡的世界.txt</td><td>TXT</td><td>3.1MB</td><td>9月30日 08:02</td><td><a style="color:var(--pick)">下载</a> · <a style="color:var(--note)">移入回收站</a></td></tr>
+              <tr><td>深入理解计算机系统.pdf</td><td>PDF</td><td>38MB</td><td>9月29日 22:45</td><td><a style="color:var(--pick)">下载</a> · <a style="color:var(--note)">移入回收站</a></td></tr>
+            </table>
+            <p class="hint" style="margin-top:10px">支持 EPUB、TXT、MOBI、AZW3、PDF，单个文件不超过 300MB。阅读进度和读书笔记在手机上看。</p>
+          </div>
+        </div>
+      </div>
+      <p class="cap" style="max-width:none">图 9：笔记柜的书架页</p>
+    </div>
+    <div class="notes" style="width:320px">
+      <ol>
+        <li><span class="n">1</span>上传：可以多选，只接受支持的格式，单个不超过 300MB；有同名文件时，问“覆盖”还是“另存为 名字 (2)”，覆盖前旧文件进书架回收站。上传时显示进度。</li>
+        <li><span class="n">2</span>下载、移入回收站（要确认）。不能改名，因为书名对应读书笔记文件夹和进度记录。</li>
+        <li>回收站：在“书架”下点“回收站”，列出 <code>spark-books/.spark-trash/</code> 里的书，可以恢复、彻底删除，默认保留 30 天。</li>
+        <li>列表显示文件名而不是电子书里的书名，因为笔记柜不解析电子书。</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 10. 云端结构 ======================= -->
+<section class="board" id="disk">
+  <h2>10. 云端文件结构（不是界面，供确认存储规则）</h2>
+  <div class="row">
+    <div class="frame" style="width:430px;overflow:hidden">
+<pre class="tree">/dav/
+├─ spark/
+│  ├─ 工作/                      <em>← 读书笔记库</em>
+│  │  └─ 读书笔记/
+│  │     └─ 人类简史/            <em>← 以书名命名</em>
+│  │        ├─ 人类简史.md       <em>← 划线和想法，正本</em>
+│  │        └─ 我的书评.md       <em>← 你自己新建的普通笔记，手机不碰</em>
+│  └─ 生活/
+└─ spark-books/                  <em>← 云端书架</em>
+   ├─ 人类简史.epub
+   ├─ 平凡的世界.txt
+   ├─ .spark/
+   │  ├─ progress.json           <em>← 每本书的阅读进度</em>
+   │  └─ bookmarks.json          <em>← 每本书的书签</em>
+   └─ .spark-trash/2026-10-09/…  <em>← 书架回收站</em></pre>
+    </div>
+    <div class="frame" style="width:470px;overflow:hidden">
+<pre class="tree">---
+book: 人类简史.epub
+title: 人类简史
+author: 尤瓦尔·赫拉利
+---
+
+# 人类简史
+
+## 第一章　认知革命
+
+> 认知革命让智人能够讨论虚构的事物
+<!-- spark-anno 7f3a epubcfi(/6/8!/4/2/6,/1:0,/1:17) 2026-10-08T21:40 -->
+
+## 第三章　亚当和夏娃的一天
+
+> 我们的语言发展成为一种八卦的工具
+<!-- spark-anno 9c21 epubcfi(/6/14!/4/2/10,/1:0,/1:16) 2026-10-09T09:30 -->
+
+八卦是大规模协作的基础</pre>
+    </div>
+    <div class="notes">
+      <ol>
+        <li>md 的结构：Front Matter 记书籍文件名、书名、作者；正文按章节分二级标题；每条是“引用块（划线原文）+ 一行隐藏注释（编号、位置、时间）+ 想法（可以多段，直到下一条或下一个标题）”。条目按在书中的先后排序。</li>
+        <li>隐藏注释在任何 Markdown 工具里都不显示。桌面编辑器要保证打开、编辑、保存后注释原样保留，并且在编辑时也看不到它。这一点我会在开工前先写测试确认，如果做不到，会先找你商量换写法。</li>
+        <li>在电脑上改想法的文字、删掉某一条、调整顺序，手机都会照着显示；手机只增删自己这次操作的那一条，不重写整篇。</li>
+        <li><code>progress.json</code> 和 <code>bookmarks.json</code> 以书籍文件名作为键。书在笔记柜里不能改名，所以键不会变。</li>
+        <li>书名中文件名不允许的字符替换成“_”；两本书书名相同时，第二本的文件夹叫“书名 (2)”。</li>
+      </ol>
+      <div class="ask"><b>待确认 K：</b>读书笔记的 md 结构（右上图）可以吗？包括：Front Matter 字段名用英文（<code>book / title / author</code>，和其他 Markdown 工具兼容），章节用二级标题，划线是引用块，想法写在引用块下面。</div>
+    </div>
+  </div>
+</section>
+</body>
+</html>

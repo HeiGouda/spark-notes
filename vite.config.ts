@@ -2,11 +2,29 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
+// @ts-expect-error type error without @types/node package
+import { cpSync } from "node:fs";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // PDF 阅读要在运行时按路径取 pdf.js 的 worker、字体和 CMap，这些文件不会被打进包，手机端构建时原样拷过去
+    ...(mode === "mobile"
+      ? [
+          {
+            name: "copy-pdfjs-assets",
+            closeBundle() {
+              cpSync("vendor/foliate-js/vendor/pdfjs", "dist-mobile/vendor/foliate-js/vendor/pdfjs", {
+                recursive: true,
+                filter: (src: string) => !src.endsWith(".map"),
+              });
+            },
+          },
+        ]
+      : []),
+  ],
 
   // 安卓只读版单独打包，桌面的 dist/ 里没有手机代码
   build: mode === "mobile" ? { outDir: "dist-mobile", rolldownOptions: { input: "mobile.html" } } : undefined,

@@ -3,15 +3,19 @@ package com.spark.app
 import android.app.Activity
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.core.view.WindowCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import java.io.File
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -21,6 +25,21 @@ import javax.crypto.spec.GCMParameterSpec
 @InvokeArg
 class SecretAccountArgs {
   lateinit var account: String
+}
+
+@InvokeArg
+class UriArgs {
+  lateinit var uri: String
+}
+
+@InvokeArg
+class BarsArgs {
+  var light: Boolean = true
+}
+
+@InvokeArg
+class SelectionMenuArgs {
+  var hidden: Boolean = false
 }
 
 @InvokeArg
@@ -106,7 +125,66 @@ class SecretPlugin(private val activity: Activity) : Plugin(activity) {
     invoke.resolve(result)
   }
 
+  /**
+   * 系统文件选择器给的是 content:// 地址，Rust 不能直接按路径读。
+   * 拷到应用缓存目录里再交给 Rust，文件名用选择器里显示的名字。拷贝放在后台线程，大文件不卡界面。
+   */
+  @Command
+  fun copyToCache(invoke: Invoke) {
+    val args = invoke.parseArgs(UriArgs::class.java)
+    Thread {
+      try {
+        val uri = Uri.parse(args.uri)
+        val resolver = activity.contentResolver
+        var shown: String? = null
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+          if (cursor.moveToFirst() && !cursor.isNull(0)) shown = cursor.getString(0)
+        }
+        val name = (shown ?: uri.lastPathSegment ?: "book").substringAfterLast('/').replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val dir = File(File(activity.cacheDir, "import"), System.nanoTime().toString()).apply { mkdirs() }
+        val dest = File(dir, name)
+        val input = resolver.openInputStream(uri) ?: throw IllegalStateException("打不开这个文件")
+        input.use { source -> dest.outputStream().use { source.copyTo(it) } }
+        val result = JSObject()
+        result.put("path", dest.absolutePath)
+        result.put("name", name)
+        invoke.resolve(result)
+      } catch (e: Exception) {
+        invoke.reject("读取所选文件失败：${e.message ?: e}")
+      }
+    }.start()
+  }
+
+  /** 状态栏、导航栏的图标颜色：浅色背景用深色图标，深色背景用浅色图标 */
+  @Command
+  fun setSystemBars(invoke: Invoke) {
+    val args = invoke.parseArgs(BarsArgs::class.java)
+    activity.runOnUiThread {
+      val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+      controller.isAppearanceLightStatusBars = args.light
+      controller.isAppearanceLightNavigationBars = args.light
+    }
+    invoke.resolve()
+  }
+
+  /** 阅读页选字时只用 App 自己的菜单，不显示系统的复制、分享工具条（见 MainActivity） */
+  @Command
+  fun setSelectionMenu(invoke: Invoke) {
+    val args = invoke.parseArgs(SelectionMenuArgs::class.java)
+    hideSelectionMenu = args.hidden
+    invoke.resolve()
+  }
+
+  /** 首页连按两次返回：和系统默认一样把应用退到后台，回到桌面 */
+  @Command
+  fun moveToBack(invoke: Invoke) {
+    activity.runOnUiThread { activity.moveTaskToBack(true) }
+    invoke.resolve()
+  }
+
   companion object {
+    @Volatile
+    var hideSelectionMenu = false
     private const val PREFS = "spark_secrets"
     private const val KEYSTORE = "AndroidKeyStore"
     private const val KEY_ALIAS = "spark-secrets"

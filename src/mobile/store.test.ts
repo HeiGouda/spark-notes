@@ -18,6 +18,7 @@ vi.mock("./api", () => ({
   mobileApi: {
     listVaults: async () => m.vaults,
     vaultRoot: async (id: string) => `/data/${id}`,
+    systemBars: async () => {},
     sync: m.sync,
     removeVault: m.remove,
   },

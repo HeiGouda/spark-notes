@@ -24,6 +24,7 @@ PORT = 8083
 PREFIX = "/files"
 PREVIEW_LIMIT = 200_000
 SPARK = "spark"
+BOOKS = "spark-books"
 ROOT_LIB = "."
 TRASH = ".spark-trash"
 DEFAULT_TRASH_DAYS = 30
@@ -213,6 +214,33 @@ PAGE = """<!DOCTYPE html>
     color: var(--ink);
   }}
   img.preview {{ max-width: 100%; margin-top: 1rem; border: 1px solid var(--line); }}
+  .shelfbar {{ display: flex; align-items: flex-start; gap: 1rem; justify-content: space-between; }}
+  .shelfbar .ops {{ display: flex; align-items: center; gap: 1.2rem; }}
+  button.primary {{ background: var(--folder); color: white; padding: 0.5rem 1.1rem; border-radius: 0.3rem; }}
+  button.primary:disabled {{ opacity: 0.55; cursor: default; }}
+  .tablewrap {{ overflow-x: auto; }}
+  table.books {{ width: 100%; margin-top: 0.8rem; border-collapse: collapse; border-top: 1px solid var(--line); }}
+  table.books th, table.books td {{ text-align: left; padding: 0.7rem 0.45rem; border-bottom: 1px solid var(--line); }}
+  table.books th {{ color: var(--muted); font-size: 0.86rem; font-weight: 400; white-space: nowrap; }}
+  table.books td.bk-name {{ word-break: break-all; }}
+  table.books td.bk-meta, table.books td.bk-act {{ color: var(--muted); white-space: nowrap; }}
+  .queue {{ margin: 0.9rem 0 0; padding: 0; border-top: 1px solid var(--line); }}
+  .queue li {{ grid-template-columns: minmax(0, 1fr) 11rem 7rem; padding: 0.55rem 0.15rem; }}
+  .queue .bar {{ height: 0.4rem; background: var(--line); border-radius: 999px; overflow: hidden; }}
+  .queue .bar i {{ display: block; height: 100%; width: 0; background: var(--folder); transition: width 0.15s; }}
+  .queue .bad .bar i {{ background: var(--delete); }}
+  .queue .state {{ color: var(--muted); font-size: 0.86rem; text-align: right; }}
+  .queue .bad .state {{ color: var(--delete); }}
+  .queue .done .state {{ color: var(--folder); }}
+  .queue .sum {{ display: block; margin: 0.6rem 0 0; color: var(--muted); }}
+  .modal {{ position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(23, 52, 58, 0.38); z-index: 10; }}
+  .modal[hidden] {{ display: none; }}
+  .modal .box {{ width: min(26rem, calc(100vw - 2rem)); background: var(--card); border: 1px solid var(--line); padding: 1.2rem 1.3rem; }}
+  .modal .box h2 {{ margin: 0 0 0.4rem; font-size: 1.05rem; }}
+  .modal .box p {{ margin: 0; color: var(--muted); line-height: 1.6; word-break: break-all; }}
+  .modal .acts {{ display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.6rem; margin-top: 1rem; }}
+  .modal .acts button {{ padding: 0.45rem 0.9rem; border: 1px solid var(--line); }}
+  .modal .acts button.primary {{ border-color: var(--folder); }}
   @media (max-width: 800px) {{
     body {{ display: block; }}
     .spine {{ width: auto; height: 3.2rem; }}
@@ -309,10 +337,132 @@ def loose_entries(root: Path) -> list[Path]:
             resolved = child.resolve()
         except OSError:
             continue
-        if not inside(root, resolved) or child.name.startswith(".") or child.name == SPARK:
+        if not inside(root, resolved) or child.name.startswith(".") or child.name in (SPARK, BOOKS):
             continue
         found.append(child)
     return sort_children(found, "", load_order(root))
+
+
+BOOK_SUFFIXES = {".epub", ".txt", ".mobi", ".azw3", ".pdf"}
+
+
+def shelf_books(root: Path) -> list[Path]:
+    base = root / BOOKS
+    if not base.is_dir():
+        return []
+    found = []
+    for path in base.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in BOOK_SUFFIXES:
+            continue
+        rel = path.relative_to(base).as_posix()
+        if any(part.startswith(".") for part in rel.split("/")):
+            continue
+        found.append(path)
+    return sorted(found, key=lambda p: p.name.lower())
+
+
+BOOK_LIMIT = 300 * 1024 * 1024
+
+
+def shelf_root(root: Path) -> Path:
+    path = (root / BOOKS).resolve()
+    if not inside(root, path):
+        raise PermissionError("路径不对")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def shelf_file(root: Path, rel: str) -> Path:
+    path = child_in(shelf_root(root), rel)
+    if not path.is_file():
+        raise FileNotFoundError("找不到")
+    if path.suffix.lower() not in BOOK_SUFFIXES:
+        raise PermissionError("不支持的格式")
+    if any(part.startswith(".") for part in path.relative_to(shelf_root(root)).parts):
+        raise PermissionError("路径不对")
+    return path
+
+
+def _alt_book_name(name: str, n: int) -> str:
+    path = Path(name)
+    return f"{path.stem} ({n}){path.suffix}"
+
+
+def book_filename(name: str) -> str:
+    filename = Path(name.replace("\\", "/")).name
+    if not filename or filename.startswith(".") or filename in {".", ".."}:
+        raise PermissionError("路径不对")
+    if Path(filename).suffix.lower() not in BOOK_SUFFIXES:
+        raise PermissionError("不支持的格式")
+    return filename
+
+
+def free_book_path(folder: Path, filename: str) -> Path:
+    """同名文件已存在时，找一个“名字 (2).epub”这样没被占用的路径。"""
+    dest = folder / filename
+    n = 2
+    while dest.exists():
+        dest = folder / _alt_book_name(filename, n)
+        n += 1
+    return dest
+
+
+def check_shelf_name(root: Path, name: str) -> dict[str, object]:
+    """上传前问一下：书架里有没有同名文件，另存的话会叫什么。"""
+    filename = book_filename(name)
+    folder = shelf_root(root)
+    exists = (folder / filename).exists()
+    return {"name": filename, "exists": exists, "alt": free_book_path(folder, filename).name if exists else filename}
+
+
+def store_shelf_book(root: Path, name: str, data: bytes, mode: str = "rename") -> Path:
+    filename = book_filename(name)
+    if len(data) > BOOK_LIMIT:
+        raise PermissionError("单个文件不超过 300MB")
+    folder = shelf_root(root)
+    dest = folder / filename
+    if dest.exists() and mode == "overwrite":
+        move_to_trash(folder, dest)
+    elif dest.exists():
+        dest = free_book_path(folder, filename)
+    dest.write_bytes(data)
+    return dest
+
+
+def shelf_trash_book(root: Path, rel: str) -> None:
+    move_to_trash(shelf_root(root), shelf_file(root, rel))
+
+
+def split_upload(content_type: str, body: bytes) -> tuple[dict[str, str], str, bytes]:
+    marker = ""
+    for part in content_type.split(";"):
+        item = part.strip()
+        if item.startswith("boundary="):
+            marker = item.split("=", 1)[1].strip().strip('"')
+    if not marker:
+        raise ValueError("不是文件上传")
+    fields: dict[str, str] = {}
+    filename = ""
+    data = b""
+    for chunk in body.split(("--" + marker).encode()):
+        chunk = chunk.strip(b"\r\n")
+        if not chunk or chunk == b"--":
+            continue
+        header, sep, payload = chunk.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        if payload.endswith(b"\r\n"):
+            payload = payload[:-2]
+        text = header.decode("utf-8", "replace")
+        name = text.split('name="', 1)[1].split('"', 1)[0] if 'name="' in text else ""
+        if 'filename="' in text:
+            filename = text.split('filename="', 1)[1].split('"', 1)[0]
+            data = payload
+        elif name:
+            fields[name] = payload.decode("utf-8", "replace").strip()
+    if not filename:
+        raise ValueError("没有选择文件")
+    return fields, filename, data
 
 
 def loose_target(root: Path, name: str) -> Path:
@@ -837,7 +987,7 @@ def crumbs(lib: str, rel: str) -> str:
     return "<nav class='crumbs'>" + " / ".join(bits) + "</nav>"
 
 
-def rail(user: str, libs: list[str], current: str, view: str, loose_n: int, trash_n: int, account_n: int) -> str:
+def rail(user: str, libs: list[str], current: str, view: str, loose_n: int, trash_n: int, account_n: int, shelf_n: int = 0) -> str:
     bits = [f"<div class='brand'>当前登录<small>{e(user)}</small></div>", "<h2>库</h2>"]
     if not libs:
         bits.append("<p class='note'>还没有库</p>")
@@ -847,6 +997,10 @@ def rail(user: str, libs: list[str], current: str, view: str, loose_n: int, tras
         bits.append(
             f"<a class='drawer{on}' href='{browse(name)}'><span class='nm'><b>{e(label)}</b><span>{e(sub)}</span></span></a>"
         )
+    on = " on" if view == "shelf" else ""
+    bits.append(
+        f"<a class='drawer{on}' href='{PREFIX}/shelf'><span class='nm'><b>书架</b><span>spark-books · {shelf_n} 本</span></span></a>"
+    )
     bits.append("<div class='gap'></div><h2>这个库</h2>")
     if current:
         on = " on" if view == "trash" else ""
@@ -871,8 +1025,8 @@ def rail(user: str, libs: list[str], current: str, view: str, loose_n: int, tras
     return "<nav class='rail' aria-label='抽屉'>" + "".join(bits) + "</nav>"
 
 
-def shell(user: str, libs: list[str], current: str, view: str, loose_n: int, trash_n: int, main: str) -> str:
-    return rail(user, libs, current, view, loose_n, trash_n, len(read_users())) + f"<main>{main}</main>"
+def shell(user: str, libs: list[str], current: str, view: str, loose_n: int, trash_n: int, main: str, shelf_n: int = 0) -> str:
+    return rail(user, libs, current, view, loose_n, trash_n, len(read_users()), shelf_n) + f"<main>{main}</main>"
 
 
 def row(kind: str, name_html: str, meta: str, action: str) -> str:
@@ -1001,6 +1155,252 @@ def trash_main(root: Path, lib: str) -> str:
     return head + "<ul>" + "".join(rows) + "</ul>"
 
 
+def upload_time(path: Path) -> str:
+    """“10月2日 20:11”，和原型图一致。"""
+    when = datetime.fromtimestamp(path.stat().st_mtime)
+    return f"{when.month}月{when.day}日 {when:%H:%M}"
+
+
+SHELF_JS_PATH = PREFIX + "/shelf.js"
+
+# 上传：可多选、逐个上传并显示进度；同名时问覆盖还是另存。脚本单独提供，页面的安全策略不允许内联脚本。
+SHELF_JS = r"""(function () {
+  var box = document.getElementById("upload");
+  if (!box) return;
+  var token = box.dataset.token;
+  var prefix = box.dataset.prefix;
+  var limit = Number(box.dataset.limit);
+  var allowed = box.dataset.exts.split(",");
+  var pick = document.getElementById("pick");
+  var choose = document.getElementById("choose");
+  var queue = document.getElementById("queue");
+  var clash = document.getElementById("clash");
+  var busy = false;
+
+  function extOf(name) {
+    var i = name.lastIndexOf(".");
+    return i < 0 ? "" : name.slice(i).toLowerCase();
+  }
+
+  function size(n) {
+    return n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  }
+
+  function addRow(file) {
+    var li = document.createElement("li");
+    var name = document.createElement("span");
+    name.className = "name";
+    name.textContent = file.name + "（" + size(file.size) + "）";
+    var bar = document.createElement("span");
+    bar.className = "bar";
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    bar.setAttribute("aria-valuenow", "0");
+    var fill = document.createElement("i");
+    bar.appendChild(fill);
+    var state = document.createElement("span");
+    state.className = "state";
+    li.appendChild(name);
+    li.appendChild(bar);
+    li.appendChild(state);
+    queue.appendChild(li);
+    var row = {
+      set: function (text, percent) {
+        state.textContent = text;
+        if (percent != null) {
+          fill.style.width = percent + "%";
+          bar.setAttribute("aria-valuenow", String(Math.round(percent)));
+        }
+      },
+      finish: function (kind, text) {
+        li.className = kind;
+        state.textContent = text;
+        if (kind === "done") {
+          fill.style.width = "100%";
+          bar.setAttribute("aria-valuenow", "100");
+        }
+      },
+    };
+    row.set("等待上传", 0);
+    return row;
+  }
+
+  function ask(name, alt) {
+    return new Promise(function (resolve) {
+      clash.querySelector("p").textContent = "书架里已经有「" + name + "」。";
+      var over = clash.querySelector("[data-mode=overwrite]");
+      var rename = clash.querySelector("[data-mode=rename]");
+      var skip = clash.querySelector("[data-mode=skip]");
+      rename.textContent = "另存为 " + alt;
+      function done(mode) {
+        clash.hidden = true;
+        over.onclick = rename.onclick = skip.onclick = null;
+        resolve(mode);
+      }
+      over.onclick = function () { done("overwrite"); };
+      rename.onclick = function () { done("rename"); };
+      skip.onclick = function () { done(null); };
+      clash.hidden = false;
+      rename.focus();
+    });
+  }
+
+  function check(name) {
+    return fetch(prefix + "/shelf/check?name=" + encodeURIComponent(name), { credentials: "same-origin" }).then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || "没能检查同名文件");
+        return data;
+      });
+    });
+  }
+
+  function send(file, mode, row) {
+    return new Promise(function (resolve, reject) {
+      var form = new FormData();
+      form.append("token", token);
+      form.append("mode", mode);
+      form.append("file", file, file.name);
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", prefix + "/shelf/upload");
+      xhr.setRequestHeader("X-Requested-With", "spark-upload");
+      xhr.upload.onprogress = function (ev) {
+        if (!ev.lengthComputable) return;
+        var percent = (ev.loaded / ev.total) * 100;
+        row.set(percent >= 100 ? "处理中…" : Math.floor(percent) + "%", percent);
+      };
+      xhr.onerror = function () { reject(new Error("网络中断")); };
+      xhr.onload = function () {
+        var data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (err) { data = {}; }
+        if (xhr.status === 200 && data.ok) resolve(data);
+        else reject(new Error(data.error || "上传失败（" + xhr.status + "）"));
+      };
+      xhr.send(form);
+    });
+  }
+
+  async function run(files) {
+    busy = true;
+    choose.disabled = true;
+    queue.textContent = "";
+    queue.hidden = false;
+    var rows = files.map(addRow);
+    var ok = 0;
+    var failed = 0;
+    for (var i = 0; i < files.length; i++) {
+      var file = files[i];
+      var row = rows[i];
+      try {
+        if (allowed.indexOf(extOf(file.name)) < 0) throw new Error("不支持的格式");
+        if (file.size > limit) throw new Error("超过 300MB");
+        row.set("检查中…", 0);
+        var info = await check(file.name);
+        var mode = "rename";
+        if (info.exists) {
+          mode = await ask(file.name, info.alt);
+          if (!mode) {
+            row.finish("skip", "已跳过");
+            continue;
+          }
+        }
+        row.set("0%", 0);
+        await send(file, mode, row);
+        row.finish("done", "已上传");
+        ok++;
+      } catch (err) {
+        row.finish("bad", err.message);
+        failed++;
+      }
+    }
+    var sum = document.createElement("li");
+    sum.className = "sum";
+    sum.textContent = "完成：" + ok + " 本已上传" + (failed ? "，" + failed + " 本没成功" : "") + "。";
+    queue.appendChild(sum);
+    busy = false;
+    choose.disabled = false;
+    if (ok && !failed) setTimeout(function () { location.href = prefix + "/shelf"; }, 700);
+    else if (ok) {
+      var link = document.createElement("a");
+      link.className = "act";
+      link.href = prefix + "/shelf";
+      link.textContent = " 刷新列表";
+      sum.appendChild(link);
+    }
+  }
+
+  choose.addEventListener("click", function () { if (!busy) pick.click(); });
+  pick.addEventListener("change", function () {
+    var files = Array.prototype.slice.call(pick.files);
+    pick.value = "";
+    if (files.length && !busy) run(files);
+  });
+})();
+"""
+
+
+def shelf_main(root: Path, token: str) -> str:
+    items = shelf_books(root)
+    total = sum(p.stat().st_size for p in items)
+    exts = ",".join(sorted(BOOK_SUFFIXES))
+    head = (
+        "<div class='shelfbar'><h1>书架<small>spark-books"
+        f" · {len(items)} 本 · {total // (1024 * 1024)}MB</small></h1>"
+        f"<div class='ops'><a class='act' href='{PREFIX}/shelf/trash'>回收站</a>"
+        "<button class='primary' type='button' id='choose'>上传书</button></div></div>"
+        f"<div id='upload' data-token='{e(token)}' data-prefix='{PREFIX}' data-limit='{BOOK_LIMIT}' data-exts='{e(exts)}'>"
+        f"<input type='file' id='pick' multiple accept='{e(exts)}' hidden>"
+        "<ul class='queue' id='queue' hidden aria-live='polite'></ul></div>"
+        "<div class='modal' id='clash' hidden role='dialog' aria-modal='true' aria-labelledby='clash-t'><div class='box'>"
+        "<h2 id='clash-t'>同名文件</h2><p></p>"
+        "<div class='acts'><button type='button' data-mode='skip'>跳过</button>"
+        "<button type='button' data-mode='overwrite'>覆盖（旧文件进回收站）</button>"
+        "<button type='button' class='primary' data-mode='rename'>另存</button></div></div></div>"
+        f"<script src='{SHELF_JS_PATH}'></script>"
+    )
+    hint = (
+        "<p class='note'>支持 EPUB、TXT、MOBI、AZW3、PDF，单个文件不超过 300MB。阅读进度和读书笔记在手机上看。</p>"
+    )
+    if not items:
+        return head + hint + "<p class='empty'><b>书架是空的</b>从这里或手机上传后，书会出现在这里。</p>"
+    rows = []
+    for item in items:
+        rel = item.relative_to(root / BOOKS).as_posix()
+        rows.append(
+            "<tr>"
+            f"<td class='bk-name'>{e(item.name)}</td>"
+            f"<td class='bk-meta'>{e(item.suffix.lstrip('.').upper())}</td>"
+            f"<td class='bk-meta'>{e(human_size(item.stat().st_size))}</td>"
+            f"<td class='bk-meta'>{e(upload_time(item))}</td>"
+            f"<td class='bk-act'><a class='act' href='{qurl(PREFIX + '/shelf/file', name=rel)}'>下载</a> · "
+            f"<a class='danger' href='{qurl(PREFIX + '/confirm', action='shelf-trash', name=rel)}'>移入回收站</a></td>"
+            "</tr>"
+        )
+    table = (
+        "<div class='tablewrap'><table class='books'>"
+        "<thead><tr><th>书名</th><th>格式</th><th>大小</th><th>上传时间</th><th></th></tr></thead>"
+        "<tbody>" + "".join(rows) + "</tbody></table></div>"
+    )
+    return head + table + hint
+
+
+def shelf_trash_main(root: Path) -> str:
+    base = shelf_root(root)
+    prune_trash(base, trash_days(base))
+    items = trash_items(base)
+    head = f"<div class='top'><h1>书架回收站</h1><a class='act' href='{PREFIX}/shelf'>返回书架</a></div>"
+    if not items:
+        return head + "<p class='empty'><b>回收站是空的</b>从书架删除的书会在这里，默认保留 30 天。</p>"
+    rows = []
+    for item in items:
+        action = (
+            f"<a class='act' href='{qurl(PREFIX + '/confirm', action='shelf-restore', stamp=item.stamp)}'>恢复</a> "
+            f"<a class='danger' href='{qurl(PREFIX + '/confirm', action='shelf-purge', stamp=item.stamp)}'>彻底删除</a>"
+        )
+        rows.append(row(kind_of(item.path), f"<span class='name'>{e(item.name)}</span>", e(item.rel), action))
+    return head + "<ul>" + "".join(rows) + "</ul>"
+
+
 def loose_main(root: Path) -> str:
     items = loose_entries(root)
     head = "<div class='top'><h1>未归库<small>WebDAV 根目录 · 不属于 spark 下的库</small></h1></div>"
@@ -1071,6 +1471,16 @@ def account_form(current: str, mode: str, user: str, error: str, token: str) -> 
 
 
 def confirm_main(root: Path, action: str, lib: str, rel: str, stamp: str, name: str, user: str, current: str, token: str) -> str:
+    if action == "shelf-trash":
+        path = shelf_file(root, name)
+        return (
+            "<h1>移入回收站</h1>"
+            f"<p class='ask'>把「{e(path.name)}」移入书架回收站？</p>"
+            "<p class='note'>默认保留 30 天。读书笔记不会一起删除。</p>"
+            f"<form class='actions' method='post' action='{PREFIX}/do'>{hidden(token, action='shelf-trash', name=name)}"
+            "<button class='solid' type='submit'>移入回收站</button>"
+            f"<a class='back' href='{PREFIX}/shelf'>返回</a></form>"
+        )
     if action == "trash":
         assert_note_rel(lib, rel)
         lib_root = library_dir(root, lib)
@@ -1149,6 +1559,24 @@ def confirm_main(root: Path, action: str, lib: str, rel: str, stamp: str, name: 
             "<button class='solid' type='submit'>删除</button>"
             f"<a class='back' href='{PREFIX}/accounts'>返回</a></form>"
         )
+    if action == "shelf-restore":
+        item = trash_item(shelf_root(root), stamp)
+        return (
+            "<h1>恢复</h1>"
+            f"<p class='ask'>把「{e(item.name)}」放回书架？</p>"
+            f"<form class='actions' method='post' action='{PREFIX}/do'>{hidden(token, action='shelf-restore', stamp=item.stamp)}"
+            "<button class='solid' type='submit'>恢复</button>"
+            f"<a class='back' href='{PREFIX}/shelf/trash'>返回</a></form>"
+        )
+    if action == "shelf-purge":
+        item = trash_item(shelf_root(root), stamp)
+        return (
+            "<h1>彻底删除</h1>"
+            f"<p class='ask'>彻底删除「{e(item.name)}」？此操作不能恢复。</p>"
+            f"<form class='actions' method='post' action='{PREFIX}/do'>{hidden(token, action='shelf-purge', stamp=item.stamp)}"
+            "<button class='solid' type='submit'>彻底删除</button>"
+            f"<a class='back' href='{PREFIX}/shelf/trash'>返回</a></form>"
+        )
     raise FileNotFoundError("找不到")
 
 
@@ -1186,6 +1614,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def send_bytes(self, status: int, content_type: str, payload: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(payload)
+
+    def send_json(self, status: int, data: object) -> None:
+        self.send_bytes(status, "application/json; charset=utf-8", json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
     def redirect(self, location: str) -> None:
         self.send_response(303)
         self.send_header("Location", location)
@@ -1221,7 +1662,7 @@ class Handler(BaseHTTPRequestHandler):
             days = trash_days(lib_root)
             prune_trash(lib_root, days)
             trash_n = len(trash_items(lib_root))
-        return shell(self.user, libs, current, view, len(loose_entries(ROOT)), trash_n, main)
+        return shell(self.user, libs, current, view, len(loose_entries(ROOT)), trash_n, main, len(shelf_books(ROOT)))
 
     def do_GET(self) -> None:
         if not self.require_user():
@@ -1250,6 +1691,26 @@ class Handler(BaseHTTPRequestHandler):
             if path == PREFIX + "/trash":
                 body = self.wrap("trash", lib, trash_main(ROOT, lib))
                 self.send_html(200, "回收站", body, token)
+                return
+            if path == PREFIX + "/shelf":
+                body = self.wrap("shelf", lib, shelf_main(ROOT, token))
+                self.send_html(200, "书架", body, token)
+                return
+            if path == PREFIX + "/shelf/trash":
+                body = self.wrap("shelf", lib, shelf_trash_main(ROOT))
+                self.send_html(200, "书架回收站", body, token)
+                return
+            if path == PREFIX + "/shelf/file":
+                self.send_book(shelf_file(ROOT, qs.get("name", [""])[0]))
+                return
+            if path == SHELF_JS_PATH:
+                self.send_bytes(200, "application/javascript; charset=utf-8", SHELF_JS.encode("utf-8"))
+                return
+            if path == PREFIX + "/shelf/check":
+                try:
+                    self.send_json(200, check_shelf_name(ROOT, qs.get("name", [""])[0]))
+                except PermissionError as err:
+                    self.send_json(400, {"error": str(err)})
                 return
             if path == PREFIX + "/loose":
                 body = self.wrap("loose", lib, loose_main(ROOT))
@@ -1283,7 +1744,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.user,
                     token,
                 )
-                view = "accounts" if action == "drop" else ("loose" if action == "loose" else ("trash" if action in {"restore", "purge", "empty"} else "lib"))
+                view = "shelf" if action.startswith("shelf-") else ("accounts" if action == "drop" else ("loose" if action == "loose" else ("trash" if action in {"restore", "purge", "empty"} else "lib")))
                 self.send_html(200, "确认", self.wrap(view, lib, main), token)
                 return
             self.send_html(404, "找不到", self.wrap("lib", lib, "<h1>找不到</h1>"), token)
@@ -1312,11 +1773,56 @@ class Handler(BaseHTTPRequestHandler):
         given = form.get("token", [""])[0]
         return bool(cookie) and secrets.compare_digest(cookie, given) and secrets.compare_digest(cookie, token)
 
+    def send_book(self, path: Path) -> None:
+        data = path.read_bytes()
+        name = path.name.replace('"', "")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def receive_book(self, token: str) -> None:
+        # 页面上的脚本带这个头，按 JSON 回复；没有脚本的普通表单提交仍然跳回书架页
+        script = self.headers.get("X-Requested-With") == "spark-upload"
+
+        def fail(status: int, title: str, message: str) -> None:
+            if script:
+                self.send_json(status, {"error": message})
+            else:
+                self.send_html(status, title, self.wrap("shelf", "", f"<h1>{e(title)}</h1><p class='note'>{e(message)}</p>"), token)
+
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0 or length > BOOK_LIMIT + 1024 * 1024:
+            fail(400, "没能上传", "单个文件不超过 300MB。")
+            return
+        try:
+            fields, filename, data = split_upload(self.headers.get("Content-Type", ""), self.rfile.read(length))
+        except ValueError as err:
+            fail(400, "没能上传", str(err))
+            return
+        if not self.token_ok({"token": [fields.get("token", "")]}, token):
+            fail(400, "页面过期", "刷新页面后重新上传。")
+            return
+        try:
+            dest = store_shelf_book(ROOT, filename, data, fields.get("mode", "rename"))
+        except (PermissionError, OSError) as err:
+            fail(400, "没能上传", str(err))
+            return
+        if script:
+            self.send_json(200, {"ok": True, "name": dest.name})
+        else:
+            self.redirect(PREFIX + "/shelf")
+
     def do_POST(self) -> None:
         if not self.require_user():
             return
         token = self.cabinet_token()
         parsed = urlparse(self.path)
+        if parsed.path.rstrip("/") == PREFIX + "/shelf/upload":
+            self.receive_book(token)
+            return
         if parsed.path.rstrip("/") != PREFIX + "/do":
             self.send_html(404, "找不到", self.wrap("lib", "", "<h1>找不到</h1>"), token)
             return
@@ -1374,6 +1880,23 @@ class Handler(BaseHTTPRequestHandler):
         if action == "loose":
             remove_tree(loose_target(ROOT, form.get("name", [""])[0]))
             self.redirect(PREFIX + "/loose")
+            return
+        if action == "shelf-trash":
+            shelf_trash_book(ROOT, form.get("name", [""])[0])
+            self.redirect(PREFIX + "/shelf")
+            return
+        if action == "shelf-restore":
+            base = shelf_root(ROOT)
+            restore_item(base, trash_item(base, form.get("stamp", [""])[0]))
+            self.redirect(PREFIX + "/shelf/trash")
+            return
+        if action == "shelf-purge":
+            base = shelf_root(ROOT)
+            item = trash_item(base, form.get("stamp", [""])[0])
+            parent = item.path.parent
+            remove_tree(item.path)
+            cleanup_empty(parent, base)
+            self.redirect(PREFIX + "/shelf/trash")
             return
         if action == "account-add":
             user = form.get("user", [""])[0]

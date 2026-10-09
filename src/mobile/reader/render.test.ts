@@ -106,3 +106,14 @@ describe("其他", () => {
     expect(el.textContent).toContain("<b>粗</b>");
   });
 });
+
+describe("读书笔记", () => {
+  it("记位置的注释不显示，引用和想法照常显示", () => {
+    const html = render("## 第六章\n\n> 古匣子之内，一枚药丸\n<!-- spark-anno n1 epubcfi(/6/14!/4,/2,/8/1:40) 2026-10-09T06:33:37.493Z -->\n\n八卦是协作的基础\n").html;
+    expect(html).not.toContain("spark-anno");
+    expect(html).not.toContain("epubcfi");
+    const el = dom(html);
+    expect(el.querySelector("blockquote")?.textContent?.trim()).toBe("古匣子之内，一枚药丸");
+    expect(el.textContent).toContain("八卦是协作的基础");
+  });
+});

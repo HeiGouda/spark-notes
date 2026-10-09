@@ -8,6 +8,7 @@ import ReaderSettings from "../ReaderSettings.vue";
 import SheetStrip from "../SheetStrip.vue";
 import { bookName, bookOf } from "../../lib/book";
 import ImageViewer from "../reader/ImageViewer.vue";
+import AiSheet from "../chat/AiSheet.vue";
 import { renderNote, type Rendered } from "../reader/render";
 import { folderLabel, timeLabel } from "../browse";
 import { useMobile } from "../store";
@@ -102,6 +103,7 @@ function jump(id: string) {
     <div class="top">
       <button class="ib" @click="back()"><Icon name="back" /></button>
       <h1>{{ title }}</h1>
+      <button class="ib" title="问 AI" @click="open({ t: 'ai' })"><Icon name="spark" /></button>
       <button class="ib" title="大纲" :disabled="!doc?.headings.length" @click="open({ t: 'outline' })"><Icon name="outline" /></button>
       <button class="ib" title="阅读设置" @click="open({ t: 'readset' })"><Icon name="aa" /></button>
     </div>
@@ -147,5 +149,6 @@ function jump(id: string) {
       </div>
     </template>
     <ImageViewer v-else-if="currentOverlay?.t === 'image'" :src="currentOverlay.src" :alt="currentOverlay.alt" />
+    <div v-else-if="currentOverlay?.t === 'ai'" class="m-ovl"><AiSheet :quote="currentOverlay.quote" /></div>
   </div>
 </template>
