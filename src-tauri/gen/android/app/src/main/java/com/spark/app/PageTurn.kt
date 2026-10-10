@@ -134,6 +134,8 @@ object PageTurn {
   /** 没接管的快速滑动补的那次翻页按它的速度走 */
   private var queuedSpeed = 0f
   private var queuedAt = 0L
+  /** 上一次快速翻页的时间。紧接着再滑就直接换页，不等动画 */
+  private var lastBurst = 0L
   /** 用预截的图翻完，网页换好的页和预截的一样 */
   private var landedSame = false
   private var downCheck = Check.NONE
@@ -420,7 +422,10 @@ object PageTurn {
     return pass(ev)
   }
 
-  /** 滑出去时正忙没能接管，松手时还是一次翻页的滑动：让网页按点两侧那样翻，速度按这次滑动的快慢 */
+  /**
+   * 滑出去时没能跟手。慢滑仍按点两侧补一页动画；
+   * 正在翻或者刚快速翻过，就立刻揭掉截图，让网页马上再翻一页，不再等动画。
+   */
   private fun missedSwipe(ev: MotionEvent) {
     val w = web ?: return
     val d = missedDir
@@ -432,9 +437,20 @@ object PageTurn {
     val toward = -d * (vt?.xVelocity ?: 0f)
     val moved = -d * (ev.rawX - downX)
     if (moved < 30f * density && !(toward > 400f * density && moved > 16f * density)) return
+    val now = android.os.SystemClock.uptimeMillis()
+    val bursting = phase != Phase.IDLE || now - lastBurst < 280L
     queuedSpeed = toward.coerceAtLeast(0f)
     queuedAt = ev.eventTime
-    w.evaluateJavascript("window.__sparkTurn&&window.__sparkTurn('turn', $d)", null)
+    if (phase != Phase.IDLE && !hijacked) {
+      pendingCover = null
+      finish()
+    }
+    if (bursting) {
+      lastBurst = now
+      w.evaluateJavascript("window.__sparkTurn&&window.__sparkTurn('flip', $d)", null)
+    } else {
+      w.evaluateJavascript("window.__sparkTurn&&window.__sparkTurn('turn', $d)", null)
+    }
   }
 
   /** 补的那次翻页刚发出不久就用它的速度，过期就按点两侧的速度 */
@@ -579,6 +595,7 @@ object PageTurn {
     val p = fingerProgress()
     completeOnRelease = !cancelled && toward > -fling && (p > 0.28f || (toward > fling && p > 0.02f))
     releaseSpeed = (if (completeOnRelease) toward else -toward).coerceAtLeast(0f)
+    if (completeOnRelease && toward > 700f * density) lastBurst = android.os.SystemClock.uptimeMillis()
     if (edgeDrag) {
       edgeDrag = false
       if (completeOnRelease) callJs("edge", dragDir)
@@ -679,7 +696,8 @@ object PageTurn {
     val density = w?.resources?.displayMetrics?.density ?: 1f
     if (speed > 250f * density) {
       // 先快后慢的曲线起步斜率是 2：时长 = 2 × 剩下的距离 ÷ 速度，起步速度正好接上手指
-      val duration = (2000f * remaining * width / speed).toLong().coerceIn(40L, 240L)
+      // 甩得越快，剩下的路越短。上限压低，下一页才能马上接上
+      val duration = (2000f * remaining * width / speed).toLong().coerceIn(16L, 90L)
       animateTo(target, duration, flingEase, then)
       return
     }

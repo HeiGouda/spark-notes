@@ -1220,7 +1220,8 @@ export class Paginator extends HTMLElement {
             index: this.#adjacentIndex(dir),
             anchor: prev ? () => 1 : () => 0,
         })
-        if (shouldGo || !this.hasAttribute('animated')) await wait(100)
+        // 同一章里翻页是瞬间换的。这里再等 100ms 会把锁占住，快滑时下一页就慢一拍
+        if (shouldGo) await wait(100)
         this.#locked = false
     }
     prev(distance) {

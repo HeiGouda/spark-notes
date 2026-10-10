@@ -457,19 +457,71 @@ async function runTurn(dir: 1 | -1) {
 
 /** 点两侧翻页。这一下还没翻完时再点直接丢掉，松手后不会再慢慢补翻 */
 function turn(dir: 1 | -1) {
-  if (!view || queuedTurns > 0 || nativeAnimating || nativeTurns > 0) return;
+  if (!view || queuedTurns > 0 || nativeAnimating || nativeTurns > 0 || flipDepth > 0) return;
   enqueue(() => runTurn(dir));
 }
 
-/** 滑动翻页：滑一次就要翻一页，正忙也排进去，不能并成一次 */
+/** 已经划出去、还没换完的页。快滑时直接换，不等动画 */
+const flips: (1 | -1)[] = [];
+let flipping = false;
+let flipDepth = 0;
+let recentFlip = 0;
+
+function queueFlip(dir: 1 | -1) {
+  if (!view) return;
+  recentFlip = performance.now();
+  flipDepth++;
+  flips.push(dir);
+  void drainFlips();
+}
+
+async function drainFlips() {
+  if (flipping) return;
+  flipping = true;
+  try {
+    while (flips.length) {
+      const dir = flips.shift()!;
+      try {
+        await jumpOnly(dir);
+      } finally {
+        flipDepth = Math.max(0, flipDepth - 1);
+      }
+    }
+  } finally {
+    flipping = false;
+    if (flips.length) void drainFlips();
+  }
+}
+
+/** 不等翻页动画，马上换到旁边那一页 */
+async function jumpOnly(dir: 1 | -1) {
+  clearPick();
+  await settling;
+  unpeek();
+  if (atEdge(dir)) return edgeToast(dir);
+  const crossed = crossesSection(dir);
+  const moved = await jumpPage(dir);
+  if (moved && crossed) await settleTurn(true);
+  if (!moved && atEdge(dir)) edgeToast(dir);
+  thawFoot();
+}
+
+/**
+ * 滑动翻页。隔得开的一下仍做动画；
+ * 连着快滑时直接换页，手划多快页就翻多快
+ */
 function queueSwipe(dir: 1 | -1) {
   if (!view) return;
-  enqueue(() => runTurn(dir));
+  const now = performance.now();
+  const burst = nativeAnimating || nativeTurns > 0 || flipDepth > 0 || now - recentFlip < 280;
+  recentFlip = now;
+  if (burst) queueFlip(dir);
+  else enqueue(() => runTurn(dir));
 }
 
 /**
  * 原生接管的滑动：jump 是翻过去，back 是松手时没翻过去、翻回原来那页，edge 是往到头的方向滑，done 是动画结束。
- * turn 是滑动时原生正忙没能跟手，松手后仍要补翻这一页
+ * turn 是没跟手的慢滑，补一页动画。flip 是连着快滑，马上再翻一页，不等动画。
  */
 function onNativeTurn(kind: string, dir: number) {
   if (kind === "done") {
@@ -479,6 +531,7 @@ function onNativeTurn(kind: string, dir: number) {
   }
   const d: 1 | -1 = dir < 0 ? -1 : 1;
   if (kind === "edge") return edgeToast(d);
+  if (kind === "flip") return queueFlip(d);
   if (kind === "turn") return queueSwipe(d);
   nativeAnimating = true;
   const target: 1 | -1 = kind === "back" ? (d > 0 ? -1 : 1) : d;
@@ -546,7 +599,7 @@ function schedulePrefetch(delay = 300) {
   clearTimeout(prefetchTimer);
   if (!nativeTurn || pdfBook || scrolled.value) return;
   prefetchTimer = window.setTimeout(async () => {
-    const busy = () => queuedTurns > 0 || nativeTurns > 0 || footFrozen || !swipeOn.value;
+    const busy = () => queuedTurns > 0 || nativeTurns > 0 || flipDepth > 0 || footFrozen || !swipeOn.value;
     if (busy()) return;
     const at = currentCfi.value;
     const r = view?.renderer;
