@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import Icon from "../Icon.vue";
-import { mobileApi, type ReadPoint } from "../api";
+import { mobileApi, type PageTurnAnim, type ReadPoint } from "../api";
 import { bookStem, useShelf } from "../shelf";
 import { decodeTxt, txtBook } from "../reader/txt";
 import { parseReadingNote, readingNoteRel, renderReadingNote, toggleBookmark, withAnno, type Anno, type Bookmark } from "../reader/anno";
@@ -66,7 +66,7 @@ const theme = ref<ReaderTheme>("浅色");
 const flow = ref<"左右翻页" | "上下滚动">("左右翻页");
 const font = ref<ReaderFont>("书籍自带");
 /** 左右翻页时的动画 */
-const TURN_ANIMS = ["平移", "淡入淡出", "无动画"] as const;
+const TURN_ANIMS = ["平移", "覆盖", "淡入淡出", "无动画"] as const;
 const turnAnim = ref<(typeof TURN_ANIMS)[number]>("平移");
 const FONT_FILES = { serif: new URL(serifFont, location.href).href, kai: new URL(kaiFont, location.href).href };
 
@@ -109,7 +109,14 @@ type FoliateView = HTMLElement & {
   resolveNavigation: (target: string) => { index: number } | undefined;
   getSectionFractions: () => number[];
   book: { toc?: TocItem[]; metadata?: { title?: unknown; author?: unknown } };
-  renderer?: HTMLElement & { setStyles?: (css: string) => void };
+  renderer?: HTMLElement & {
+    setStyles?: (css: string) => void;
+    /** 先在后台排好前一章或后一章（见 paginator.js） */
+    preload?: (dir: number) => Promise<boolean>;
+    /** 不翻页，只把前一页或后一页显示出来给原生截图；unpeek 换回当前页 */
+    peek?: (dir: number) => boolean;
+    unpeek?: () => void;
+  };
 };
 type TocItem = { label?: string; href?: unknown; subitems?: unknown };
 
@@ -161,12 +168,33 @@ function applyLayout() {
     r.setStyles?.(readerCss({ palette: palette.value, size: size.value, leading: leading.value, font: font.value, files: FONT_FILES }));
   }
   syncPageColor();
+  schedulePrefetch(600);
 }
 
 /** 状态栏那一条是页面底色露出来的，跟着阅读主题变；图标颜色也跟着深浅换 */
 function syncPageColor() {
   document.body.style.background = palette.value.bg;
   void mobileApi.systemBars(!palette.value.dark).catch(() => {});
+}
+
+/**
+ * 阅读页不许双指缩放：缩放后分页的宽度、翻页和点按的位置都对不上。
+ * 只在阅读页里改页面的 viewport，离开时还原，别的页面不受影响。
+ */
+const NO_ZOOM = "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover";
+let viewportBefore: string | null = null;
+
+function lockZoom() {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  if (!meta || viewportBefore != null) return;
+  viewportBefore = meta.getAttribute("content") ?? "";
+  meta.setAttribute("content", NO_ZOOM);
+}
+
+function unlockZoom() {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  if (meta && viewportBefore != null) meta.setAttribute("content", viewportBefore);
+  viewportBefore = null;
 }
 
 function restorePageColor() {
@@ -184,6 +212,7 @@ function frameOffset(doc: Document): { left: number; top: number } {
 }
 
 function onPointerDown(e: PointerEvent) {
+  unpeek();
   down = { x: e.screenX, y: e.screenY, t: e.timeStamp };
 }
 
@@ -203,23 +232,47 @@ function onPointerUp(e: PointerEvent, doc: Document) {
     chrome.value = false;
     return;
   }
-  if (turning) return;
   const x = (e.clientX + frameOffset(doc).left) / (window.innerWidth || 1);
   if (x > 0.3 && x < 0.7) chrome.value = true;
   else void turn(x <= 0.3 ? -1 : 1);
 }
 
 /*
- * 翻页。阅读器自带的拖动是一帧帧改滚动位置，手机上掉帧，所以由这一页自己做，阅读器只负责瞬间换页：
- * - 平移：同一章里相邻的页本来就排在同一个 iframe 里，拖动和动画只移动 iframe（transform 交给 GPU），
- *   滑到位后在同一帧里让阅读器换页、去掉位移，画面接得上；跨章时下一章还没排版，改成淡入淡出。
- * - 淡入淡出：书页先淡出，换页后淡入。
- * - 无动画：直接换页。
- * 点两侧和左右滑动都走这里。
+ * 左右翻页。动画由安卓原生做（见 PageTurn.kt）：书页停稳后先在后台排好前后两章，原生把前一页、后一页
+ * 预先截好（见 schedulePrefetch）。翻页时拿截图做动画，阅读器在截图下面换页，换好后才拿掉截图，
+ * 换页和换章的过程都不会露出来。没预截好时先盖上当前画面，等阅读器换好页、截到新页再动。
+ * - 平移：旧页滑出、新页从另一侧滑入，两页一起动。
+ * - 覆盖：下一页时只有旧页滑走，新页不动；往回翻时只有上一页从旁边盖上来。
+ * 点两侧和手指滑动用同一种位移、同一种速度。
+ * - 淡入淡出：旧页截图淡出，下面的新页显出来。
+ * - 无动画：新页画好后直接拿掉截图。
+ * 左右滑动由原生接管、跟着手指走，要换页时通过 window.__sparkTurn 通知这里。
+ * 上下滚动、PDF，以及原生用不了的时候（不在安卓上）直接换页。
  */
-let turning = false;
-let gesture: { x: number; y: number; t: number; dx: number; decided: boolean; horizontal: boolean } | null = null;
-const EASE_OUT = "cubic-bezier(.2, .7, .2, 1)";
+const ANIM_CODE: Record<(typeof TURN_ANIMS)[number], PageTurnAnim> = { 平移: "slide", 覆盖: "cover", 淡入淡出: "fade", 无动画: "none" };
+
+/** 安卓原生翻页可用（打开阅读页时第一次设置成功才算） */
+let nativeTurn = false;
+/** 翻页一个接一个做。滑动每一次都排进来；点两侧正在翻时再点不算 */
+let turnQueue: Promise<void> = Promise.resolve();
+let queuedTurns = 0;
+/**
+ * 原生翻页动画还在画面上。网页这边的换页任务往往在动画播完之前就结束了，
+ * 不能用任务是否还在排队来判断能不能再点
+ */
+let nativeAnimating = false;
+let gesture: { x: number; y: number } | null = null;
+const atStart = ref(false);
+const atEnd = ref(false);
+const selecting = ref(false);
+/**
+ * 页脚不在翻页截图里，书页一换就跟着变（换章时章节名马上换，不会翻完了再跳一下）。
+ * 书签角在截图里，翻页过程中先不动，翻完再变
+ */
+const shownChapter = ref("");
+const shownPercent = ref(0);
+const shownRibbon = ref(false);
+let footFrozen = false;
 
 const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
@@ -236,6 +289,11 @@ function nextRelocate(): Promise<boolean> {
  */
 let settling: Promise<unknown> = Promise.resolve();
 
+/** 原生预截前后两页时书页可能还停在旁边那一页，读位置、翻页之前先换回来 */
+function unpeek() {
+  view?.renderer?.unpeek?.();
+}
+
 function goSide(dir: 1 | -1): Promise<unknown> {
   const going = Promise.resolve(dir > 0 ? view!.goRight() : view!.goLeft()).catch((e) => console.warn("翻页失败", e));
   settling = going;
@@ -248,38 +306,73 @@ function atEdge(dir: 1 | -1): boolean {
   return !!(dir > 0 ? edge?.atEnd : edge?.atStart);
 }
 
-function pageFrame(): HTMLElement | null {
-  return (activeDoc?.defaultView?.frameElement as HTMLElement | null | undefined) ?? null;
+/** 跨章时阅读器先滚到这一章前后的空白页，再换成下一章；停在空白页上的那次 relocate 不算翻好 */
+function onBlankPage(): boolean {
+  const r = view?.renderer as unknown as { page?: number; pages?: number } | undefined;
+  if (scrolled.value || !r || r.page == null || !r.pages) return false;
+  return r.page < 1 || r.page > r.pages - 2;
 }
 
-function pageSize(): number {
-  const size = (view?.renderer as unknown as { size?: number } | undefined)?.size;
-  return size || host.value?.clientWidth || window.innerWidth;
-}
-
-function moveFrame(x: number, ms = 0) {
-  const el = pageFrame();
-  if (!el) return;
-  el.style.transition = ms ? `transform ${ms}ms ${EASE_OUT}` : "none";
-  el.style.transform = x ? `translate3d(${x}px, 0, 0)` : "";
-}
-
-function fadeHost(opacity: number, ms: number) {
-  const el = host.value;
-  if (!el) return;
-  el.style.transition = ms ? `opacity ${ms}ms ease` : "none";
-  el.style.opacity = opacity === 1 ? "" : String(opacity);
-}
-
-/** 这一页往 dir 方向翻会不会出这一章（下一页不在同一个 iframe 里） */
+/** 这一页再往 dir 翻会不会出这一章 */
 function crossesSection(dir: 1 | -1): boolean {
   const r = view?.renderer as unknown as { page?: number; pages?: number } | undefined;
   if (!r || r.page == null || !r.pages) return true;
   return dir > 0 ? r.page >= r.pages - 2 : r.page <= 1;
 }
 
+function showFoot() {
+  shownChapter.value = chapter.value;
+  shownPercent.value = Math.round(fraction.value * 100);
+}
+
+function snapshotFoot() {
+  showFoot();
+  shownRibbon.value = marks.value.some((b) => b.cfi === currentCfi.value);
+}
+
+function freezeFoot() {
+  if (!footFrozen) snapshotFoot();
+  footFrozen = true;
+}
+
+function thawFoot() {
+  footFrozen = false;
+  snapshotFoot();
+}
+
+/**
+ * 等新页的字体和排版稳定再让原生截新页，原生截到新页才开始动画。
+ * 同一章里字体早已加载好，画没画上屏由原生确认，这里不再多等，免得点了要过一会儿才动
+ */
+async function settleTurn(crossed: boolean) {
+  const fonts = activeDoc?.fonts;
+  if (!crossed) {
+    if (fonts?.status === "loading") await Promise.race([fonts.ready, wait(60)]);
+    return;
+  }
+  if (fonts) await Promise.race([fonts.ready, wait(700)]);
+  await frame();
+  await frame();
+}
+
+/** 点两侧的翻页和原生滑动的换页走两条队列，换页本身还是一个接一个 */
+let jumping: Promise<unknown> = Promise.resolve();
+
 async function jumpPage(dir: 1 | -1): Promise<boolean> {
+  const before = jumping;
+  let release = () => {};
+  jumping = new Promise<void>((r) => (release = r));
+  await before;
+  try {
+    return await jumpOnce(dir);
+  } finally {
+    release();
+  }
+}
+
+async function jumpOnce(dir: 1 | -1): Promise<boolean> {
   await settling;
+  unpeek();
   const before = `${fraction.value}\n${currentCfi.value}`;
   // 先登记再翻页。阅读器换页时同步发出 relocate，登记晚了就收不到，每一页都会被当成没翻动
   const pending = nextRelocate();
@@ -292,110 +385,252 @@ async function jumpPage(dir: 1 | -1): Promise<boolean> {
   }
 }
 
-async function fadeTurn(dir: 1 | -1) {
-  fadeHost(0, 110);
-  await wait(110);
-  const moved = await jumpPage(dir);
-  await frame();
-  fadeHost(1, 160);
-  await wait(160);
-  return moved;
+function enqueue(task: () => Promise<void>) {
+  queuedTurns++;
+  turnQueue = turnQueue
+    .then(task)
+    .catch((e) => console.warn("翻页失败", e))
+    .finally(() => {
+      queuedTurns--;
+    });
 }
 
-/** dir 1 是往右翻（下一页），-1 往左；from 是松手时书页已经被拖开的距离 */
-async function turn(dir: 1 | -1, from = 0) {
-  if (turning || !view) return;
-  turning = true;
+/**
+ * 原生滑动要的换页（jump、back）单独排队，不排在点两侧的翻页后面：点两侧的翻页要等原生把这次滑动收完，
+ * 原生又在等这次换页，排在一起就互相等住，翻不动了
+ */
+let nativeQueue: Promise<void> = Promise.resolve();
+let nativeTurns = 0;
+function enqueueNative(task: () => Promise<void>) {
+  nativeTurns++;
+  nativeQueue = nativeQueue
+    .then(task)
+    .catch((e) => console.warn("翻页失败", e))
+    .finally(() => {
+      nativeTurns--;
+    });
+}
+
+function edgeToast(dir: 1 | -1) {
+  toast(dir > 0 ? "已经是最后一页" : "已经是第一页");
+}
+
+/** 书页换好后等 Vue 改完页脚这些，再让原生开始动画 */
+async function reveal(moved: boolean) {
+  if (moved) await nextTick();
+  await mobileApi.pageTurnReady(moved).catch((e) => {
+    console.warn("翻页动画收尾失败", e);
+    thawFoot();
+  });
+}
+
+/** 真正换一页。滑动排队时每一页都走这里；点两侧只有空闲时才会进来 */
+async function runTurn(dir: 1 | -1) {
   clearPick();
-  let moved = true;
+  // 上一章还在加载时 atEnd、atStart 还是旧的，先等上一次翻页结束再判断
+  await settling;
+  unpeek();
+  if (atEdge(dir)) return edgeToast(dir);
+  const crossed = crossesSection(dir);
+  freezeFoot();
+  const animated =
+    nativeTurn &&
+    !scrolled.value &&
+    !pdfBook &&
+    (await mobileApi.pageTurnStart(dir).catch((e) => {
+      console.warn("翻页动画不可用，直接换页", e);
+      return false;
+    }));
+  // 动画要等原生播完（done）才算结束，不能等这次任务返回
+  if (animated) nativeAnimating = true;
+  let moved = false;
   try {
-    // 上一章还在加载时 atEnd、atStart 还是旧的，先等上一次翻页结束再判断
-    await settling;
-    if (atEdge(dir)) {
-      moveFrame(0, 180);
-      await wait(180);
-      moved = false;
-    } else if (scrolled.value || pdfBook || turnAnim.value === "无动画") {
-      moveFrame(0);
-      moved = await jumpPage(dir);
-    } else if (turnAnim.value === "淡入淡出" || crossesSection(dir)) {
-      moveFrame(0);
-      moved = await fadeTurn(dir);
-    } else {
-      const size = pageSize();
-      const rest = Math.max(0.3, 1 - Math.abs(from) / size);
-      moveFrame(-dir * size, Math.round(240 * rest));
-      await wait(Math.round(240 * rest));
-      // 同一帧里换页并去掉位移：iframe 回到原位时，阅读器已经滚到了下一页
-      moveFrame(0);
-      void goSide(dir);
-    }
-    // 没翻动但不在首尾（比如章节没加载出来）时不能说成到头了
-    if (!moved && atEdge(dir)) toast(dir > 0 ? "已经是最后一页" : "已经是第一页");
+    moved = await jumpPage(dir);
+    if (moved) await settleTurn(crossed);
   } finally {
-    moveFrame(0);
-    fadeHost(1, 0);
-    turning = false;
+    if (animated) await reveal(moved);
+    else thawFoot();
+  }
+  // 没翻动但不在首尾（比如章节没加载出来）时不能说成到头了
+  if (!moved && atEdge(dir)) edgeToast(dir);
+}
+
+/** 点两侧翻页。这一下还没翻完时再点直接丢掉，松手后不会再慢慢补翻 */
+function turn(dir: 1 | -1) {
+  if (!view || queuedTurns > 0 || nativeAnimating || nativeTurns > 0) return;
+  enqueue(() => runTurn(dir));
+}
+
+/** 滑动翻页：滑一次就要翻一页，正忙也排进去，不能并成一次 */
+function queueSwipe(dir: 1 | -1) {
+  if (!view) return;
+  enqueue(() => runTurn(dir));
+}
+
+/**
+ * 原生接管的滑动：jump 是翻过去，back 是松手时没翻过去、翻回原来那页，edge 是往到头的方向滑，done 是动画结束。
+ * turn 是滑动时原生正忙没能跟手，松手后仍要补翻这一页
+ */
+function onNativeTurn(kind: string, dir: number) {
+  if (kind === "done") {
+    nativeAnimating = false;
+    thawFoot();
+    return schedulePrefetch(120);
+  }
+  const d: 1 | -1 = dir < 0 ? -1 : 1;
+  if (kind === "edge") return edgeToast(d);
+  if (kind === "turn") return queueSwipe(d);
+  nativeAnimating = true;
+  const target: 1 | -1 = kind === "back" ? (d > 0 ? -1 : 1) : d;
+  enqueueNative(async () => {
+    clearPick();
+    unpeek();
+    const crossed = crossesSection(target);
+    freezeFoot();
+    let moved = false;
+    try {
+      moved = await jumpPage(target);
+      if (moved) await settleTurn(crossed);
+    } finally {
+      await reveal(moved);
+    }
+  });
+}
+
+type TurnWindow = Window & {
+  __sparkTurn?: (kind: string, dir: number) => void;
+  __sparkPeek?: (dir: number) => boolean;
+  __sparkUnpeek?: () => void;
+};
+
+/** 菜单、面板、选字都收起来的时候才能滑动翻页 */
+const swipeOn = computed(
+  () =>
+    ready.value &&
+    !error.value &&
+    !pdfBook &&
+    !scrolled.value &&
+    !chrome.value &&
+    !sheet.value &&
+    !pick.value &&
+    !selecting.value &&
+    !editing.value &&
+    !editingSummary.value &&
+    !currentOverlay.value,
+);
+
+/** 页脚的高度：翻页截图不盖住页脚，页脚在网页里直接跟着换页变 */
+let footHeight = 0;
+function measureFoot(): number {
+  const h = document.querySelector(".ebook-foot")?.getBoundingClientRect().height ?? 0;
+  if (h > 0) footHeight = Math.ceil(h);
+  return footHeight;
+}
+
+let sentConfig = "";
+function syncTurnConfig() {
+  if (!nativeTurn) return;
+  const o = { enabled: swipeOn.value, anim: ANIM_CODE[turnAnim.value], canPrev: !atStart.value, canNext: !atEnd.value, footer: measureFoot() };
+  const key = JSON.stringify(o);
+  if (key === sentConfig) return;
+  sentConfig = key;
+  void mobileApi.pageTurnConfig(o).catch((e) => console.warn("翻页设置失败", e));
+}
+
+/**
+ * 书页停稳一会儿后，先在后台排好前后两章，再让原生把前一页、后一页截好。
+ * 翻页时直接用截好的图，手指一动页面就跟着走，新页也不会先空一下
+ */
+let prefetchTimer = 0;
+function schedulePrefetch(delay = 300) {
+  clearTimeout(prefetchTimer);
+  if (!nativeTurn || pdfBook || scrolled.value) return;
+  prefetchTimer = window.setTimeout(async () => {
+    const busy = () => queuedTurns > 0 || nativeTurns > 0 || footFrozen || !swipeOn.value;
+    if (busy()) return;
+    const at = currentCfi.value;
+    const r = view?.renderer;
+    await Promise.race([Promise.all([r?.preload?.(1), r?.preload?.(-1)]), wait(3000)]).catch(() => {});
+    if (busy() || at !== currentCfi.value) return;
+    void mobileApi.pageTurnPrefetch().catch((e) => console.warn("预截前后页失败", e));
+  }, delay);
+}
+
+async function startNativeTurn() {
+  (window as TurnWindow).__sparkTurn = onNativeTurn;
+  (window as TurnWindow).__sparkPeek = (dir: number) => view?.renderer?.peek?.(dir) ?? false;
+  (window as TurnWindow).__sparkUnpeek = unpeek;
+  try {
+    await mobileApi.pageTurnConfig({ enabled: false, anim: ANIM_CODE[turnAnim.value], canPrev: true, canNext: true });
+    nativeTurn = true;
+    syncTurnConfig();
+  } catch (e) {
+    console.warn("安卓翻页动画不可用，直接换页", e);
   }
 }
+
+function stopNativeTurn() {
+  clearTimeout(prefetchTimer);
+  nativeAnimating = false;
+  unpeek();
+  delete (window as TurnWindow).__sparkTurn;
+  delete (window as TurnWindow).__sparkPeek;
+  delete (window as TurnWindow).__sparkUnpeek;
+  if (nativeTurn) void mobileApi.pageTurnStop().catch((e) => console.warn("收起翻页动画失败", e));
+  nativeTurn = false;
+}
+
+watch([swipeOn, turnAnim, atStart, atEnd], syncTurnConfig);
+// 菜单、面板收起后画面回到书页，截好的前后页可能还能用，不能用的话重新截
+watch([swipeOn, turnAnim], () => schedulePrefetch());
 
 function hasSelection(doc: Document) {
   const sel = doc.getSelection();
   return !!sel && !sel.isCollapsed;
 }
 
-/** 拦在阅读器前面接管左右滑动；上下滚动模式和 PDF 交给阅读器自己 */
+/** 告诉原生这一页正在选字。要在下一次触摸之前设好，拖选区换行才不会被当成翻页 */
+function reportSelecting(on: boolean) {
+  const bridge = (window as unknown as { SparkSelecting?: { set: (v: boolean) => void } }).SparkSelecting;
+  try {
+    bridge?.set(on);
+  } catch {
+    /* 不在安卓里就没有这个接口 */
+  }
+}
+
+/**
+ * 阅读器自带的拖动翻页不用（它一帧帧改滚动位置，会和这里的翻页打架），在它之前把触摸拦下。
+ * 原生接管滑动时这里只拦不管；不在安卓上时按松手的位置判断是不是左右滑。上下滚动和 PDF 交给阅读器自己。
+ */
 function watchSwipe(doc: Document) {
-  const opts = { capture: true, passive: false } as const;
+  const opts = { capture: true, passive: true } as const;
   doc.addEventListener("touchstart", (e: TouchEvent) => {
     if (scrolled.value || pdfBook) return;
     e.stopPropagation();
-    if (e.touches.length > 1 || turning) {
-      gesture = null;
-      return;
-    }
     const t = e.touches[0];
-    gesture = { x: t.screenX, y: t.screenY, t: e.timeStamp, dx: 0, decided: false, horizontal: false };
+    gesture = nativeTurn || e.touches.length > 1 ? null : { x: t.screenX, y: t.screenY };
   }, opts);
   doc.addEventListener("touchmove", (e: TouchEvent) => {
     if (scrolled.value || pdfBook) return;
     e.stopPropagation();
-    const g = gesture;
-    if (!g) return;
-    const t = e.touches[0];
-    const dx = t.screenX - g.x;
-    const dy = t.screenY - g.y;
-    if (!g.decided) {
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-      g.decided = true;
-      g.horizontal = Math.abs(dx) > Math.abs(dy) && !hasSelection(doc);
-      if (g.horizontal) clearPick();
-    }
-    if (!g.horizontal) return;
-    e.preventDefault();
-    g.dx = dx;
-    // 只有平移跟着手指走；跨章时下一页还没排版，拖动时只稍微动一点表示有反应
-    if (turnAnim.value === "平移") moveFrame(crossesSection(dx < 0 ? 1 : -1) ? dx * 0.25 : dx);
   }, opts);
   const end = (e: TouchEvent) => {
     if (scrolled.value || pdfBook) return;
     e.stopPropagation();
     const g = gesture;
     gesture = null;
-    if (!g?.horizontal) return;
-    const speed = Math.abs(g.dx) / Math.max(1, e.timeStamp - g.t);
-    if (Math.abs(g.dx) > pageSize() * 0.18 || (speed > 0.35 && Math.abs(g.dx) > 24)) {
-      const dir = g.dx < 0 ? 1 : -1;
-      void turn(dir, crossesSection(dir) ? 0 : g.dx);
-    } else if (turnAnim.value === "平移") {
-      moveFrame(0, 180);
-    }
+    if (!g || e.type === "touchcancel" || hasSelection(doc)) return;
+    const t = e.changedTouches[0];
+    const dx = t.screenX - g.x;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(t.screenY - g.y) * 1.5) queueSwipe(dx < 0 ? 1 : -1);
   };
   doc.addEventListener("touchend", end, opts);
   doc.addEventListener("touchcancel", end, opts);
 }
 function clearPick() {
   pick.value = null;
+  reportSelecting(false);
   try {
     activeDoc?.getSelection()?.removeAllRanges();
     view?.deselect?.();
@@ -404,10 +639,118 @@ function clearPick() {
   }
 }
 
+/** 当前这一页在书页 iframe 里的可见范围。下一页的字排在旁边，手指贴边时会被选进去 */
+function pageBox(doc: Document): { left: number; right: number; top: number; bottom: number } | null {
+  const frame = doc.defaultView?.frameElement as HTMLElement | null;
+  if (!frame) return null;
+  const frameRect = frame.getBoundingClientRect();
+  let clip: HTMLElement | null = frame.parentElement;
+  let clipRect = frameRect;
+  while (clip) {
+    const style = getComputedStyle(clip);
+    const clips = style.overflowX === "hidden" || style.overflowX === "clip" || style.overflow === "hidden";
+    const rect = clip.getBoundingClientRect();
+    if (clips && rect.width > 0 && rect.width < frameRect.width - 1) {
+      clipRect = rect;
+      break;
+    }
+    const root = clip.getRootNode();
+    clip = clip.parentElement ?? (root instanceof ShadowRoot ? (root.host as HTMLElement) : null);
+  }
+  const left = Math.max(clipRect.left, frameRect.left) - frameRect.left;
+  const right = Math.min(clipRect.right, frameRect.right) - frameRect.left;
+  const top = Math.max(clipRect.top, frameRect.top) - frameRect.top;
+  const bottom = Math.min(clipRect.bottom, frameRect.bottom) - frameRect.top;
+  if (right - left < 20) return null;
+  return { left, right, top, bottom };
+}
+
+function rangeOnPage(range: Range, box: { left: number; right: number; top: number; bottom: number }): boolean {
+  const rects = range.getClientRects();
+  for (const r of rects) {
+    if (r.width < 0.5 || r.height < 0.5) continue;
+    // 整块落在这一页左边或右边，就是上一页或下一页的字
+    if (r.left >= box.right - 1 || r.right <= box.left + 1) return false;
+  }
+  return true;
+}
+
+/** 选区伸进了旁边那一页时，把末尾收回来，收不回来就用上一次还在这一页里的选区 */
+function shrinkOntoPage(range: Range, box: { left: number; right: number; top: number; bottom: number }, backward: boolean): Range | null {
+  const next = range.cloneRange();
+  for (let guard = 0; guard < 24 && !rangeOnPage(next, box); guard++) {
+    if (backward) {
+      const node = next.startContainer;
+      if (node.nodeType === Node.TEXT_NODE && next.startOffset < (node.textContent?.length ?? 0)) {
+        let lo = next.startOffset;
+        let hi = node.textContent?.length ?? lo;
+        while (lo < hi) {
+          const mid = Math.ceil((lo + hi) / 2);
+          next.setStart(node, mid);
+          if (rangeOnPage(next, box)) hi = mid - 1;
+          else lo = mid;
+        }
+        next.setStart(node, Math.min(lo + 1, node.textContent?.length ?? lo));
+      } else {
+        next.setStart(node, node.nodeType === Node.TEXT_NODE ? (node.textContent?.length ?? 0) : next.startOffset);
+        if (next.collapsed) return null;
+      }
+    } else if (next.endContainer.nodeType === Node.TEXT_NODE && next.endOffset > 0) {
+      const node = next.endContainer;
+      let lo = 0;
+      let hi = next.endOffset;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        next.setEnd(node, mid);
+        if (rangeOnPage(next, box)) lo = mid;
+        else hi = mid - 1;
+      }
+      next.setEnd(node, lo);
+    } else {
+      next.setEnd(next.endContainer, 0);
+    }
+    if (next.collapsed) return null;
+    if (rangeOnPage(next, box)) return next;
+  }
+  return rangeOnPage(next, box) && !next.collapsed ? next : null;
+}
+
 /** 选字：用 selectionchange 跟着把手更新，菜单放在选区上方，太靠上时放到下方 */
 let selTimer = 0;
+let clampingSel = false;
+let keptSel: Range | null = null;
 function watchSelection(doc: Document, index: number) {
   doc.addEventListener("selectionchange", () => {
+    if (clampingSel) return;
+    const sel = doc.getSelection();
+    const on = !!sel && !sel.isCollapsed;
+    selecting.value = on;
+    reportSelecting(on);
+    if (sel && !sel.isCollapsed && sel.rangeCount) {
+      const box = pageBox(doc);
+      const range = sel.getRangeAt(0);
+      if (box && !rangeOnPage(range, box)) {
+        const sameNode = sel.anchorNode === sel.focusNode;
+        const backward =
+          (sameNode && sel.anchorOffset > sel.focusOffset) ||
+          (!sameNode &&
+            !!sel.focusNode &&
+            !!sel.anchorNode &&
+            (sel.focusNode.compareDocumentPosition(sel.anchorNode) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+        const next = keptSel?.cloneRange() ?? shrinkOntoPage(range, box, backward);
+        if (next && !next.collapsed) {
+          clampingSel = true;
+          sel.removeAllRanges();
+          sel.addRange(next);
+          clampingSel = false;
+          keptSel = next.cloneRange();
+        }
+      } else {
+        keptSel = range.cloneRange();
+      }
+    } else {
+      keptSel = null;
+    }
     clearTimeout(selTimer);
     selTimer = window.setTimeout(() => captureSelection(doc, index), 220);
   });
@@ -485,6 +828,8 @@ onMounted(async () => {
   } catch { /* 设置坏了就用默认值 */ }
   document.addEventListener("visibilitychange", onHide);
   void mobileApi.selectionMenu(true).catch(() => {});
+  void startNativeTurn();
+  lockZoom();
   syncPageColor();
   const el = host.value;
   if (!el) return;
@@ -500,6 +845,9 @@ onMounted(async () => {
     node.style.cssText = "display:block;height:100%;width:100%";
     el.append(node);
     view = node;
+    // 书页 iframe 外面（页边、跨章时短暂停留的空白页）的点按也一样翻页、呼出菜单，连点时不会丢掉一下
+    node.addEventListener("pointerdown", onPointerDown);
+    node.addEventListener("pointerup", (ev) => onPointerUp(ev, document));
     // 先登记 load，第一页加载出来时就能接上点按和选字
     view.addEventListener("load", ((e: Event) => {
       const detail = (e as CustomEvent<{ doc: Document; index: number }>).detail;
@@ -550,9 +898,16 @@ onMounted(async () => {
       if (chapter.value && snippet.startsWith(chapter.value)) snippet = snippet.slice(chapter.value.length).trim();
       if (snippet) excerpt.value = snippet.slice(0, 42);
       if (pick.value && !annos.value.some((a) => a.cfi === pick.value?.cfi)) pick.value = null;
-      const waiting = relocateWaiters;
-      relocateWaiters = [];
-      for (const done of waiting) done();
+      atStart.value = atEdge(-1);
+      atEnd.value = atEdge(1);
+      if (!footFrozen) snapshotFoot();
+      else if (!onBlankPage()) showFoot();
+      if (!onBlankPage()) {
+        const waiting = relocateWaiters;
+        relocateWaiters = [];
+        for (const done of waiting) done();
+      }
+      schedulePrefetch();
       scheduleSave({ cfi: d.cfi ?? "", fraction: fraction.value, updatedMs: Date.now() });
     }) as EventListener);
     applyLayout();
@@ -596,6 +951,9 @@ onBeforeUnmount(() => {
   removeBack();
   document.removeEventListener("visibilitychange", onHide);
   void mobileApi.selectionMenu(false).catch(() => {});
+  stopNativeTurn();
+  thawFoot();
+  unlockZoom();
   restorePageColor();
   void flush();
   view?.close();
@@ -703,6 +1061,7 @@ async function paint() {
     }
   }
   missing.value = lost;
+  schedulePrefetch();
 }
 
 async function noteRelOf(): Promise<string> {
@@ -1022,7 +1381,7 @@ function dateLabel(iso: string) {
     <div ref="host" class="ebook-view" :class="{ hidden: !ready }"></div>
     <div v-if="!ready && !error" class="ebook-loading">正在打开…</div>
     <div v-if="error" class="m-empty">打不开这本书：{{ error }}</div>
-    <div v-if="marked && !chrome" class="ebook-ribbon" aria-hidden="true"></div>
+    <div v-if="shownRibbon && !chrome" class="ebook-ribbon" aria-hidden="true"></div>
 
     <Transition name="ebook-top">
       <div v-if="chrome" class="ebook-top">
@@ -1063,7 +1422,7 @@ function dateLabel(iso: string) {
       </div>
     </Transition>
 
-    <div v-if="!chrome" class="ebook-foot"><span>{{ chapter }}</span><span>{{ Math.round(fraction * 100) }}%</span></div>
+    <div v-if="!chrome" class="ebook-foot"><span>{{ shownChapter }}</span><span>{{ shownPercent }}%</span></div>
 
     <div v-if="pick" class="sel-menu" :class="{ below: pick.below }" :style="{ top: pick.top + 'px', left: pick.left + 'px' }">
       <template v-if="pickedAnno">
@@ -1174,7 +1533,7 @@ function dateLabel(iso: string) {
           <template v-if="flow === '左右翻页' && !pdfBook">
             <div class="seglabel">翻页动画</div>
             <div class="seg"><button v-for="n in TURN_ANIMS" :key="n" :class="{ on: turnAnim === n }" @click="turnAnim = n">{{ n }}</button></div>
-            <p class="ghint seg-hint">点屏幕两侧或左右滑动都能翻页</p>
+            <p class="ghint seg-hint">点屏幕两侧或左右滑动都能翻页。覆盖是旧页滑走，或上一页从左边盖上来</p>
           </template>
           <div class="seglabel">字体</div>
           <div class="seg"><button v-for="n in (['书籍自带', '宋体', '楷体'] as const)" :key="n" :class="{ on: font === n }" @click="font = n">{{ n }}</button></div>

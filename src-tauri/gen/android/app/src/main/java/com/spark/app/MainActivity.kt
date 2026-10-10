@@ -5,7 +5,9 @@ import android.os.Bundle
 import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
+import android.view.MotionEvent
 import android.view.View
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
@@ -13,6 +15,19 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
   }
+
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    PageTurn.attach(this, webView)
+  }
+
+  override fun onDestroy() {
+    PageTurn.stop()
+    super.onDestroy()
+  }
+
+  /** 阅读页的左右滑动翻页要在 WebView 之前拿到触摸（见 PageTurn） */
+  override fun dispatchTouchEvent(ev: MotionEvent): Boolean = PageTurn.dispatch(ev) { super.dispatchTouchEvent(it) }
 
   /*
    * 阅读页长按选字时，系统的复制、分享工具条和 App 自己的划线菜单会叠在一起。

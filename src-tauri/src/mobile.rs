@@ -546,6 +546,31 @@ pub mod commands {
         blocking(move || crate::secret_android::set_selection_menu(hidden)).await
     }
 
+    #[tauri::command]
+    pub async fn mobile_page_turn_config(enabled: bool, anim: String, can_prev: bool, can_next: bool, footer: Option<f64>) -> Result<(), String> {
+        blocking(move || crate::secret_android::page_turn_config(enabled, &anim, can_prev, can_next, footer.unwrap_or(0.0))).await
+    }
+
+    #[tauri::command]
+    pub async fn mobile_page_turn_start(dir: i32) -> Result<bool, String> {
+        blocking(move || crate::secret_android::page_turn_start(dir)).await
+    }
+
+    #[tauri::command]
+    pub async fn mobile_page_turn_ready(moved: bool) -> Result<(), String> {
+        blocking(move || crate::secret_android::page_turn_ready(moved)).await
+    }
+
+    #[tauri::command]
+    pub async fn mobile_page_turn_prefetch() -> Result<(), String> {
+        blocking(crate::secret_android::page_turn_prefetch).await
+    }
+
+    #[tauri::command]
+    pub async fn mobile_page_turn_stop() -> Result<(), String> {
+        blocking(crate::secret_android::page_turn_stop).await
+    }
+
     /// 首页连按两次返回时回到桌面（返回键交给前端处理后，系统不会自己退出）
     #[tauri::command]
     pub async fn mobile_move_to_back() -> Result<(), String> {

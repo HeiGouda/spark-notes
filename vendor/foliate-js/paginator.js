@@ -334,6 +334,8 @@ class View {
             'max-height': 'none',
             'max-width': 'none',
             'margin': '0',
+            // 书自己的左右内边距会叠在页边距上，而且常常右边更大
+            'padding': '0',
         })
         this.setImageSize()
         this.expand()
@@ -507,6 +509,8 @@ export class Paginator extends HTMLElement {
             grid-column: 2 / 5;
             grid-row: 2;
             overflow: hidden;
+            /* hidden views are placed in its scrolled content and clipped by it */
+            position: relative;
         }
         :host([flow="scrolled"]) #container {
             grid-column: 1 / -1;
@@ -564,15 +568,10 @@ export class Paginator extends HTMLElement {
             }
         }, 250))
 
-        const opts = { passive: false }
-        this.addEventListener('touchstart', this.#onTouchStart.bind(this), opts)
-        this.addEventListener('touchmove', this.#onTouchMove.bind(this), opts)
-        this.addEventListener('touchend', this.#onTouchEnd.bind(this))
-        this.addEventListener('load', ({ detail: { doc } }) => {
-            doc.addEventListener('touchstart', this.#onTouchStart.bind(this), opts)
-            doc.addEventListener('touchmove', this.#onTouchMove.bind(this), opts)
-            doc.addEventListener('touchend', this.#onTouchEnd.bind(this))
-        })
+        // Spark: no drag-to-turn here; the app turns pages itself. Its `snap`
+        // also loads the adjacent section without taking the navigation lock:
+        // a tap on the blank page shown while the next section loads replaced
+        // that load, and the lock was never released again.
 
         this.addEventListener('relocate', ({ detail }) => {
             if (detail.reason === 'selection') setSelectionTo(this.#anchor, 0)
@@ -583,19 +582,7 @@ export class Paginator extends HTMLElement {
                 else setSelectionTo(this.#anchor, -1)
             }
         })
-        const checkPointerSelection = debounce((range, sel) => {
-            if (!sel.rangeCount) return
-            const selRange = sel.getRangeAt(0)
-            const backward = selectionIsBackward(sel)
-            if (backward && selRange.compareBoundaryPoints(Range.START_TO_START, range) < 0)
-                this.prev()
-            else if (!backward && selRange.compareBoundaryPoints(Range.END_TO_END, range) > 0)
-                this.next()
-        }, 700)
         this.addEventListener('load', ({ detail: { doc } }) => {
-            let isPointerSelecting = false
-            doc.addEventListener('pointerdown', () => isPointerSelecting = true)
-            doc.addEventListener('pointerup', () => isPointerSelecting = false)
             let isKeyboardSelecting = false
             doc.addEventListener('keydown', () => isKeyboardSelecting = true)
             doc.addEventListener('keyup', () => isKeyboardSelecting = false)
@@ -605,9 +592,9 @@ export class Paginator extends HTMLElement {
                 if (!range) return
                 const sel = doc.getSelection()
                 if (!sel.rangeCount) return
-                if (isPointerSelecting && sel.type === 'Range')
-                    checkPointerSelection(range, sel)
-                else if (isKeyboardSelecting) {
+                // Spark: 手指还按着选字时不翻页。分栏里换行会把选区伸进下一页，
+                // 原来这里会调用 next()/prev()，选字换行就被当成翻页。
+                if (isKeyboardSelecting) {
                     const selRange = sel.getRangeAt(0).cloneRange()
                     const backward = selectionIsBackward(sel)
                     if (!backward) selRange.collapse()
@@ -663,17 +650,168 @@ export class Paginator extends HTMLElement {
                     `break-${x}: ${y ?? ''}column`))
         })
     }
-    #createView() {
-        if (this.#view) {
-            this.#view.destroy()
-            this.#container.removeChild(this.#view.element)
-        }
-        this.#view = new View({
+    // Spark: a view is created next to the current one and only replaces it
+    // once its section is loaded, laid out and its fonts are ready. Replacing
+    // the view up front left a blank page (and a reflow when fonts arrived)
+    // between two sections, which showed up as a flicker.
+    #pendingView
+    #hiddenView() {
+        const view = new View({
             container: this,
-            onExpand: () => this.#scrollToAnchor(this.#anchor),
+            // a view that is not on screen yet must not move the current one
+            onExpand: () => { if (view === this.#view) this.#scrollToAnchor(this.#anchor) },
         })
-        this.#container.append(this.#view.element)
-        return this.#view
+        // keep it out of the visible flex flow so the current page does not
+        // resize or scroll while the next section is loading
+        const el = view.element
+        el.style.position = 'absolute'
+        el.style.left = '0'
+        el.style.top = '0'
+        el.style.visibility = 'hidden'
+        el.style.pointerEvents = 'none'
+        this.#container.append(el)
+        return view
+    }
+    #createView() {
+        this.#discardPendingView()
+        const view = this.#hiddenView()
+        this.#pendingView = view
+        return view
+    }
+    #prepareDoc(doc) {
+        // language and direction change the layout, so they are set before the
+        // first layout, also for sections that are only preloaded
+        this.dispatchEvent(new CustomEvent('prepare', { detail: { doc } }))
+        if (!doc.head) return
+        const $styleBefore = doc.createElement('style')
+        doc.head.prepend($styleBefore)
+        const $style = doc.createElement('style')
+        doc.head.append($style)
+        this.#styleMap.set(doc, [$styleBefore, $style])
+        this.#applyStyles(doc)
+    }
+    // Spark: the sections before and after the current one are loaded and laid
+    // out ahead of time in hidden views. Turning into one of them then swaps
+    // views at once instead of waiting for the load, and `peek` can show its
+    // first or last page so the app can capture it before the turn.
+    #spares = new Map()
+    preload(dir) {
+        if (this.scrolled || !this.#view) return Promise.resolve(false)
+        const neighbours = [this.#adjacentIndex(-1), this.#adjacentIndex(1)]
+        for (const i of [...this.#spares.keys()])
+            if (!neighbours.includes(i)) this.#dropSpare(i)
+        const index = this.#adjacentIndex(dir)
+        if (index == null) return Promise.resolve(false)
+        const existing = this.#spares.get(index)
+        if (existing) return existing.ready
+        const view = this.#hiddenView()
+        const spare = { view, loaded: false, done: false }
+        this.#spares.set(index, spare)
+        spare.ready = (async () => {
+            try {
+                const src = await this.sections[index].load()
+                if (this.#spares.get(index) !== spare) {
+                    this.sections[index].unload?.()
+                    return false
+                }
+                spare.loaded = true
+                await view.load(src, doc => this.#prepareDoc(doc), this.#beforeRender.bind(this))
+                await Promise.race([view.document?.fonts?.ready, wait(1500)])
+                spare.done = this.#spares.get(index) === spare
+                return spare.done
+            } catch (e) {
+                console.warn(e)
+                return false
+            }
+        })()
+        return spare.ready
+    }
+    #dropSpare(index) {
+        const spare = this.#spares.get(index)
+        if (!spare) return
+        this.#spares.delete(index)
+        if (this.#peeked?.spare === spare) this.unpeek()
+        spare.view.destroy()
+        spare.view.element.remove()
+        if (spare.loaded) this.sections[index].unload?.()
+    }
+    #dropSpares() {
+        for (const i of [...this.#spares.keys()]) this.#dropSpare(i)
+    }
+    // returns the laid out view of a preloaded section and forgets it
+    #takeSpare(index) {
+        const spare = this.#spares.get(index)
+        if (!spare?.done) return null
+        this.#spares.delete(index)
+        // the navigation loaded the section once more; the preload's reference
+        // is not needed any longer
+        this.sections[index].unload?.()
+        return spare.view
+    }
+    #peeked = null
+    // Spark: shows the page before (-1) or after (1) the current one without
+    // navigating, so the app can capture it; `unpeek` brings the current page
+    // back. Returns false when that page is not at hand (book edge, the next
+    // section is not preloaded yet, vertical or right-to-left books).
+    peek(dir) {
+        this.unpeek()
+        if (this.scrolled || this.#vertical || this.#rtl || !this.#view) return false
+        const { page, pages, size } = this
+        const target = page + dir
+        const element = this.#container
+        if (target >= 1 && target <= pages - 2) {
+            this.#peeked = { scroll: element.scrollLeft }
+            element.scrollLeft = target * size
+            return true
+        }
+        const index = this.#adjacentIndex(dir)
+        const spare = index == null ? null : this.#spares.get(index)
+        if (!spare?.done) return false
+        const el = spare.view.element
+        const sparePages = Math.round(el.getBoundingClientRect().width / size)
+        if (sparePages < 3) return false
+        const sparePage = dir > 0 ? 1 : sparePages - 2
+        el.style.left = `${element.scrollLeft - sparePage * size}px`
+        el.style.visibility = 'visible'
+        this.#view.element.style.visibility = 'hidden'
+        this.#peeked = { spare }
+        return true
+    }
+    unpeek() {
+        const peeked = this.#peeked
+        if (!peeked) return
+        this.#peeked = null
+        if (peeked.spare) {
+            const el = peeked.spare.view.element
+            el.style.visibility = 'hidden'
+            el.style.left = '0'
+            if (this.#view) this.#view.element.style.visibility = ''
+        } else this.#container.scrollLeft = peeked.scroll
+    }
+    #discardPendingView() {
+        const view = this.#pendingView
+        if (!view) return
+        this.#pendingView = null
+        view.destroy()
+        view.element.remove()
+    }
+    // returns false if `view` was dropped in favour of a later navigation
+    #swapView(view) {
+        if (view !== this.#pendingView) return false
+        this.#pendingView = null
+        const el = view.element
+        el.style.position = ''
+        el.style.left = ''
+        el.style.top = ''
+        el.style.visibility = ''
+        el.style.pointerEvents = ''
+        const old = this.#view
+        if (old) {
+            old.destroy()
+            this.#container.removeChild(old.element)
+        }
+        this.#view = view
+        return true
     }
     #beforeRender({ vertical, rtl, background }) {
         this.#vertical = vertical
@@ -753,6 +891,9 @@ export class Paginator extends HTMLElement {
     }
     render() {
         if (!this.#view) return
+        // preloaded sections were laid out for the old size or flow
+        this.unpeek()
+        this.#dropSpares()
         this.#view.render(this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
@@ -970,38 +1111,50 @@ export class Paginator extends HTMLElement {
     }
     async #display(promise) {
         const { index, src, anchor, onLoad, select } = await promise
-        this.#index = index
         const hasFocus = this.#view?.document?.hasFocus()
         if (src) {
-            const view = this.#createView()
-            const afterLoad = doc => {
-                if (doc.head) {
-                    const $styleBefore = doc.createElement('style')
-                    doc.head.prepend($styleBefore)
-                    const $style = doc.createElement('style')
-                    doc.head.append($style)
-                    this.#styleMap.set(doc, [$styleBefore, $style])
+            let view = this.#takeSpare(index)
+            if (view) {
+                this.#discardPendingView()
+                this.#pendingView = view
+                onLoad?.({ doc: view.document, index })
+            } else {
+                view = this.#createView()
+                const afterLoad = doc => {
+                    // the new view is not `this.#view` yet, so `setStyles` in
+                    // `onLoad` would only reach the old one
+                    this.#prepareDoc(doc)
+                    onLoad?.({ doc, index })
                 }
-                onLoad?.({ doc, index })
+                const beforeRender = this.#beforeRender.bind(this)
+                await view.load(src, afterLoad, beforeRender)
+                // laying the page out starts loading its fonts; show it once they
+                // are ready (but never wait long) so the text does not pop in
+                await Promise.race([view.document?.fonts?.ready, wait(1000)])
             }
-            const beforeRender = this.#beforeRender.bind(this)
-            await view.load(src, afterLoad, beforeRender)
+            // `#index` follows the visible view, so it changes together with it
+            if (!this.#swapView(view)) return
+            this.#index = index
             this.dispatchEvent(new CustomEvent('create-overlayer', {
                 detail: {
                     doc: view.document, index,
                     attach: overlayer => view.overlayer = overlayer,
                 },
             }))
-            this.#view = view
-        }
+        } else this.#index = index
         await this.scrollToAnchor((typeof anchor === 'function'
             ? anchor(this.#view.document) : anchor) ?? 0, select)
+        // fonts finishing after the swap can expand the page once more
+        if (src && this.#view?.document?.fonts) {
+            await Promise.race([this.#view.document.fonts.ready, wait(400)])
+        }
         if (hasFocus) this.focusView()
     }
     #canGoToIndex(index) {
         return index >= 0 && index <= this.sections.length - 1
     }
     async #goTo({ index, anchor, select}) {
+        this.unpeek()
         if (index === this.#index) await this.#display({ index, anchor, select })
         else {
             const oldIndex = this.#index
@@ -1060,6 +1213,7 @@ export class Paginator extends HTMLElement {
     async #turnPage(dir, distance) {
         if (this.#locked) return
         this.#locked = true
+        this.unpeek()
         const prev = dir === -1
         const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
         if (shouldGo) await this.#goTo({
@@ -1097,16 +1251,25 @@ export class Paginator extends HTMLElement {
         }]
         return []
     }
-    setStyles(styles) {
-        this.#styles = styles
-        const $$styles = this.#styleMap.get(this.#view?.document)
-        if (!$$styles) return
+    #applyStyles(doc) {
+        const $$styles = this.#styleMap.get(doc)
+        if (!$$styles) return false
+        const styles = this.#styles
         const [$beforeStyle, $style] = $$styles
         if (Array.isArray(styles)) {
             const [beforeStyle, style] = styles
             $beforeStyle.textContent = beforeStyle
             $style.textContent = style
         } else $style.textContent = styles
+        return true
+    }
+    setStyles(styles) {
+        // preloaded sections were laid out with the old styles
+        if (styles !== this.#styles) this.#dropSpares()
+        this.#styles = styles
+        // a section that is still loading gets the new styles too
+        if (this.#pendingView) this.#applyStyles(this.#pendingView.document)
+        if (!this.#applyStyles(this.#view?.document)) return
 
         // NOTE: needs `requestAnimationFrame` in Chromium
         requestAnimationFrame(() =>
@@ -1120,6 +1283,8 @@ export class Paginator extends HTMLElement {
     }
     destroy() {
         this.#observer.unobserve(this)
+        this.#discardPendingView()
+        this.#dropSpares()
         this.#view.destroy()
         this.#view = null
         this.sections[this.#index]?.unload?.()

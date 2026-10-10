@@ -808,6 +808,16 @@ pub fn run() {
             #[cfg(target_os = "android")]
             mobile::commands::mobile_selection_menu,
             #[cfg(target_os = "android")]
+            mobile::commands::mobile_page_turn_config,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_page_turn_start,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_page_turn_ready,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_page_turn_prefetch,
+            #[cfg(target_os = "android")]
+            mobile::commands::mobile_page_turn_stop,
+            #[cfg(target_os = "android")]
             shelf::commands::shelf_list,
             #[cfg(target_os = "android")]
             shelf::commands::shelf_usage,

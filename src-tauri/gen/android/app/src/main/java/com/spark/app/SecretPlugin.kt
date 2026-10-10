@@ -43,6 +43,25 @@ class SelectionMenuArgs {
 }
 
 @InvokeArg
+class PageTurnConfigArgs {
+  var enabled: Boolean = false
+  var anim: String = "slide"
+  var canPrev: Boolean = true
+  var canNext: Boolean = true
+  var footer: Double = 0.0
+}
+
+@InvokeArg
+class PageTurnStartArgs {
+  var dir: Int = 1
+}
+
+@InvokeArg
+class PageTurnReadyArgs {
+  var moved: Boolean = false
+}
+
+@InvokeArg
 class SecretWriteArgs {
   lateinit var account: String
   lateinit var secret: String
@@ -173,6 +192,57 @@ class SecretPlugin(private val activity: Activity) : Plugin(activity) {
     val args = invoke.parseArgs(SelectionMenuArgs::class.java)
     hideSelectionMenu = args.hidden
     invoke.resolve()
+  }
+
+  /** 阅读页翻页动画（见 PageTurn）：滑动翻页开关、动画种类、两头还能不能翻 */
+  @Command
+  fun pageTurnConfig(invoke: Invoke) {
+    val args = invoke.parseArgs(PageTurnConfigArgs::class.java)
+    activity.runOnUiThread {
+      PageTurn.configure(args.enabled, args.anim, args.canPrev, args.canNext, args.footer.toFloat())
+      invoke.resolve()
+    }
+  }
+
+  /** 点两侧翻页：盖上当前画面的截图后返回 started，网页再换页 */
+  @Command
+  fun pageTurnStart(invoke: Invoke) {
+    val args = invoke.parseArgs(PageTurnStartArgs::class.java)
+    activity.runOnUiThread {
+      PageTurn.start(if (args.dir < 0) -1 else 1) { started ->
+        val result = JSObject()
+        result.put("started", started)
+        invoke.resolve(result)
+      }
+    }
+  }
+
+  /** 网页换好页了，开始动画 */
+  @Command
+  fun pageTurnReady(invoke: Invoke) {
+    val args = invoke.parseArgs(PageTurnReadyArgs::class.java)
+    activity.runOnUiThread {
+      PageTurn.ready(args.moved)
+      invoke.resolve()
+    }
+  }
+
+  /** 书页停稳了，趁空闲先截好前后两页 */
+  @Command
+  fun pageTurnPrefetch(invoke: Invoke) {
+    activity.runOnUiThread {
+      PageTurn.prefetch()
+      invoke.resolve()
+    }
+  }
+
+  /** 离开阅读页 */
+  @Command
+  fun pageTurnStop(invoke: Invoke) {
+    activity.runOnUiThread {
+      PageTurn.stop()
+      invoke.resolve()
+    }
   }
 
   /** 首页连按两次返回：和系统默认一样把应用退到后台，回到桌面 */

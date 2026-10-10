@@ -73,6 +73,15 @@ export const mobileApi = {
   systemBars: (light: boolean) => invoke<void>("mobile_system_bars", { light }),
   /** 阅读页打开时隐藏系统的选字工具条 */
   selectionMenu: (hidden: boolean) => invoke<void>("mobile_selection_menu", { hidden }),
+  /** 阅读页翻页动画由安卓原生做：enabled 是能不能滑动翻页，anim 是 slide / cover / fade / none，footer 是页脚高度（翻页截图不盖住它） */
+  pageTurnConfig: (o: { enabled: boolean; anim: PageTurnAnim; canPrev: boolean; canNext: boolean; footer?: number }) => invoke<void>("mobile_page_turn_config", o),
+  /** 盖上当前书页的截图；false 表示这次不做动画，直接换页 */
+  pageTurnStart: (dir: 1 | -1) => invoke<boolean>("mobile_page_turn_start", { dir }),
+  /** 书页已经换好（moved 为 false 是没翻动），开始动画 */
+  pageTurnReady: (moved: boolean) => invoke<void>("mobile_page_turn_ready", { moved }),
+  /** 书页停稳了，让原生趁空闲先截好前后两页 */
+  pageTurnPrefetch: () => invoke<void>("mobile_page_turn_prefetch"),
+  pageTurnStop: () => invoke<void>("mobile_page_turn_stop"),
   shelfList: () => invoke<ShelfBook[]>("shelf_list"),
   shelfUsage: () => invoke<ShelfUsage>("shelf_usage"),
   shelfImport: (paths: string[]) => invoke<ShelfBook[]>("shelf_import", { paths }),
@@ -134,6 +143,8 @@ export interface OpenedBook {
   path: string;
   name: string;
 }
+
+export type PageTurnAnim = "slide" | "cover" | "fade" | "none";
 
 export interface ReadPoint {
   cfi: string;

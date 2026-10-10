@@ -67,9 +67,13 @@ export function readerCss(o: { palette: ReaderPalette; size: number; leading: ke
   return [
     o.files && family ? fontFaces(o.files) : "",
     `html, body { background: ${bg} !important; color: ${fg} !important; }`,
+    // 只许单指拖动，不许双指缩放（缩放后翻页和分页的位置都会错）
+    `html { touch-action: pan-x pan-y !important; }`,
     `body { font-size: ${o.size}px !important; line-height: ${LEADING[o.leading]} !important; }`,
     `${text} { line-height: ${LEADING[o.leading]} !important; color: inherit !important; background-color: transparent !important; }`,
     `p, li, blockquote { font-size: 1em !important; }`,
+    // 左对齐时一行放不满的那点空隙全落在右边，右边距就比左边宽。不加 !important，书里用 class 写的居中、右对齐照旧
+    `p, li, blockquote, dd { text-align: justify; }`,
     family ? `body, ${text} { font-family: ${family} !important; }` : "",
     `a:any-link { color: ${accent} !important; }`,
     `::selection { background: ${accent}55; }`,

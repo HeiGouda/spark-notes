@@ -106,6 +106,72 @@ pub fn set_selection_menu(hidden: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PageTurnConfig<'a> {
+    enabled: bool,
+    anim: &'a str,
+    can_prev: bool,
+    can_next: bool,
+    footer: f64,
+}
+
+#[derive(Serialize)]
+struct PageTurnStart {
+    dir: i32,
+}
+
+#[derive(Deserialize)]
+struct PageTurnStarted {
+    started: bool,
+}
+
+#[derive(Serialize)]
+struct PageTurnReady {
+    moved: bool,
+}
+
+/// 阅读页翻页动画的设置：能不能滑动翻页、动画种类（slide / cover / fade / none）、两头还能不能翻，
+/// footer 是页脚的高度（CSS 像素），翻页截图不盖住它
+pub fn page_turn_config(enabled: bool, anim: &str, can_prev: bool, can_next: bool, footer: f64) -> Result<(), String> {
+    handle()?
+        .run_mobile_plugin::<serde_json::Value>("pageTurnConfig", PageTurnConfig { enabled, anim, can_prev, can_next, footer })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// 盖上当前书页的截图；返回 false 表示这次不做动画
+pub fn page_turn_start(dir: i32) -> Result<bool, String> {
+    handle()?
+        .run_mobile_plugin::<PageTurnStarted>("pageTurnStart", PageTurnStart { dir })
+        .map(|r| r.started)
+        .map_err(|e| e.to_string())
+}
+
+/// 书页已经换好，开始翻页动画
+pub fn page_turn_ready(moved: bool) -> Result<(), String> {
+    handle()?
+        .run_mobile_plugin::<serde_json::Value>("pageTurnReady", PageTurnReady { moved })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// 书页停稳了：趁空闲先截好前后两页，翻页时直接用
+pub fn page_turn_prefetch() -> Result<(), String> {
+    handle()?
+        .run_mobile_plugin::<serde_json::Value>("pageTurnPrefetch", ())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// 离开阅读页时收掉翻页截图
+pub fn page_turn_stop() -> Result<(), String> {
+    handle()?
+        .run_mobile_plugin::<serde_json::Value>("pageTurnStop", ())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// 把应用退到后台，回到桌面
 pub fn move_to_back() -> Result<(), String> {
     handle()?

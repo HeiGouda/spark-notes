@@ -259,6 +259,7 @@ export class View extends HTMLElement {
             this.renderer = document.createElement('foliate-paginator')
         }
         this.renderer.setAttribute('exportparts', 'head,foot,filter')
+        this.renderer.addEventListener('prepare', e => this.#setLanguage(e.detail.doc))
         this.renderer.addEventListener('load', e => this.#onLoad(e.detail))
         this.renderer.addEventListener('relocate', e => this.#onRelocate(e.detail))
         this.renderer.addEventListener('create-overlayer', e =>
@@ -336,12 +337,14 @@ export class View extends HTMLElement {
             this.history.replaceState(cfi)
         this.#emit('relocate', this.lastLocation)
     }
-    #onLoad({ doc, index }) {
+    #setLanguage(doc) {
         // set language and dir if not already set
         doc.documentElement.lang ||= this.language.canonical ?? ''
         if (!this.language.isCJK)
             doc.documentElement.dir ||= this.language.direction ?? ''
-
+    }
+    #onLoad({ doc, index }) {
+        this.#setLanguage(doc)
         this.#handleLinks(doc, index)
         this.#cursorAutohider.cloneFor(doc.documentElement)
 

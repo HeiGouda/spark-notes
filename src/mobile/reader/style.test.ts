@@ -12,6 +12,14 @@ describe("电子书排版样式", () => {
     expect(css).toContain("\"Spark Serif\"");
   });
 
+  it("正文两端对齐，左右留白一样宽；不压过书里用 class 写的对齐", () => {
+    expect(readerCss(base)).toContain("p, li, blockquote, dd { text-align: justify; }");
+  });
+
+  it("书页只许单指拖动，不许双指缩放", () => {
+    expect(readerCss(base)).toContain("html { touch-action: pan-x pan-y !important; }");
+  });
+
   it("选了宋体、楷体时带上打包字体的 @font-face", () => {
     const files = { serif: "http://x/serif.woff2", kai: "http://x/kai.woff2" };
     const kai = readerCss({ ...base, font: "楷体", files });

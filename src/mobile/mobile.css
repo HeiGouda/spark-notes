@@ -165,8 +165,8 @@ mark { background: var(--hl); color: inherit; font-weight: 600; border-radius: 2
 .shelf-book .p { font-size: 11px; color: var(--muted); }
 
 /* 电子书：整页用阅读主题的颜色（变量由页面设在 .ebook 上） */
-.ebook { position: relative; overflow: hidden; }
-.ebook-view { position: absolute; inset: 0; will-change: transform; }
+.ebook { position: relative; overflow: hidden; touch-action: pan-x pan-y; }
+.ebook-view { position: absolute; inset: 0; }
 .ebook-view foliate-view { display: block; width: 100%; height: 100%; }
 /* 上下滚动时正文不伸到页脚下面 */
 .ebook.scrolled .ebook-view { bottom: calc(28px + env(safe-area-inset-bottom)); }
