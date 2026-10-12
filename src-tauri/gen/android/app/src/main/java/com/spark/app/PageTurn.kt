@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Choreographer
+import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.PixelCopy
@@ -41,7 +42,7 @@ import kotlin.math.abs
  * 截图盖在 PopupWindow 里，才能在盖着的同时用 PixelCopy 去截下面的 WebView。这个窗口在阅读页里一直开着（没在翻页时
  * 是透明的），每次翻页临时开窗口，窗口还没上屏网页就已经换页了，新页会先闪一下。
  *
- * 跟手：书页停稳后网页调 prefetch，这里盖上当前页的截图（看起来没有变化），让网页把前一页、后一页依次显示出来
+ * 跟手：书页停稳后网页调 prefetch，这里盖上当前页的截图（看起来没有变化），让网页把前两页、后四页依次显示出来
  * （window.__sparkPeek，下一章、上一章的页面网页事先在后台排好），各截一张再换回来。翻页时直接拿这两张图做动画，
  * 手指一动页面就跟着走，新页也一直有字。按下手指时先截一张和预截的当前页比一比，不一样（书页变过）就不用。
  * 没有预截好时退回慢的做法：先盖上，等网页换好页、截到新页再动。
@@ -49,9 +50,11 @@ import kotlin.math.abs
  * 点两侧翻页：网页先调 start，盖好后自己换页，换好后调 ready。
  * 左右滑动：手指横向滑出去时把这次触摸从 WebView 拿过来（给它发 CANCEL）。有预截时松手翻过去才通过
  * window.__sparkTurn('jump', dir) 让网页换页，没翻过去网页根本不用动；没有预截时盖好就 jump，松手没翻过去再用
- * 'back' 换回来。正在翻页时不再跟手，松手仍按这一下补翻一页（'turn'），快滑几次就翻几页。往已经到头的方向滑时只发 'edge'，由网页提示。
+ * 'back' 换回来。正在翻页时不再跟手，松手仍按这一下补翻一页（'turn'）。动画还在播时又翻，立刻打断这一下，
+ * 改播下一次。往已经到头的方向滑时只发 'edge'，由网页提示。
  *
- * 动画每一帧只改两层截图的位移和透明度，不重画整屏的图；翻页途中也不申请新的大图，免得卡顿。
+ * 动画跟屏幕的刷新走，每一帧只改两层截图的位移和透明度。截图放进硬件层，翻页途中不重画、不改裁剪，
+ * 也不申请新的大图，免得把帧率拖下来。
  */
 object PageTurn {
   /**
@@ -96,10 +99,14 @@ object PageTurn {
   /** 慢的做法里截的旧页、新页 */
   private var outgoing: Bitmap? = null
   private var incoming: Bitmap? = null
-  /** 预截的当前页、后一页、前一页 */
+  /** 预截：当前页、往后四页、往回两页。连着翻时直接用这些图，不用等新的截图 */
   private var cacheCur: Bitmap? = null
   private var cacheNext: Bitmap? = null
+  private var cacheNext2: Bitmap? = null
+  private var cacheNext3: Bitmap? = null
+  private var cacheNext4: Bitmap? = null
   private var cachePrev: Bitmap? = null
+  private var cachePrev2: Bitmap? = null
   private var prefetchAbort = false
   /** 只用来和别的图比较、从不显示的截图，反复用 */
   private var scratch: Bitmap? = null
@@ -107,6 +114,17 @@ object PageTurn {
   private val retired = mutableListOf<Bitmap>()
   private var animator: ValueAnimator? = null
   private var catchUp: ValueAnimator? = null
+  /** 翻页动画跟 Choreographer 走，才能吃满屏幕刷新率；ValueAnimator 在部分机型上会被压到更低的帧率 */
+  private var motionToken = 0
+  private var motionFrame: Choreographer.FrameCallback? = null
+  /** 正在翻的这一页还没结束时又要翻：记下方向，这一页走到头就接着播，中间不把截图揭掉 */
+  private var queuedDir = 0
+  /** 下一页的图已经在手里，不用再整屏比对就能接着播 */
+  private var chainTrust = false
+  private var savedModeId = 0
+  private var refreshRaised = false
+  private var popupX = Int.MIN_VALUE
+  private var popupY = Int.MIN_VALUE
   private var progress = 0f
   private var dir = 1
   private var fromDrag = false
@@ -134,8 +152,6 @@ object PageTurn {
   /** 没接管的快速滑动补的那次翻页按它的速度走 */
   private var queuedSpeed = 0f
   private var queuedAt = 0L
-  /** 上一次快速翻页的时间。紧接着再滑就直接换页，不等动画 */
-  private var lastBurst = 0L
   /** 用预截的图翻完，网页换好的页和预截的一样 */
   private var landedSame = false
   private var downCheck = Check.NONE
@@ -165,7 +181,49 @@ object PageTurn {
     this.canPrev = canPrev
     this.canNext = canNext
     if (footer > 0f) this.footer = footer
+    // 菜单、上下滚动时滑动是关的。预截还盖着旧的左右分页，下面的版式一变就会对不上
+    if (!enabled && phase == Phase.PREFETCH) prefetchAbort = true
     if (phase == Phase.IDLE) openWindow()
+    preferHighRefresh()
+  }
+
+  /** 阅读的时候用这块屏幕支持的最高刷新率，翻页动画才能跟上 */
+  private fun preferHighRefresh() {
+    if (refreshRaised) return
+    val act = activity ?: return
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    try {
+      val display: Display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        act.display ?: return
+      } else {
+        @Suppress("DEPRECATION")
+        act.windowManager.defaultDisplay
+      }
+      val current = display.mode
+      val best = display.supportedModes
+        .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+        .maxByOrNull { it.refreshRate } ?: return
+      if (best.modeId == current.modeId || best.refreshRate <= current.refreshRate + 0.5f) return
+      val attrs = act.window.attributes
+      savedModeId = attrs.preferredDisplayModeId
+      attrs.preferredDisplayModeId = best.modeId
+      act.window.attributes = attrs
+      refreshRaised = true
+    } catch (_: RuntimeException) {
+      refreshRaised = false
+    }
+  }
+
+  private fun restoreRefresh() {
+    if (!refreshRaised) return
+    refreshRaised = false
+    val act = activity ?: return
+    try {
+      val attrs = act.window.attributes
+      attrs.preferredDisplayModeId = savedModeId
+      act.window.attributes = attrs
+    } catch (_: RuntimeException) {
+    }
   }
 
   /** 截图的高度：WebView 去掉底下的页脚 */
@@ -176,6 +234,7 @@ object PageTurn {
 
   /** 离开阅读页：收掉截图和窗口，不再接管滑动 */
   fun stop() {
+    restoreRefresh()
     enabled = false
     textSelecting = false
     tracking = false
@@ -201,7 +260,7 @@ object PageTurn {
     cover(dir, false, done)
   }
 
-  /** 书页停稳了：盖上当前页，让网页依次显示前一页、后一页，各截一张，翻页时直接用 */
+  /** 书页停稳了：盖上当前页，让网页依次显示后四页、前两页，各截一张，翻页时直接用 */
   fun prefetch() {
     val w = web ?: return
     if (phase != Phase.IDLE || hijacked || fingerDown || !enabled || anim == "none") return
@@ -219,40 +278,52 @@ object PageTurn {
       val old = cacheCur
       val kept = old != null && !old.isRecycled && old.sameAs(s)
       val needNext = !kept || cacheNext == null
+      val needNext2 = !kept || cacheNext2 == null
+      val needNext3 = !kept || cacheNext3 == null
+      val needNext4 = !kept || cacheNext4 == null
       val needPrev = !kept || cachePrev == null
+      val needPrev2 = !kept || cachePrev2 == null
       if (kept) s.recycle() else dropCache()
-      if (!needNext && !needPrev) return@copyWindow endPrefetch(g)
+      if (!needNext && !needNext2 && !needNext3 && !needNext4 && !needPrev && !needPrev2) return@copyWindow endPrefetch(g)
       val shot = if (kept) old!! else s.also { prepare(it) }
       val l = showLayer(shot, null)
       if (l == null) {
         if (!kept) shot.recycle()
         return@copyWindow endPrefetch(g)
       }
+      val steps = listOf(
+        PeekStep(needNext, 1, 1),
+        PeekStep(needNext2, 1, 2),
+        PeekStep(needNext3, 1, 3),
+        PeekStep(needNext4, 1, 4),
+        // 往后几页换过去时，头一两帧可能还是后一页的画面，不能当成前一页
+        PeekStep(needPrev, -1, 1),
+        PeekStep(needPrev2, -1, 2),
+      )
       afterLayerFrame(l) {
         afterPresented {
           if (g != gen) return@afterPresented
-          peekIf(needNext, 1, shot, null, g) { next ->
-            // 刚换过去的头一两帧可能还是后一页的画面，不能当成前一页
-            peekIf(needPrev, -1, shot, next, g) { prev ->
-              web?.evaluateJavascript("window.__sparkUnpeek&&window.__sparkUnpeek()", null)
-              settleTo(shot, g) { same ->
-                if (g != gen) {
-                  next?.recycle()
-                  prev?.recycle()
-                  return@settleTo
-                }
-                if (same) {
-                  cacheCur = shot
-                  if (next != null) cacheNext = next
-                  if (prev != null) cachePrev = prev
-                } else {
-                  // 截的时候书页变了（比如打开了菜单），这一套不能用
-                  if (kept) dropCache() else retire(shot)
-                  next?.recycle()
-                  prev?.recycle()
-                }
-                endPrefetch(g)
+          peekAll(steps, shot, g) { shots ->
+            web?.evaluateJavascript("window.__sparkUnpeek&&window.__sparkUnpeek()", null)
+            settleTo(shot, g) { same ->
+              if (g != gen) {
+                shots.forEach { it?.recycle() }
+                return@settleTo
               }
+              if (same) {
+                cacheCur = shot
+                shots.getOrNull(0)?.let { cacheNext = it }
+                shots.getOrNull(1)?.let { cacheNext2 = it }
+                shots.getOrNull(2)?.let { cacheNext3 = it }
+                shots.getOrNull(3)?.let { cacheNext4 = it }
+                shots.getOrNull(4)?.let { cachePrev = it }
+                shots.getOrNull(5)?.let { cachePrev2 = it }
+              } else {
+                // 截的时候书页变了（比如打开了菜单），这一套不能用
+                if (kept) dropCache() else retire(shot)
+                shots.forEach { it?.recycle() }
+              }
+              endPrefetch(g)
             }
           }
         }
@@ -260,9 +331,32 @@ object PageTurn {
     }
   }
 
-  private fun peekIf(need: Boolean, d: Int, cur: Bitmap, shown: Bitmap?, g: Int, done: (Bitmap?) -> Unit) {
+  private data class PeekStep(val need: Boolean, val dir: Int, val distance: Int)
+
+  /** 按顺序截这几页。某一页不需要时跳过，已经截到的图传给下一步，避免把同一页再截一遍 */
+  private fun peekAll(steps: List<PeekStep>, cur: Bitmap, g: Int, done: (List<Bitmap?>) -> Unit) {
+    val shots = arrayOfNulls<Bitmap>(steps.size)
+    fun run(i: Int, shown: Bitmap?) {
+      if (g != gen) {
+        shots.forEach { it?.recycle() }
+        return
+      }
+      if (i == steps.size) {
+        done(shots.toList())
+        return
+      }
+      val step = steps[i]
+      peekIf(step.need, step.dir, cur, shown, g, step.distance) { shot ->
+        shots[i] = shot
+        run(i + 1, shot ?: shown)
+      }
+    }
+    run(0, null)
+  }
+
+  private fun peekIf(need: Boolean, d: Int, cur: Bitmap, shown: Bitmap?, g: Int, distance: Int = 1, done: (Bitmap?) -> Unit) {
     if (!need) return done(null)
-    peekShot(d, cur, shown, g, done)
+    peekShot(d, cur, shown, g, done, distance)
   }
 
   private fun endPrefetch(g: Int) {
@@ -278,10 +372,11 @@ object PageTurn {
    * 让网页显示 d 那一边的页面，截到它为止：和当前页、和上一步显示的画面 shown 都不一样，连着两帧不变。
    * 拿不到就是 null
    */
-  private fun peekShot(d: Int, cur: Bitmap, shown: Bitmap?, g: Int, done: (Bitmap?) -> Unit) {
+  private fun peekShot(d: Int, cur: Bitmap, shown: Bitmap?, g: Int, done: (Bitmap?) -> Unit, distance: Int = 1) {
     val w = web ?: return done(null)
     if (prefetchAbort) return done(null)
-    w.evaluateJavascript("window.__sparkPeek ? window.__sparkPeek($d) : false") { result ->
+    val dist = distance.coerceAtLeast(1)
+    w.evaluateJavascript("window.__sparkPeek ? window.__sparkPeek($d, $dist) : false") { result ->
       if (g != gen) return@evaluateJavascript
       if (result != "true" || prefetchAbort) return@evaluateJavascript done(null)
       settleNew(cur, g, true, shown, done)
@@ -374,11 +469,43 @@ object PageTurn {
   private var mismatch: Bitmap? = null
 
   private fun motionDone() {
+    if (tryChain()) return
     when {
       landFailed -> playTurn(0f) { finish() }
       landed -> revealStable()
       else -> phase = Phase.LANDING
     }
+  }
+
+  /**
+   * 这一页的动画已经走到头，下一页的图也在手里：截图不揭掉，直接从这一页接着播下一页。
+   * 往同一方向走用再下一页的预截；往回走用刚刚离开的那一页。
+   */
+  private fun tryChain(): Boolean {
+    val next = pendingCover ?: return false
+    if (anim == "none" || !fast) return false
+    val shown = fastTarget ?: return false
+    if (shown.isRecycled) return false
+    val going = if (queuedDir == 0) dir else queuedDir
+    val neighbor = if (going == dir) {
+      if (dir > 0) cacheNext2 else cachePrev2
+    } else {
+      cacheCur
+    }
+    if (neighbor == null || neighbor.isRecycled || neighbor === shown) return false
+    if (cacheCur == null || cacheCur!!.isRecycled) return false
+    pageChanged = true
+    landed = true
+    landedSame = true
+    pendingCover = null
+    queuedDir = 0
+    chainTrust = true
+    gen++
+    stopMotion()
+    seedCache()
+    phase = Phase.IDLE
+    next()
+    return true
   }
 
   fun dispatch(ev: MotionEvent, pass: (MotionEvent) -> Boolean): Boolean {
@@ -423,8 +550,7 @@ object PageTurn {
   }
 
   /**
-   * 滑出去时没能跟手。慢滑仍按点两侧补一页动画；
-   * 正在翻或者刚快速翻过，就立刻揭掉截图，让网页马上再翻一页，不再等动画。
+   * 滑出去时没能跟手。补一页动画。正在播的那页会被打断，马上改播这一下。
    */
   private fun missedSwipe(ev: MotionEvent) {
     val w = web ?: return
@@ -437,20 +563,9 @@ object PageTurn {
     val toward = -d * (vt?.xVelocity ?: 0f)
     val moved = -d * (ev.rawX - downX)
     if (moved < 30f * density && !(toward > 400f * density && moved > 16f * density)) return
-    val now = android.os.SystemClock.uptimeMillis()
-    val bursting = phase != Phase.IDLE || now - lastBurst < 280L
     queuedSpeed = toward.coerceAtLeast(0f)
     queuedAt = ev.eventTime
-    if (phase != Phase.IDLE && !hijacked) {
-      pendingCover = null
-      finish()
-    }
-    if (bursting) {
-      lastBurst = now
-      w.evaluateJavascript("window.__sparkTurn&&window.__sparkTurn('flip', $d)", null)
-    } else {
-      w.evaluateJavascript("window.__sparkTurn&&window.__sparkTurn('turn', $d)", null)
-    }
+    w.evaluateJavascript("window.__sparkTurn&&window.__sparkTurn('turn', $d)", null)
   }
 
   /** 补的那次翻页刚发出不久就用它的速度，过期就按点两侧的速度 */
@@ -595,7 +710,6 @@ object PageTurn {
     val p = fingerProgress()
     completeOnRelease = !cancelled && toward > -fling && (p > 0.28f || (toward > fling && p > 0.02f))
     releaseSpeed = (if (completeOnRelease) toward else -toward).coerceAtLeast(0f)
-    if (completeOnRelease && toward > 700f * density) lastBurst = android.os.SystemClock.uptimeMillis()
     if (edgeDrag) {
       edgeDrag = false
       if (completeOnRelease) callJs("edge", dragDir)
@@ -707,10 +821,7 @@ object PageTurn {
 
   /** 没翻过去：截图回到原处盖住，让网页翻回原来那一页 */
   private fun goBack() {
-    animator?.let {
-      animator = null
-      it.cancel()
-    }
+    stopMotion()
     catchUp?.cancel()
     catchUp = null
     val l = layer
@@ -740,11 +851,81 @@ object PageTurn {
     landedSame = false
   }
 
+  /** 动画已经在走，可以立刻掐掉改播下一次。手指还按着、或这一页的图都还没出来时不打断 */
+  private fun canInterrupt(): Boolean =
+    phase == Phase.ANIMATING || phase == Phase.LANDING || phase == Phase.REVEALING
+
+  /** 正在进来的那一页。打断时把它当成已经翻到的页 */
+  private fun committedBitmap(): Bitmap? {
+    val shown = if (fast && fastTarget != null) fastTarget else incoming
+    return if (shown != null && !shown.isRecycled) shown else null
+  }
+
+  /**
+   * 打断正在播的动画，马上从这一页接着翻。
+   * 同一方向用再下一页的图；反方向用刚刚离开的那一页。没有现成的图就先把这一页铺满，等网页换好再动。
+   */
+  private fun interrupt(d: Int, done: (Boolean) -> Unit) {
+    val shown = committedBitmap()
+    val canSeed = shown != null && (
+      (fast && cacheCur != null && !cacheCur!!.isRecycled) ||
+        (!fast && outgoing != null && !outgoing!!.isRecycled)
+      )
+    if (canSeed) {
+      pageChanged = true
+      landed = true
+      landedSame = fast
+    }
+    pendingCover = null
+    queuedDir = 0
+    // 先作废旧回调再停动画，否则收尾会把新的这一下拆掉
+    gen++
+    stopMotion()
+    catchUp?.cancel()
+    catchUp = null
+    if (canSeed) seedCache()
+    phase = Phase.IDLE
+    val neighbor = if (d > 0) cacheNext else cachePrev
+    val cur = cacheCur
+    if (anim != "none" && neighbor != null && cur != null && !neighbor.isRecycled && !cur.isRecycled && neighbor !== cur) {
+      chainTrust = true
+      cover(d, false, done)
+      return
+    }
+    val held = if (shown != null && !shown.isRecycled && !retired.contains(shown)) shown else null
+    if (held != null) {
+      holdAndWait(d, held, done)
+      return
+    }
+    // 旧图已经不能再用，先从屏幕上拿掉再截新的，避免画到回收掉的位图
+    layer?.setPages(null, null)
+    cover(d, false, done)
+  }
+
+  /** 没有下一张截图：旧动画已经停了，盖住这一页，等网页换好再播下一次 */
+  private fun holdAndWait(d: Int, shown: Bitmap, done: (Boolean) -> Unit) {
+    gen++
+    resetTurn(d, false)
+    outgoing = shown
+    fast = false
+    val l = showLayer(shown, null)
+    if (l == null) {
+      phase = Phase.IDLE
+      cover(d, false, done)
+      return
+    }
+    phase = Phase.COVERED
+    scheduleReadyTimeout()
+    done(true)
+  }
+
   private fun cover(d: Int, drag: Boolean, done: (Boolean) -> Unit) {
     if (phase != Phase.IDLE) {
       if (phase == Phase.PREFETCH) prefetchAbort = true
-      // 这一页播完再翻下一页。中途掐掉动画会闪，快滑时也会把好几下并成一页
+      if (!drag && pendingCover == null && canInterrupt()) return interrupt(d, done)
+      // 这一页的图还没出来，或已经有下一次在等。拖动翻页不往队列里排
       if (pendingCover != null || drag) return done(false)
+      queuedDir = d
       pendingCover = { cover(d, drag, done) }
       return
     }
@@ -755,6 +936,31 @@ object PageTurn {
 
   /** 点两侧、有预截：确认画面没变就马上开始动，截图上屏后再让网页换页 */
   private fun fastTap(d: Int, neighbor: Bitmap, done: (Boolean) -> Unit) {
+    if (chainTrust) {
+      chainTrust = false
+      val cur = cacheCur
+      if (cur == null || cur.isRecycled || neighbor.isRecycled) return slowCover(d, false, done)
+      gen++
+      val g = gen
+      phase = Phase.CAPTURING
+      resetTurn(d, false)
+      val l = showLayer(cur, neighbor)
+      if (l == null) {
+        phase = Phase.IDLE
+        return slowCover(d, false, done)
+      }
+      fast = true
+      fastTarget = neighbor
+      playTurn(1f, takeQueuedSpeed()) { motionDone() }
+      // 截图本来就盖着，不用再等窗口上屏
+      afterLayerFrame(l) {
+        if (g != gen) return@afterLayerFrame
+        jumpSent = true
+        scheduleReadyTimeout()
+        done(true)
+      }
+      return
+    }
     val cur = cacheCur ?: return slowCover(d, false, done)
     val shot = scratchShot() ?: return slowCover(d, false, done)
     gen++
@@ -762,7 +968,7 @@ object PageTurn {
     phase = Phase.CAPTURING
     resetTurn(d, false)
     copyWindow(shot) { s ->
-      if (g != gen) return@copyWindow
+      if (g != gen) return@copyWindow done(false)
       val l = if (s != null && !cur.isRecycled && s.sameAs(cur)) showLayer(cur, neighbor) else null
       if (l == null) {
         phase = Phase.IDLE
@@ -782,6 +988,12 @@ object PageTurn {
     }
   }
 
+  /** 这次没能开始动画。点按或接着翻时告诉网页动画已经结束，避免一直停在“正在翻” */
+  private fun failCover(drag: Boolean, done: (Boolean) -> Unit) {
+    done(false)
+    if (!drag && phase == Phase.IDLE && pendingCover == null) notifyDone()
+  }
+
   /** 没有预截：截旧页盖上，网页换好页、截到新页才开始动 */
   private fun slowCover(d: Int, drag: Boolean, done: (Boolean) -> Unit) {
     recycleRetired()
@@ -793,20 +1005,24 @@ object PageTurn {
     outgoing = null
     val shot = newShot() ?: run {
       phase = Phase.IDLE
-      return done(false)
+      return failCover(drag, done)
     }
     copyWindow(shot) { s ->
-      if (g != gen) return@copyWindow
+      if (g != gen) {
+        if (!shot.isRecycled) shot.recycle()
+        done(false)
+        return@copyWindow
+      }
       if (s == null) {
         phase = Phase.IDLE
-        return@copyWindow done(false)
+        return@copyWindow failCover(drag, done)
       }
       prepare(s)
       outgoing = s
       val l = showLayer(s, null)
       if (l == null) {
         phase = Phase.IDLE
-        return@copyWindow done(false)
+        return@copyWindow failCover(drag, done)
       }
       afterLayerFrame(l) {
         if (g != gen) return@afterLayerFrame
@@ -979,14 +1195,20 @@ object PageTurn {
     w.getLocationInWindow(loc)
     return try {
       if (pop.isShowing) {
+        // 位置和大小没变就别 update。这个窗口一更新，有的机型会整屏闪白
+        if (pop.width == w.width && pop.height == height && popupX == loc[0] && popupY == loc[1]) return true
         if (pop.width != w.width || pop.height != height) popupFresh = true
         pop.width = w.width
         pop.height = height
         pop.update(loc[0], loc[1], w.width, height)
+        popupX = loc[0]
+        popupY = loc[1]
       } else {
         pop.width = w.width
         pop.height = height
         pop.showAtLocation(w, Gravity.TOP or Gravity.START, loc[0], loc[1])
+        popupX = loc[0]
+        popupY = loc[1]
         popupFresh = true
       }
       pop.isShowing
@@ -1053,43 +1275,62 @@ object PageTurn {
     }
   }
 
-  private fun animateTo(target: Float, duration: Long, ease: TimeInterpolator, then: () -> Unit) {
+  /** 停掉正在走的翻页动画。先作废代数再停，停掉的回调就不会再收尾一次 */
+  private fun stopMotion() {
+    motionToken++
+    motionFrame?.let { Choreographer.getInstance().removeFrameCallback(it) }
+    motionFrame = null
     animator?.cancel()
-    val a = ValueAnimator.ofFloat(progress, target)
-    a.duration = duration
-    a.interpolator = ease
-    a.addUpdateListener { apply(it.animatedValue as Float) }
-    a.addListener(object : AnimatorListenerAdapter() {
-      private var cancelled = false
-      override fun onAnimationCancel(animation: Animator) {
-        cancelled = true
-      }
-
-      override fun onAnimationEnd(animation: Animator) {
-        if (animator === a) animator = null
-        if (!cancelled) then()
-      }
-    })
-    animator = a
-    phase = Phase.ANIMATING
-    a.start()
+    animator = null
   }
 
-  /** 收尾：截图层清空（窗口留着下次用），WebView 已经是同一个画面 */
-  private fun finish() {
-    gen++
-    animator?.let {
-      animator = null
-      it.cancel()
+  /**
+   * 跟屏幕刷新一帧帧走。用 Choreographer 而不是 ValueAnimator：部分机型会把属性动画压到低于屏幕刷新率。
+   */
+  private fun animateTo(target: Float, duration: Long, ease: TimeInterpolator, then: () -> Unit) {
+    stopMotion()
+    val token = motionToken
+    val from = progress
+    val durNs = duration.coerceAtLeast(1L) * 1_000_000L
+    var startNs = 0L
+    val cb = object : Choreographer.FrameCallback {
+      override fun doFrame(frameTimeNanos: Long) {
+        if (token != motionToken) return
+        if (startNs == 0L) startNs = frameTimeNanos
+        val t = ((frameTimeNanos - startNs).toFloat() / durNs.toFloat()).coerceIn(0f, 1f)
+        apply(from + (target - from) * ease.getInterpolation(t))
+        if (t < 1f) {
+          Choreographer.getInstance().postFrameCallback(this)
+        } else {
+          motionFrame = null
+          apply(target)
+          then()
+        }
+      }
     }
+    motionFrame = cb
+    phase = Phase.ANIMATING
+    Choreographer.getInstance().postFrameCallback(cb)
+  }
+
+  /** 收尾：没有下一页就揭掉截图。有下一页就留着，马上接着播，避免中间闪一帧 */
+  private fun finish() {
+    val next = pendingCover
+    pendingCover = null
+    queuedDir = 0
+    gen++
+    stopMotion()
     catchUp?.cancel()
     catchUp = null
     clearReadyTimeout()
-    layer?.let {
-      it.setPages(null, null)
-      if (popup == null) (it.parent as? ViewGroup)?.removeView(it)
-    }
     if (pageChanged) seedCache()
+    // 缓存已经丢掉时，截图层里可能还画着即将回收的图，先清空再回收
+    if (next == null || cacheCur == null) {
+      layer?.let {
+        it.setPages(null, null)
+        if (popup == null) (it.parent as? ViewGroup)?.removeView(it)
+      }
+    }
     retire(outgoing)
     retire(incoming)
     outgoing = null
@@ -1097,16 +1338,20 @@ object PageTurn {
     phase = Phase.IDLE
     resetTurn(dir, false)
     downCheck = Check.NONE
-    val next = pendingCover
-    pendingCover = null
-    if (next != null) afterNextFrame(next)
-    else notifyDone()
+    chainTrust = false
+    if (next != null) next() else notifyDone()
   }
 
   /**
    * 换了页：翻到的那页就是新的当前页，刚离开的那页是它旁边的一页，接着往回翻马上能用；
    * 另一边等网页再让预截时补上。确认不了新页的样子就整套作废
    */
+  private fun keepShot(b: Bitmap?, vararg skip: Bitmap?): Bitmap? {
+    if (b == null || b.isRecycled) return null
+    if (skip.any { it === b }) return null
+    return b
+  }
+
   private fun seedCache() {
     val landedOn = when {
       fast && landedSame -> fastTarget
@@ -1115,17 +1360,45 @@ object PageTurn {
     }
     val left = if (fast) cacheCur else outgoing
     if (landedOn == null || left == null || landedOn.isRecycled || left.isRecycled) return dropCache()
-    for (b in listOf(cacheCur, cacheNext, cachePrev)) {
-      if (b != null && b !== landedOn && b !== left) retire(b)
+    val oldNext = cacheNext
+    val oldNext2 = cacheNext2
+    val oldNext3 = cacheNext3
+    val oldNext4 = cacheNext4
+    val oldPrev = cachePrev
+    val oldPrev2 = cachePrev2
+    // 往后留四页，往回留两页。翻过一页后整窗往前挪，多出来的那张丢掉
+    val newPrev: Bitmap?
+    val newPrev2: Bitmap?
+    val newNext: Bitmap?
+    val newNext2: Bitmap?
+    val newNext3: Bitmap?
+    val newNext4: Bitmap?
+    if (dir > 0) {
+      newPrev = left
+      newPrev2 = keepShot(oldPrev, left, landedOn)
+      newNext = keepShot(oldNext2, left, landedOn)
+      newNext2 = keepShot(oldNext3, left, landedOn)
+      newNext3 = keepShot(oldNext4, left, landedOn)
+      newNext4 = null
+    } else {
+      newNext = left
+      newNext2 = keepShot(oldNext, left, landedOn)
+      newNext3 = keepShot(oldNext2, left, landedOn)
+      newNext4 = keepShot(oldNext3, left, landedOn)
+      newPrev = keepShot(oldPrev2, left, landedOn)
+      newPrev2 = null
+    }
+    val keep = listOfNotNull(landedOn, newPrev, newPrev2, newNext, newNext2, newNext3, newNext4)
+    for (b in listOf(cacheCur, oldNext, oldNext2, oldNext3, oldNext4, oldPrev, oldPrev2)) {
+      if (b != null && keep.none { it === b }) retire(b)
     }
     cacheCur = landedOn
-    if (dir > 0) {
-      cachePrev = left
-      cacheNext = null
-    } else {
-      cacheNext = left
-      cachePrev = null
-    }
+    cachePrev = newPrev
+    cachePrev2 = newPrev2
+    cacheNext = newNext
+    cacheNext2 = newNext2
+    cacheNext3 = newNext3
+    cacheNext4 = newNext4
     if (outgoing === left) outgoing = null
     if (incoming === landedOn) incoming = null
     downCheck = Check.NONE
@@ -1134,10 +1407,18 @@ object PageTurn {
   private fun dropCache() {
     retire(cacheCur)
     retire(cacheNext)
+    retire(cacheNext2)
+    retire(cacheNext3)
+    retire(cacheNext4)
     retire(cachePrev)
+    retire(cachePrev2)
     cacheCur = null
     cacheNext = null
+    cacheNext2 = null
+    cacheNext3 = null
+    cacheNext4 = null
     cachePrev = null
+    cachePrev2 = null
     downCheck = Check.NONE
   }
 
@@ -1151,7 +1432,7 @@ object PageTurn {
 
   private fun recycleRetired() {
     for (shot in retired) {
-      if (shot !== cacheCur && shot !== cacheNext && shot !== cachePrev) shot.recycle()
+      if (shot !== cacheCur && shot !== cacheNext && shot !== cacheNext2 && shot !== cacheNext3 && shot !== cacheNext4 && shot !== cachePrev && shot !== cachePrev2) shot.recycle()
     }
     retired.clear()
   }
@@ -1209,13 +1490,17 @@ object PageTurn {
     }
   }
 
-  /** 旧页、新页两层截图。动画只改两层的位移和透明度，每帧不用重画整屏的图 */
+  /**
+   * 旧页、新页两层截图。动画只改位移和透明度。
+   * 不在每一帧改裁剪：setClipBounds 会让这一层每帧重画整页位图，高刷新率也上不去。
+   */
   private class TurnLayer(context: Context) : FrameLayout(context) {
     private val outPage = PageView(context)
     private val inPage = PageView(context)
     private var inFront = false
 
     init {
+      setBackgroundColor(Color.TRANSPARENT)
       addView(inPage, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
       addView(outPage, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     }
@@ -1226,10 +1511,7 @@ object PageTurn {
       place(0f, 0f, 1f, false)
     }
 
-    /**
-     * inFront：往回翻的覆盖，新页从左边盖上来，要在旧页上面。
-     * 两页都是整屏不透明的图，下面那页被盖住的部分不画，每帧少画一整屏
-     */
+    /** inFront：往回翻的覆盖，新页从左边盖上来，要在旧页上面 */
     fun place(outX: Float, inX: Float, outAlpha: Float, inFront: Boolean) {
       outPage.translationX = outX
       inPage.translationX = inX
@@ -1238,47 +1520,24 @@ object PageTurn {
         this.inFront = inFront
         (if (inFront) inPage else outPage).bringToFront()
       }
-      val front = if (inFront) inPage else outPage
-      val back = if (inFront) outPage else inPage
-      // 上一次可能是被盖住的那页，裁剪要清掉
-      front.clip(null)
-      val w = width
-      val shown = front.bitmap != null && front.alpha >= 1f
-      if (!shown || w <= 0) return back.clip(null)
-      // 上面那页盖住的横向范围，换算到下面那页自己的坐标里
-      val left = (front.translationX - back.translationX).toInt()
-      val right = left + w
-      back.clip(
-        when {
-          left >= w || right <= 0 -> null
-          left <= 0 && right >= w -> EMPTY
-          left > 0 -> Rect(0, 0, left, height)
-          else -> Rect(right, 0, w, height)
-        },
-      )
-    }
-
-    private companion object {
-      val EMPTY = Rect()
     }
 
     override fun hasOverlappingRendering(): Boolean = false
   }
 
   private class PageView(context: Context) : View(context) {
-    private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val paint = Paint()
     var bitmap: Bitmap? = null
       set(value) {
+        if (field === value) return
         field = value
+        // 硬件层把位图留在 GPU 上。之后只改 translationX / alpha，不再每帧把整页传一遍
+        setLayerType(if (value != null && !value.isRecycled) LAYER_TYPE_HARDWARE else LAYER_TYPE_NONE, null)
         invalidate()
       }
-    private var clipRect: Rect? = null
 
-    /** 只画这一块（自己的坐标），null 是整页都画；改裁剪不用重画 */
-    fun clip(r: Rect?) {
-      if (r == clipRect) return
-      clipRect = r
-      clipBounds = r
+    init {
+      setBackgroundColor(Color.TRANSPARENT)
     }
 
     override fun onDraw(canvas: Canvas) {

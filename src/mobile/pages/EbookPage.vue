@@ -6,6 +6,7 @@ import { mobileApi, type PageTurnAnim, type ReadPoint } from "../api";
 import { bookStem, useShelf } from "../shelf";
 import { decodeTxt, txtBook } from "../reader/txt";
 import { parseReadingNote, readingNoteRel, renderReadingNote, toggleBookmark, withAnno, type Anno, type Bookmark } from "../reader/anno";
+import { selectionFits, type SelBox } from "../reader/selection";
 import { READER_THEMES, isReaderFont, readerCss, tocDepth, type ReaderFont, type ReaderTheme } from "../reader/style";
 import serifFont from "../fonts/NotoSerifSC-Regular-gb2312.woff2?url";
 import kaiFont from "../fonts/LXGWWenKai-Regular-gb2312.woff2?url";
@@ -113,8 +114,8 @@ type FoliateView = HTMLElement & {
     setStyles?: (css: string) => void;
     /** 先在后台排好前一章或后一章（见 paginator.js） */
     preload?: (dir: number) => Promise<boolean>;
-    /** 不翻页，只把前一页或后一页显示出来给原生截图；unpeek 换回当前页 */
-    peek?: (dir: number) => boolean;
+    /** 不翻页，只把旁边那一页显示出来给原生截图；distance 是隔几页，unpeek 换回当前页 */
+    peek?: (dir: number, distance?: number) => boolean;
     unpeek?: () => void;
   };
 };
@@ -204,11 +205,41 @@ function restorePageColor() {
 
 /* 点按：中间呼出或收起菜单，左右两侧翻页。书页在 iframe 里，坐标要加上 iframe 自己的位置 */
 let down: { x: number; y: number; t: number } | null = null;
+let lastTapAt = 0;
 
 function frameOffset(doc: Document): { left: number; top: number } {
   const frame = doc.defaultView?.frameElement as HTMLElement | null | undefined;
   const rect = frame?.getBoundingClientRect();
   return { left: rect?.left ?? 0, top: rect?.top ?? 0 };
+}
+
+/** 点在屏幕上的横向位置（0–1）。iframe 里的 clientX 相对书页，有的 WebView 已经是屏幕坐标 */
+function tapScreenX(e: { clientX: number }, doc: Document): number {
+  const width = window.innerWidth || 1;
+  const frame = doc.defaultView?.frameElement as HTMLElement | null | undefined;
+  if (!frame || doc === document) return e.clientX / width;
+  const rect = frame.getBoundingClientRect();
+  if (e.clientX >= 0 && e.clientX <= rect.width + 2) return (e.clientX + rect.left) / width;
+  return e.clientX / width;
+}
+
+function onReaderTap(e: PointerEvent | MouseEvent, doc: Document) {
+  const now = performance.now();
+  if (now - lastTapAt < 400) return;
+  if ((e.target as HTMLElement | null)?.closest?.("a[href]")) return;
+  const sel = doc.getSelection();
+  if (pick.value || (sel && !sel.isCollapsed)) {
+    clearPick();
+    return;
+  }
+  lastTapAt = now;
+  if (chrome.value) {
+    chrome.value = false;
+    return;
+  }
+  const x = tapScreenX(e, doc);
+  if (x > 0.3 && x < 0.7) chrome.value = true;
+  else void turn(x <= 0.3 ? -1 : 1);
 }
 
 function onPointerDown(e: PointerEvent) {
@@ -220,21 +251,16 @@ function onPointerUp(e: PointerEvent, doc: Document) {
   const start = down;
   down = null;
   if (!start || !e.isPrimary) return;
-  // 拖动（滑动翻页、拖选字的把手）和长按不算点按
+  // 拖动（滑动翻页、拖选字的把手）和长按不算点按。上下滚动时父级在滚，松手用 click 判断
+  if (scrolled.value) return;
   if (Math.hypot(e.screenX - start.x, e.screenY - start.y) > 12 || e.timeStamp - start.t > 500) return;
-  if ((e.target as HTMLElement | null)?.closest?.("a[href]")) return;
-  const sel = doc.getSelection();
-  if (pick.value || (sel && !sel.isCollapsed)) {
-    clearPick();
-    return;
-  }
-  if (chrome.value) {
-    chrome.value = false;
-    return;
-  }
-  const x = (e.clientX + frameOffset(doc).left) / (window.innerWidth || 1);
-  if (x > 0.3 && x < 0.7) chrome.value = true;
-  else void turn(x <= 0.3 ? -1 : 1);
+  onReaderTap(e, doc);
+}
+
+/** 上下滚动时点在前后章上，pointerup 经常被滚动吃掉，click 才会到 */
+function onFrameClick(e: MouseEvent, doc: Document) {
+  if (!scrolled.value || e.button !== 0) return;
+  onReaderTap(e, doc);
 }
 
 /*
@@ -247,15 +273,18 @@ function onPointerUp(e: PointerEvent, doc: Document) {
  * - 淡入淡出：旧页截图淡出，下面的新页显出来。
  * - 无动画：新页画好后直接拿掉截图。
  * 左右滑动由原生接管、跟着手指走，要换页时通过 window.__sparkTurn 通知这里。
+ * 上一页的动画还在走时再翻，原生会打断这一下，马上播下一次。
  * 上下滚动、PDF，以及原生用不了的时候（不在安卓上）直接换页。
  */
 const ANIM_CODE: Record<(typeof TURN_ANIMS)[number], PageTurnAnim> = { 平移: "slide", 覆盖: "cover", 淡入淡出: "fade", 无动画: "none" };
 
 /** 安卓原生翻页可用（打开阅读页时第一次设置成功才算） */
 let nativeTurn = false;
-/** 翻页一个接一个做。滑动每一次都排进来；点两侧正在翻时再点不算 */
+/** 翻页一个接一个做。正在翻时再点或再滑，排进来等这一页的动画走到头就接着播 */
 let turnQueue: Promise<void> = Promise.resolve();
 let queuedTurns = 0;
+const followDirs: (1 | -1)[] = [];
+let pumpingFollow = false;
 /**
  * 原生翻页动画还在画面上。网页这边的换页任务往往在动画播完之前就结束了，
  * 不能用任务是否还在排队来判断能不能再点
@@ -273,6 +302,8 @@ const shownChapter = ref("");
 const shownPercent = ref(0);
 const shownRibbon = ref(false);
 let footFrozen = false;
+let footTimer = 0;
+let footPending = "";
 
 const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
@@ -328,6 +359,28 @@ function showFoot() {
 function snapshotFoot() {
   showFoot();
   shownRibbon.value = marks.value.some((b) => b.cfi === currentCfi.value);
+}
+
+/** 上下滚动跨章时，章节名会先在两章之间抖。等它停稳再改左下角，避免闪个不停 */
+function queueFoot() {
+  shownPercent.value = Math.round(fraction.value * 100);
+  shownRibbon.value = marks.value.some((b) => b.cfi === currentCfi.value);
+  const next = chapter.value;
+  if (!next || next === shownChapter.value) {
+    window.clearTimeout(footTimer);
+    footTimer = 0;
+    footPending = "";
+    if (next) shownChapter.value = next;
+    return;
+  }
+  if (footPending === next) return;
+  footPending = next;
+  window.clearTimeout(footTimer);
+  footTimer = window.setTimeout(() => {
+    footTimer = 0;
+    if (!footFrozen && chapter.value === footPending) shownChapter.value = footPending;
+    footPending = "";
+  }, 180);
 }
 
 function freezeFoot() {
@@ -455,21 +508,40 @@ async function runTurn(dir: 1 | -1) {
   if (!moved && atEdge(dir)) edgeToast(dir);
 }
 
-/** 点两侧翻页。这一下还没翻完时再点直接丢掉，松手后不会再慢慢补翻 */
-function turn(dir: 1 | -1) {
-  if (!view || queuedTurns > 0 || nativeAnimating || nativeTurns > 0 || flipDepth > 0) return;
-  enqueue(() => runTurn(dir));
+/** 正在翻时再点：排进下一页，当前动画走到头立刻接上，不再把这一下丢掉 */
+function queueFollow(dir: 1 | -1) {
+  followDirs.push(dir);
+  if (!pumpingFollow) pumpFollow();
 }
 
-/** 已经划出去、还没换完的页。快滑时直接换，不等动画 */
+function pumpFollow() {
+  const dir = followDirs.shift();
+  if (dir == null) return;
+  pumpingFollow = true;
+  enqueue(async () => {
+    try {
+      await runTurn(dir);
+    } finally {
+      pumpingFollow = false;
+      if (followDirs.length) pumpFollow();
+    }
+  });
+}
+
+/** 点两侧翻页 */
+function turn(dir: 1 | -1) {
+  if (!view) return;
+  if (queuedTurns > 0 || nativeAnimating || nativeTurns > 0 || flipDepth > 0 || pumpingFollow) queueFollow(dir);
+  else enqueue(() => runTurn(dir));
+}
+
+/** 已经划出去、还没换完的页。动画队列接不上时才直接换 */
 const flips: (1 | -1)[] = [];
 let flipping = false;
 let flipDepth = 0;
-let recentFlip = 0;
 
 function queueFlip(dir: 1 | -1) {
   if (!view) return;
-  recentFlip = performance.now();
   flipDepth++;
   flips.push(dir);
   void drainFlips();
@@ -507,21 +579,17 @@ async function jumpOnly(dir: 1 | -1) {
 }
 
 /**
- * 滑动翻页。隔得开的一下仍做动画；
- * 连着快滑时直接换页，手划多快页就翻多快
+ * 滑动翻页。这一下还在播就排进下一页，动画走到头立刻接上，不再等收尾也不再直接跳页。
  */
 function queueSwipe(dir: 1 | -1) {
   if (!view) return;
-  const now = performance.now();
-  const burst = nativeAnimating || nativeTurns > 0 || flipDepth > 0 || now - recentFlip < 280;
-  recentFlip = now;
-  if (burst) queueFlip(dir);
+  if (queuedTurns > 0 || nativeAnimating || nativeTurns > 0 || flipDepth > 0 || pumpingFollow) queueFollow(dir);
   else enqueue(() => runTurn(dir));
 }
 
 /**
  * 原生接管的滑动：jump 是翻过去，back 是松手时没翻过去、翻回原来那页，edge 是往到头的方向滑，done 是动画结束。
- * turn 是没跟手的慢滑，补一页动画。flip 是连着快滑，马上再翻一页，不等动画。
+ * turn 是没跟手的滑动，补一页动画，和正在播的那页接上。flip 是不播动画直接换页。
  */
 function onNativeTurn(kind: string, dir: number) {
   if (kind === "done") {
@@ -552,7 +620,7 @@ function onNativeTurn(kind: string, dir: number) {
 
 type TurnWindow = Window & {
   __sparkTurn?: (kind: string, dir: number) => void;
-  __sparkPeek?: (dir: number) => boolean;
+  __sparkPeek?: (dir: number, distance?: number) => boolean;
   __sparkUnpeek?: () => void;
 };
 
@@ -591,7 +659,7 @@ function syncTurnConfig() {
 }
 
 /**
- * 书页停稳一会儿后，先在后台排好前后两章，再让原生把前一页、后一页截好。
+ * 书页停稳一会儿后，先在后台排好前后两章，再让原生把前两页、后四页截好。
  * 翻页时直接用截好的图，手指一动页面就跟着走，新页也不会先空一下
  */
 let prefetchTimer = 0;
@@ -611,7 +679,7 @@ function schedulePrefetch(delay = 300) {
 
 async function startNativeTurn() {
   (window as TurnWindow).__sparkTurn = onNativeTurn;
-  (window as TurnWindow).__sparkPeek = (dir: number) => view?.renderer?.peek?.(dir) ?? false;
+  (window as TurnWindow).__sparkPeek = (dir: number, distance?: number) => view?.renderer?.peek?.(dir, distance) ?? false;
   (window as TurnWindow).__sparkUnpeek = unpeek;
   try {
     await mobileApi.pageTurnConfig({ enabled: false, anim: ANIM_CODE[turnAnim.value], canPrev: true, canNext: true });
@@ -692,117 +760,307 @@ function clearPick() {
   }
 }
 
-/** 当前这一页在书页 iframe 里的可见范围。下一页的字排在旁边，手指贴边时会被选进去 */
-function pageBox(doc: Document): { left: number; right: number; top: number; bottom: number } | null {
+/** 当前这一页在书页 iframe 里的可见范围。左右翻页时旁边是下一页，上下滚动时屏幕下面是下一页 */
+function pageBox(doc: Document): SelBox | null {
   const frame = doc.defaultView?.frameElement as HTMLElement | null;
   if (!frame) return null;
   const frameRect = frame.getBoundingClientRect();
+  let left = frameRect.left;
+  let right = frameRect.right;
+  let top = frameRect.top;
+  let bottom = frameRect.bottom;
   let clip: HTMLElement | null = frame.parentElement;
-  let clipRect = frameRect;
   while (clip) {
     const style = getComputedStyle(clip);
-    const clips = style.overflowX === "hidden" || style.overflowX === "clip" || style.overflow === "hidden";
     const rect = clip.getBoundingClientRect();
-    if (clips && rect.width > 0 && rect.width < frameRect.width - 1) {
-      clipRect = rect;
-      break;
+    const clipX = style.overflowX === "hidden" || style.overflowX === "clip" || style.overflowX === "auto" || style.overflowX === "scroll";
+    const clipY = style.overflowY === "hidden" || style.overflowY === "clip" || style.overflowY === "auto" || style.overflowY === "scroll";
+    if (rect.width > 1 && rect.height > 1) {
+      if (clipX && rect.width < frameRect.width - 1) {
+        left = Math.max(left, rect.left);
+        right = Math.min(right, rect.right);
+      }
+      if (clipY && rect.height < frameRect.height - 1) {
+        top = Math.max(top, rect.top);
+        bottom = Math.min(bottom, rect.bottom);
+      }
     }
     const root = clip.getRootNode();
     clip = clip.parentElement ?? (root instanceof ShadowRoot ? (root.host as HTMLElement) : null);
   }
-  const left = Math.max(clipRect.left, frameRect.left) - frameRect.left;
-  const right = Math.min(clipRect.right, frameRect.right) - frameRect.left;
-  const top = Math.max(clipRect.top, frameRect.top) - frameRect.top;
-  const bottom = Math.min(clipRect.bottom, frameRect.bottom) - frameRect.top;
-  if (right - left < 20) return null;
-  return { left, right, top, bottom };
+  top = Math.max(top, 0);
+  bottom = Math.min(bottom, window.innerHeight);
+  left = Math.max(left, 0);
+  right = Math.min(right, window.innerWidth);
+  const box = {
+    left: left - frameRect.left,
+    right: right - frameRect.left,
+    top: top - frameRect.top,
+    bottom: bottom - frameRect.top,
+  };
+  if (box.right - box.left < 20 || box.bottom - box.top < 20) return null;
+  return box;
 }
 
-function rangeOnPage(range: Range, box: { left: number; right: number; top: number; bottom: number }): boolean {
-  const rects = range.getClientRects();
-  for (const r of rects) {
-    if (r.width < 0.5 || r.height < 0.5) continue;
-    // 整块落在这一页左边或右边，就是上一页或下一页的字
-    if (r.left >= box.right - 1 || r.right <= box.left + 1) return false;
-  }
-  return true;
+function rangeOnPage(range: Range, box: SelBox): boolean {
+  return selectionFits(Array.from(range.getClientRects()), box);
 }
 
-/** 选区伸进了旁边那一页时，把末尾收回来，收不回来就用上一次还在这一页里的选区 */
-function shrinkOntoPage(range: Range, box: { left: number; right: number; top: number; bottom: number }, backward: boolean): Range | null {
-  const next = range.cloneRange();
-  for (let guard = 0; guard < 24 && !rangeOnPage(next, box); guard++) {
-    if (backward) {
-      const node = next.startContainer;
-      if (node.nodeType === Node.TEXT_NODE && next.startOffset < (node.textContent?.length ?? 0)) {
-        let lo = next.startOffset;
-        let hi = node.textContent?.length ?? lo;
-        while (lo < hi) {
-          const mid = Math.ceil((lo + hi) / 2);
-          next.setStart(node, mid);
-          if (rangeOnPage(next, box)) hi = mid - 1;
-          else lo = mid;
+function adjacentText(node: Node, dir: 1 | -1): Text | null {
+  const root = node.ownerDocument?.body;
+  if (!root) return null;
+  const walker = node.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  walker.currentNode = node.nodeType === Node.TEXT_NODE ? node : (node.parentNode ?? root);
+  const next = dir < 0 ? walker.previousNode() : walker.nextNode();
+  return next instanceof Text ? next : null;
+}
+
+/** 选区伸进了上一页或下一页时，把伸出去的那一头收回来 */
+function shrinkOntoPage(range: Range, box: SelBox, backward: boolean): Range | null {
+  try {
+    const next = range.cloneRange();
+    for (let guard = 0; guard < 240 && !rangeOnPage(next, box); guard++) {
+      if (next.collapsed) return null;
+      if (backward) {
+        const node = next.startContainer;
+        if (node.nodeType === Node.TEXT_NODE && next.startOffset < (node.textContent?.length ?? 0)) {
+          let lo = next.startOffset;
+          let hi = node.textContent?.length ?? lo;
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            next.setStart(node, mid);
+            if (rangeOnPage(next, box)) hi = mid - 1;
+            else lo = mid;
+          }
+          next.setStart(node, Math.min((node.textContent?.length ?? lo), lo + 1));
         }
-        next.setStart(node, Math.min(lo + 1, node.textContent?.length ?? lo));
+        if (!rangeOnPage(next, box)) {
+          const nxt = adjacentText(node, 1);
+          if (!nxt) return null;
+          next.setStart(nxt, 0);
+        }
       } else {
-        next.setStart(node, node.nodeType === Node.TEXT_NODE ? (node.textContent?.length ?? 0) : next.startOffset);
-        if (next.collapsed) return null;
+        const node = next.endContainer;
+        if (node.nodeType === Node.TEXT_NODE && next.endOffset > 0) {
+          const len = node.textContent?.length ?? 0;
+          let lo = 0;
+          let hi = Math.min(next.endOffset, len);
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            next.setEnd(node, mid);
+            if (rangeOnPage(next, box)) lo = mid;
+            else hi = mid - 1;
+          }
+          next.setEnd(node, Math.max(0, Math.min(lo, len)));
+        }
+        if (!rangeOnPage(next, box)) {
+          const prev = adjacentText(node, -1);
+          if (!prev) return null;
+          next.setEnd(prev, prev.textContent?.length ?? 0);
+        }
       }
-    } else if (next.endContainer.nodeType === Node.TEXT_NODE && next.endOffset > 0) {
-      const node = next.endContainer;
-      let lo = 0;
-      let hi = next.endOffset;
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2);
-        next.setEnd(node, mid);
-        if (rangeOnPage(next, box)) lo = mid;
-        else hi = mid - 1;
-      }
-      next.setEnd(node, lo);
-    } else {
-      next.setEnd(next.endContainer, 0);
+      if (next.collapsed) return null;
     }
-    if (next.collapsed) return null;
-    if (rangeOnPage(next, box)) return next;
+    return rangeOnPage(next, box) && !next.collapsed ? next : null;
+  } catch {
+    return null;
   }
-  return rangeOnPage(next, box) && !next.collapsed ? next : null;
 }
 
 /** 选字：用 selectionchange 跟着把手更新，菜单放在选区上方，太靠上时放到下方 */
 let selTimer = 0;
 let clampingSel = false;
 let keptSel: Range | null = null;
+
+/** 选区伸出这一页的左右距离。只在已经越界时算，避免每次选字都再量一遍 */
+function overflowOf(range: Range, box: SelBox): { left: number; right: number } {
+  let minL = Infinity;
+  let maxR = -Infinity;
+  for (const r of range.getClientRects()) {
+    if (r.width < 0.5 || r.height < 0.5) continue;
+    if (r.left < minL) minL = r.left;
+    if (r.right > maxR) maxR = r.right;
+  }
+  return {
+    left: minL < Infinity ? box.left - minL : 0,
+    right: maxR > -Infinity ? maxR - box.right : 0,
+  };
+}
+
+function scrollerOf(doc: Document): HTMLElement | null {
+  const frame = doc.defaultView?.frameElement as HTMLElement | null;
+  return frame?.parentElement?.parentElement ?? null;
+}
+
+/** 选字开始时的滚动位置。拖到页边时浏览器会把下一页滚进来，这里把它按回去 */
+let pageHold: { el: HTMLElement; left: number; top: number } | null = null;
+
+function rememberPage(doc: Document) {
+  const el = scrollerOf(doc);
+  if (!el) return;
+  pageHold = { el, left: el.scrollLeft, top: el.scrollTop };
+}
+
+function pinPage(doc: Document) {
+  const el = scrollerOf(doc);
+  if (!el) return;
+  if (!pageHold || pageHold.el !== el) pageHold = { el, left: el.scrollLeft, top: el.scrollTop };
+  if (el.scrollLeft !== pageHold.left) el.scrollLeft = pageHold.left;
+  if (el.scrollTop !== pageHold.top) el.scrollTop = pageHold.top;
+}
+
+function caretPoint(doc: Document, x: number, y: number): Range | null {
+  const view = doc.defaultView as (Window & { caretRangeFromPoint?: (x: number, y: number) => Range | null }) | null;
+  try {
+    return view?.caretRangeFromPoint?.(x, y) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function charOnPage(text: Text, index: number, box: SelBox): boolean {
+  const len = text.data.length;
+  if (index < 0 || index >= len) return false;
+  const sample = text.ownerDocument.createRange();
+  sample.setStart(text, index);
+  sample.setEnd(text, index + 1);
+  return rangeOnPage(sample, box);
+}
+
+/** 按超出的那一头，把选区收到这一页。一个文字节点跨到下一页时，按每个字的中心切 */
+function trimToPage(range: Range, box: SelBox, backward: boolean): Range | null {
+  const next = range.cloneRange();
+  try {
+    for (let guard = 0; guard < 80 && !rangeOnPage(next, box); guard++) {
+      if (next.collapsed) return null;
+      if (backward) {
+        const node = next.startContainer;
+        if (node.nodeType === Node.TEXT_NODE) {
+          const text = node as Text;
+          const len = text.data.length;
+          let lo = next.startOffset;
+          let hi = len;
+          let best = -1;
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            if (charOnPage(text, mid, box)) {
+              best = mid;
+              hi = mid - 1;
+            } else lo = mid;
+          }
+          if (best >= 0 && (next.endContainer !== text || best < next.endOffset)) next.setStart(text, best);
+        }
+        if (!rangeOnPage(next, box)) {
+          const nxt = adjacentText(node, 1);
+          if (!nxt) return null;
+          next.setStart(nxt, 0);
+        }
+      } else {
+        const node = next.endContainer;
+        if (node.nodeType === Node.TEXT_NODE && next.endOffset > 0) {
+          const text = node as Text;
+          let lo = next.startContainer === text ? next.startOffset : 0;
+          let hi = next.endOffset;
+          let best = -1;
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            if (charOnPage(text, mid - 1, box)) {
+              best = mid;
+              lo = mid;
+            } else hi = mid - 1;
+          }
+          if (best > 0 && (next.startContainer !== text || next.startOffset < best)) next.setEnd(text, best);
+        }
+        if (!rangeOnPage(next, box)) {
+          const prev = adjacentText(node, -1);
+          if (!prev) return null;
+          const len = prev.data.length;
+          if (next.startContainer === prev && next.startOffset >= len) return null;
+          next.setEnd(prev, len);
+        }
+      }
+      if (next.collapsed) return null;
+    }
+  } catch {
+    return null;
+  }
+  return rangeOnPage(next, box) && !next.collapsed ? next : null;
+}
+
+/** 用这一页上能点到的字，把选区两头收到页内 */
+function clipToPage(range: Range, doc: Document, box: SelBox): Range | null {
+  const ys: number[] = [];
+  const span = box.bottom - box.top;
+  const step = Math.max(24, span / 12);
+  for (let y = box.top + 20; y <= box.bottom - 16; y += step) ys.push(y);
+  const xs = [box.left + 12, (box.left + box.right) / 2, box.right - 12];
+  let start: Range | null = null;
+  let end: Range | null = null;
+  for (const y of ys) {
+    for (const x of xs) {
+      const c = caretPoint(doc, x, y);
+      if (!c) continue;
+      if (!start || c.compareBoundaryPoints(Range.START_TO_START, start) < 0) start = c;
+      if (!end || c.compareBoundaryPoints(Range.END_TO_END, end) > 0) end = c;
+    }
+  }
+  if (!start || !end) return null;
+  const next = range.cloneRange();
+  try {
+    if (next.compareBoundaryPoints(Range.START_TO_START, start) < 0) next.setStart(start.startContainer, start.startOffset);
+    if (next.compareBoundaryPoints(Range.END_TO_END, end) > 0) next.setEnd(end.endContainer, end.endOffset);
+  } catch {
+    return null;
+  }
+  if (next.collapsed || !rangeOnPage(next, box)) return null;
+  return next;
+}
+
+const watchedSel = new WeakSet<Document>();
 function watchSelection(doc: Document, index: number) {
+  if (watchedSel.has(doc)) return;
+  watchedSel.add(doc);
+  doc.addEventListener("pointerdown", () => rememberPage(doc));
+  scrollerOf(doc)?.addEventListener("scroll", () => {
+    const sel = doc.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    pinPage(doc);
+  });
   doc.addEventListener("selectionchange", () => {
     if (clampingSel) return;
     const sel = doc.getSelection();
     const on = !!sel && !sel.isCollapsed;
     selecting.value = on;
     reportSelecting(on);
-    if (sel && !sel.isCollapsed && sel.rangeCount) {
-      const box = pageBox(doc);
-      const range = sel.getRangeAt(0);
-      if (box && !rangeOnPage(range, box)) {
-        const sameNode = sel.anchorNode === sel.focusNode;
-        const backward =
-          (sameNode && sel.anchorOffset > sel.focusOffset) ||
-          (!sameNode &&
-            !!sel.focusNode &&
-            !!sel.anchorNode &&
-            (sel.focusNode.compareDocumentPosition(sel.anchorNode) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
-        const next = keptSel?.cloneRange() ?? shrinkOntoPage(range, box, backward);
-        if (next && !next.collapsed) {
-          clampingSel = true;
-          sel.removeAllRanges();
-          sel.addRange(next);
-          clampingSel = false;
-          keptSel = next.cloneRange();
+    if (on) pinPage(doc);
+    else pageHold = null;
+    try {
+      if (sel && !sel.isCollapsed && sel.rangeCount) {
+        if (keptSel && keptSel.startContainer.ownerDocument !== doc) keptSel = null;
+        const range = sel.getRangeAt(0);
+        const box = pageBox(doc);
+        if (box && !rangeOnPage(range, box)) {
+          const side = overflowOf(range, box);
+          const backward = side.left > 8 && side.right <= 8;
+          const next = trimToPage(range, box, backward) ?? shrinkOntoPage(range, box, backward);
+          if (next && !next.collapsed && rangeOnPage(next, box)) {
+            clampingSel = true;
+            try {
+              sel.removeAllRanges();
+              sel.addRange(next);
+              keptSel = next.cloneRange();
+            } finally {
+              clampingSel = false;
+            }
+          }
+        } else {
+          keptSel = range.cloneRange();
         }
       } else {
-        keptSel = range.cloneRange();
+        keptSel = null;
       }
-    } else {
-      keptSel = null;
+    } catch {
+      clampingSel = false;
     }
     clearTimeout(selTimer);
     selTimer = window.setTimeout(() => captureSelection(doc, index), 220);
@@ -815,7 +1073,21 @@ function captureSelection(doc: Document, index: number) {
     if (pick.value && !annos.value.some((a) => a.cfi === pick.value?.cfi)) pick.value = null;
     return;
   }
-  const range = sel.getRangeAt(0);
+  let range = sel.getRangeAt(0);
+  const box = pageBox(doc);
+  if (box && !rangeOnPage(range, box)) {
+    const clipped = clipToPage(range, doc, box) ?? shrinkOntoPage(range, box, false);
+    if (clipped) {
+      clampingSel = true;
+      try {
+        sel.removeAllRanges();
+        sel.addRange(clipped);
+        range = clipped;
+      } finally {
+        clampingSel = false;
+      }
+    }
+  }
   const text = range.toString().replace(/\s+/g, " ").trim();
   if (!text) return;
   activeDoc = doc;
@@ -901,6 +1173,7 @@ onMounted(async () => {
     // 书页 iframe 外面（页边、跨章时短暂停留的空白页）的点按也一样翻页、呼出菜单，连点时不会丢掉一下
     node.addEventListener("pointerdown", onPointerDown);
     node.addEventListener("pointerup", (ev) => onPointerUp(ev, document));
+    node.addEventListener("click", (ev) => onFrameClick(ev, document));
     // 先登记 load，第一页加载出来时就能接上点按和选字
     view.addEventListener("load", ((e: Event) => {
       const detail = (e as CustomEvent<{ doc: Document; index: number }>).detail;
@@ -908,6 +1181,7 @@ onMounted(async () => {
       activeDoc = doc;
       doc.addEventListener("pointerdown", onPointerDown);
       doc.addEventListener("pointerup", (ev) => onPointerUp(ev, doc));
+      doc.addEventListener("click", (ev) => onFrameClick(ev, doc));
       watchSelection(doc, detail.index);
       watchSwipe(doc);
       void paint();
@@ -953,8 +1227,10 @@ onMounted(async () => {
       if (pick.value && !annos.value.some((a) => a.cfi === pick.value?.cfi)) pick.value = null;
       atStart.value = atEdge(-1);
       atEnd.value = atEdge(1);
-      if (!footFrozen) snapshotFoot();
-      else if (!onBlankPage()) showFoot();
+      if (!footFrozen) {
+        if (scrolled.value) queueFoot();
+        else snapshotFoot();
+      } else if (!onBlankPage()) showFoot();
       if (!onBlankPage()) {
         const waiting = relocateWaiters;
         relocateWaiters = [];
@@ -1001,6 +1277,7 @@ async function revealWhenStyled() {
 }
 
 onBeforeUnmount(() => {
+  window.clearTimeout(footTimer);
   removeBack();
   document.removeEventListener("visibilitychange", onHide);
   void mobileApi.selectionMenu(false).catch(() => {});

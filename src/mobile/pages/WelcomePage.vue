@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import Icon from "../Icon.vue";
-import { go } from "../nav";
+import { go, reset } from "../nav";
+import { useMobile } from "../store";
+
+const store = useMobile();
+
+function later() {
+  store.skipWelcome();
+  reset({ p: "files", path: "" });
+}
 </script>
 
 <template>
@@ -16,6 +24,7 @@ import { go } from "../nav";
           <li><Icon name="lock" :size="18" /><span>密码只保存在本机，由系统密钥库加密</span></li>
         </ul>
         <button class="btn pri block" @click="go({ p: 'form', id: null })"><Icon name="plus" :size="18" />添加笔记库</button>
+        <button class="btn text block" style="margin-top: 8px" @click="later">以后再说</button>
       </div>
     </div>
   </div>

@@ -48,8 +48,17 @@ export class TOCProgress {
         for (const [i, { fragment }] of items.entries()) {
             const el = this.getFragment(doc, fragment)
             if (!el) continue
-            if (range.comparePoint(el, 0) > 0)
+            if (range.comparePoint(el, 0) > 0) {
+                if (i === 0) {
+                    // 这一章的标题就在文件开头时，章首空白仍算本章。
+                    // 算成上一章的话，滚过章界时左下角章节名会在两章之间闪。
+                    let top = 0
+                    try { top = el.getBoundingClientRect().top } catch { /* 量不到就当章首 */ }
+                    if (top > 320) return prev
+                    return items[0].item
+                }
                 return (items[i - 1]?.item ?? prev)
+            }
         }
         return items[items.length - 1].item
     }

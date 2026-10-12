@@ -218,6 +218,8 @@ class View {
     #column = true
     #size
     #layout = {}
+    #expandMisses = 0
+    #expandQueued = false
     constructor({ container, onExpand }) {
         this.container = container
         this.onExpand = onExpand
@@ -292,23 +294,52 @@ class View {
     scrolled({ gap, columnWidth }) {
         const vertical = this.#vertical
         const doc = this.document
-        setStylesImportant(doc.documentElement, {
+        const root = doc.documentElement
+        // 分栏时写在元素上的固定宽高不带 !important，不清掉会把上下滚动锁成一页高
+        root.style.height = ''
+        root.style.width = ''
+        setStylesImportant(root, {
             'box-sizing': 'border-box',
             'padding': vertical ? `${gap}px 0` : `0 ${gap}px`,
             'column-width': 'auto',
+            'column-count': '1',
+            'column-fill': 'balance',
             'height': 'auto',
             'width': 'auto',
+            'min-height': '0',
+            'min-width': '0',
+            'overflow': 'visible',
+            'max-height': 'none',
+            'max-width': 'none',
         })
         setStylesImportant(doc.body, {
-            [vertical ? 'max-height' : 'max-width']: `${columnWidth}px`,
+            'max-width': vertical ? 'none' : `${columnWidth}px`,
+            'max-height': vertical ? `${columnWidth}px` : 'none',
             'margin': 'auto',
+            'height': 'auto',
+            'min-height': '0',
+            'overflow': 'visible',
         })
+        this.#element.style.flexDirection = 'column'
+        this.#element.style.justifyContent = 'flex-start'
+        this.#element.style.alignItems = 'stretch'
+        this.#element.style.boxSizing = 'border-box'
         this.setImageSize()
         this.expand()
     }
     columnize({ width, height, gap, columnWidth }) {
         const vertical = this.#vertical
         this.#size = vertical ? height : width
+        this.#element.style.justifyContent = 'center'
+        this.#element.style.boxSizing = 'content-box'
+        this.#element.style.maxWidth = 'none'
+        this.#element.style.maxHeight = 'none'
+        this.#element.style.minWidth = ''
+        this.#element.style.minHeight = ''
+        this.#iframe.style.maxWidth = 'none'
+        this.#iframe.style.maxHeight = 'none'
+        this.#iframe.style.minWidth = ''
+        this.#iframe.style.minHeight = ''
 
         const doc = this.document
         setStylesImportant(doc.documentElement, {
@@ -361,7 +392,75 @@ class View {
             })
         }
     }
+    /** 只认已经写成像素的高度。100% 会被 parseFloat 看成 100，短章就锁成一整屏 */
+    #px(value) {
+        const raw = String(value || '')
+        if (!raw.endsWith('px')) return 0
+        const n = parseFloat(raw)
+        return n > 1 ? n : 0
+    }
+    /**
+     * 正文有多高。先把 iframe 收到 0，再量。
+     * 不收的话，WebView 里 body 会被拉成上一轮的 iframe 高，章末就空出一大截。
+     */
+    #measureScrolled(side) {
+        const doc = this.document
+        const body = doc?.body
+        const root = doc?.documentElement
+        if (!body || !root) return 0
+        root.style.setProperty(side, 'auto', 'important')
+        root.style.setProperty('min-' + side, '0', 'important')
+        body.style.setProperty(side, 'auto', 'important')
+        body.style.setProperty('min-' + side, '0', 'important')
+        body.style.setProperty('overflow', 'visible', 'important')
+        this.#iframe.style[side] = '0px'
+        this.#element.style[side] = 'auto'
+        void body.offsetHeight
+        let end = 0
+        for (const child of body.children) {
+            const tail = side === 'height'
+                ? child.offsetTop + child.offsetHeight
+                : child.offsetLeft + child.offsetWidth
+            if (tail > end) end = tail
+        }
+        const scroll = side === 'height' ? body.scrollHeight : body.scrollWidth
+        const range = doc.createRange()
+        range.selectNodeContents(body)
+        const rect = range.getBoundingClientRect()
+        const boxed = side === 'height' ? rect.height : rect.width
+        let size = Math.max(end, boxed)
+        // 滚动高度只在和内容差不多时才采信，避免把被撑高的空白算进去
+        if (scroll > 1 && (size <= 1 || scroll <= size * 1.2)) size = Math.max(size, scroll)
+        if (!(size > 1)) return 0
+        return Math.ceil(size)
+    }
+    #scheduleScrolledExpand() {
+        if (this.#element.style.visibility === 'hidden') return
+        if (this.#expandQueued) return
+        this.#expandMisses++
+        if (this.#expandMisses > 30) return
+        this.#expandQueued = true
+        requestAnimationFrame(() => {
+            this.#expandQueued = false
+            if (this.#column || !this.document?.body) return
+            this.expand()
+        })
+    }
+    /** 藏着排版的 iframe 显示后，WebView 里文字层有时是空的。不要用 display:none，那会把已经排好的字清掉 */
+    wake() {
+        if (!this.document?.body) return
+        this.#expandMisses = 0
+        this.expand()
+        this.kickPaint()
+    }
+    kickPaint() {
+        const body = this.document?.body
+        if (!body) return
+        body.style.setProperty('transform', 'translateZ(0)')
+        requestAnimationFrame(() => body.style.removeProperty('transform'))
+    }
     expand() {
+        if (!this.document?.documentElement) return
         const { documentElement } = this.document
         if (this.#column) {
             const side = this.#vertical ? 'height' : 'width'
@@ -391,13 +490,62 @@ class View {
         } else {
             const side = this.#vertical ? 'width' : 'height'
             const otherSide = this.#vertical ? 'height' : 'width'
-            const contentSize = documentElement.getBoundingClientRect()[side]
-            const expandedSize = contentSize
-            const { margin } = this.#layout
-            const padding = this.#vertical ? `0 ${margin}px` : `${margin}px 0`
+            const parent = this.#element.parentElement
+            const cross = otherSide === 'width' ? parent?.clientWidth ?? 0 : parent?.clientHeight ?? 0
+            this.#element.style.boxSizing = 'border-box'
+            this.#element.style.justifyContent = 'flex-start'
+            this.#element.style.maxWidth = otherSide === 'width' ? '100%' : 'none'
+            this.#element.style.maxHeight = otherSide === 'height' ? '100%' : 'none'
+            this.#iframe.style.maxWidth = otherSide === 'width' ? '100%' : 'none'
+            this.#iframe.style.maxHeight = otherSide === 'height' ? '100%' : 'none'
+            // 不要把每一章撑满一屏，否则章和章之间会空出一块，滚过去像刷新
+            this.#element.style.minWidth = ''
+            this.#element.style.minHeight = ''
+            this.#iframe.style.minWidth = ''
+            this.#iframe.style.minHeight = ''
+            const padding = '0'
             this.#element.style.padding = padding
-            this.#iframe.style[side] = `${expandedSize}px`
-            this.#element.style[side] = `${expandedSize}px`
+            // 左右翻页时 iframe 跟整章一样宽。先收成容器宽度再量高度，
+            // 否则量到的是 0 或一页，切到上下滚动后整屏空白
+            if (cross > 1) {
+                const px = `${Math.round(cross)}px`
+                this.#iframe.style[otherSide] = px
+                this.#element.style[otherSide] = px
+            } else {
+                this.#iframe.style[otherSide] = '100%'
+                this.#element.style[otherSide] = '100%'
+            }
+            const scroller = this.#element.parentElement
+            const savedScroll = scroller?.scrollTop ?? 0
+            if (scroller) scroller.dataset.sparkMeasure = '1'
+            const contentSize = this.#measureScrolled(side)
+            if (!(contentSize > 1)) {
+                if (!(this.#px(this.#iframe.style[side]) > 1)) {
+                    this.#iframe.style[side] = 'auto'
+                    this.#element.style[side] = 'auto'
+                }
+                if (scroller) {
+                    const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+                    const next = Math.min(savedScroll, max)
+                    if (Math.abs(scroller.scrollTop - next) > 1) scroller.scrollTop = next
+                    delete scroller.dataset.sparkMeasure
+                }
+                this.#scheduleScrolledExpand()
+                return
+            }
+            this.#expandMisses = 0
+            const expandedSize = contentSize
+            const current = this.#px(this.#iframe.style[side])
+            if (!(current > 1) || Math.abs(current - expandedSize) > 2) {
+                this.#iframe.style[side] = `${expandedSize}px`
+                this.#element.style[side] = `${expandedSize}px`
+            }
+            if (scroller) {
+                const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+                const next = Math.min(savedScroll, max)
+                if (Math.abs(scroller.scrollTop - next) > 1) scroller.scrollTop = next
+                delete scroller.dataset.sparkMeasure
+            }
             this.#iframe.style[otherSide] = '100%'
             this.#element.style[otherSide] = '100%'
             if (this.#overlayer) {
@@ -516,6 +664,13 @@ export class Paginator extends HTMLElement {
             grid-column: 1 / -1;
             grid-row: 1 / -1;
             overflow: auto;
+            /* 接上一章时自己补滚动。浏览器再锚定一次，视口会跳，章节名就来回闪 */
+            overflow-anchor: none;
+            scrollbar-gutter: stable;
+            /* 留白只放在整条滚动的两头。每章各自留，章和章之间会空出一块 */
+            padding-top: var(--_margin);
+            padding-bottom: var(--_margin);
+            box-sizing: border-box;
         }
         #header {
             grid-column: 3 / 4;
@@ -561,6 +716,7 @@ export class Paginator extends HTMLElement {
 
         this.#observer.observe(this.#container)
         this.#container.addEventListener('scroll', () => this.dispatchEvent(new Event('scroll')))
+        this.#container.addEventListener('scroll', () => this.#onUserScroll(), { passive: true })
         this.#container.addEventListener('scroll', debounce(() => {
             if (this.scrolled) {
                 if (this.#justAnchored) this.#justAnchored = false
@@ -604,11 +760,12 @@ export class Paginator extends HTMLElement {
             doc.addEventListener('focusin', e => this.scrolled ? null :
                 // NOTE: `requestAnimationFrame` is needed in WebKit
                 requestAnimationFrame(() => this.#scrollToAnchor(e.target)))
+            this.#watchSectionEdge(doc)
         })
 
         this.#mediaQueryListener = () => {
-            if (!this.#view) return
-            this.#background.style.background = getBackground(this.#view.document)
+            if (!this.#view?.document) return
+            this.#paintBackground(getBackground(this.#view.document))
         }
         this.#mediaQuery.addEventListener('change', this.#mediaQueryListener)
     }
@@ -659,16 +816,26 @@ export class Paginator extends HTMLElement {
         const view = new View({
             container: this,
             // a view that is not on screen yet must not move the current one
-            onExpand: () => { if (view === this.#view) this.#scrollToAnchor(this.#anchor) },
+            onExpand: () => {
+                if (this.scrolled) this.#holdScrolledScroll(view)
+                else if (view === this.#view) this.#scrollToAnchor(this.#anchor)
+            },
         })
         // keep it out of the visible flex flow so the current page does not
         // resize or scroll while the next section is loading
         const el = view.element
         el.style.position = 'absolute'
         el.style.left = '0'
-        el.style.top = '0'
-        el.style.visibility = 'hidden'
         el.style.pointerEvents = 'none'
+        if (this.scrolled) {
+            // visibility:hidden 里载入的 iframe，WebView 滚到跟前时文字层仍是空的
+            el.style.top = '-10000px'
+            el.style.width = '100%'
+            el.style.visibility = 'visible'
+        } else {
+            el.style.top = '0'
+            el.style.visibility = 'hidden'
+        }
         this.#container.append(el)
         return view
     }
@@ -682,18 +849,27 @@ export class Paginator extends HTMLElement {
         // language and direction change the layout, so they are set before the
         // first layout, also for sections that are only preloaded
         this.dispatchEvent(new CustomEvent('prepare', { detail: { doc } }))
-        if (!doc.head) return
-        const $styleBefore = doc.createElement('style')
-        doc.head.prepend($styleBefore)
-        const $style = doc.createElement('style')
-        doc.head.append($style)
-        this.#styleMap.set(doc, [$styleBefore, $style])
+        const root = doc.documentElement
+        if (!root) return
+        if (!doc.head) root.prepend(doc.createElement('head'))
+        if (!this.#styleMap.has(doc)) {
+            const $styleBefore = doc.createElement('style')
+            doc.head.prepend($styleBefore)
+            const $style = doc.createElement('style')
+            doc.head.append($style)
+            this.#styleMap.set(doc, [$styleBefore, $style])
+        }
         this.#applyStyles(doc)
     }
     // Spark: the sections before and after the current one are loaded and laid
     // out ahead of time in hidden views. Turning into one of them then swaps
     // views at once instead of waiting for the load, and `peek` can show its
     // first or last page so the app can capture it before the turn.
+    /** 上下滚动时叠在同一条滚动里的章节，滚过界不用整页换掉 */
+    #spine = new Map()
+    #paintObs
+    #views = new WeakMap()
+    #extending = new Set()
     #spares = new Map()
     preload(dir) {
         if (this.scrolled || !this.#view) return Promise.resolve(false)
@@ -749,15 +925,22 @@ export class Paginator extends HTMLElement {
         return spare.view
     }
     #peeked = null
-    // Spark: shows the page before (-1) or after (1) the current one without
-    // navigating, so the app can capture it; `unpeek` brings the current page
-    // back. Returns false when that page is not at hand (book edge, the next
-    // section is not preloaded yet, vertical or right-to-left books).
-    peek(dir) {
+    #relayoutPending = false
+    /** 上下滚动时上次的容器滚动位置，用来判断手指是往章末还是往章首 */
+    #scrollTick = 0
+    /** 程序自己滚的时候不要当成用户滑到了章末 */
+    #suppressContinue = false
+    #muteToken = 0
+    // Spark: shows the page `distance` steps before (-1) or after (1) the current
+    // one without navigating, so the app can capture it; `unpeek` brings the
+    // current page back. Returns false when that page is not at hand (book edge,
+    // the next section is not preloaded yet, vertical or right-to-left books).
+    peek(dir, distance = 1) {
         this.unpeek()
         if (this.scrolled || this.#vertical || this.#rtl || !this.#view) return false
+        const dist = Math.max(1, Math.trunc(distance) || 1)
         const { page, pages, size } = this
-        const target = page + dir
+        const target = page + dir * dist
         const element = this.#container
         if (target >= 1 && target <= pages - 2) {
             this.#peeked = { scroll: element.scrollLeft }
@@ -770,7 +953,10 @@ export class Paginator extends HTMLElement {
         const el = spare.view.element
         const sparePages = Math.round(el.getBoundingClientRect().width / size)
         if (sparePages < 3) return false
-        const sparePage = dir > 0 ? 1 : sparePages - 2
+        // 本章内容页是 1..pages-2。超出的页数落到旁边那一章里
+        const overflow = dir > 0 ? target - (pages - 2) : 1 - target
+        const sparePage = dir > 0 ? overflow : sparePages - 1 - overflow
+        if (sparePage < 1 || sparePage > sparePages - 2) return false
         el.style.left = `${element.scrollLeft - sparePage * size}px`
         el.style.visibility = 'visible'
         this.#view.element.style.visibility = 'hidden'
@@ -806,11 +992,14 @@ export class Paginator extends HTMLElement {
         el.style.visibility = ''
         el.style.pointerEvents = ''
         const old = this.#view
+        this.#forgetSpine()
         if (old) {
             old.destroy()
             this.#container.removeChild(old.element)
         }
         this.#view = view
+        // 藏着加载的那一帧量出来常常是 0，显示后再量一次，否则整章没有字
+        if (this.scrolled) view.wake()
         return true
     }
     #beforeRender({ vertical, rtl, background }) {
@@ -818,9 +1007,8 @@ export class Paginator extends HTMLElement {
         this.#rtl = rtl
         this.#top.classList.toggle('vertical', vertical)
 
-        // set background to `doc` background
-        // this is needed because the iframe does not fill the whole element
-        this.#background.style.background = background
+        // 书页四周的留白用正文底色。没拿到颜色时不要赋空值，否则会把原来的底色清掉，露出 WebView 的白
+        this.#paintBackground(background)
 
         const { width, height } = this.#container.getBoundingClientRect()
         const size = vertical ? height : width
@@ -889,8 +1077,23 @@ export class Paginator extends HTMLElement {
 
         return { height, width, margin, gap, columnWidth }
     }
+    #paintBackground(value) {
+        if (typeof value !== 'string') return
+        const color = value.trim()
+        if (!color || color === 'transparent' || color.startsWith('rgba(0, 0, 0, 0)')) return
+        this.#background.style.background = color
+        this.#container.style.background = color
+    }
+    /** 翻页用的那根滚动轴换成另一根之后，把剩下的那根归零，不然会停在左右分页的空白页上 */
+    #resetCrossScroll() {
+        const element = this.#container
+        if (!element) return
+        if (this.scrollProp === 'scrollTop') element.scrollLeft = 0
+        else element.scrollTop = 0
+    }
     render() {
         if (!this.#view) return
+        const anchor = this.#anchor
         // preloaded sections were laid out for the old size or flow
         this.unpeek()
         this.#dropSpares()
@@ -898,7 +1101,22 @@ export class Paginator extends HTMLElement {
             vertical: this.#vertical,
             rtl: this.#rtl,
         }))
-        this.#scrollToAnchor(this.#anchor)
+        this.#resetCrossScroll()
+        void this.#scrollToAnchor(anchor)
+        if (!this.scrolled) this.#forgetSpine()
+        else this.#adoptScrolled()
+        // 分栏拆掉的第一帧高度经常还是旧的，下一帧再量一次，避免锁成空白
+        if (this.scrolled && !this.#relayoutPending) {
+            this.#relayoutPending = true
+            requestAnimationFrame(() => {
+                this.#relayoutPending = false
+                if (!this.scrolled || !this.#view) return
+                this.#anchor = anchor
+                this.#view.expand()
+                this.#resetCrossScroll()
+                void this.#scrollToAnchor(anchor)
+            })
+        }
     }
     get scrolled() {
         return this.getAttribute('flow') === 'scrolled'
@@ -920,7 +1138,9 @@ export class Paginator extends HTMLElement {
         return this.#view.element.getBoundingClientRect()[this.sideProp]
     }
     get start() {
-        return Math.abs(this.#container[this.scrollProp])
+        const scroll = Math.abs(this.#container[this.scrollProp])
+        if (!this.scrolled || !this.#view) return scroll
+        return scroll - this.#viewOrigin()
     }
     get end() {
         return this.start + this.size
@@ -1023,16 +1243,293 @@ export class Paginator extends HTMLElement {
     }
     async #scrollToRect(rect, reason) {
         if (this.scrolled) {
-            const offset = this.#getRectMapper()(rect).left - this.#margin
+            const offset = this.#flowOffset(this.#getRectMapper()(rect).left - this.#margin)
             return this.#scrollTo(offset, reason)
         }
         const offset = this.#getRectMapper()(rect).left
         return this.#scrollToPage(Math.floor(offset / this.size) + (this.#rtl ? -1 : 1), reason)
     }
+    #setScroll(element, prop, value) {
+        this.#muteScroll(() => { element[prop] = value })
+    }
+    #absScroll() {
+        return Math.abs(this.#container?.[this.scrollProp] || 0)
+    }
+    /** 上下滚动的偏移是相对当前章的；上面还有章时要加上那一章的起点 */
+    #flowOffset(offset) {
+        if (!this.scrolled || this.#vertical || !this.#view) return offset
+        return offset + this.#viewOrigin()
+    }
+    /** 程序改滚动位置时，不要当成手指滑到了章界。下一帧再放开，同步的 scroll 事件也能盖住 */
+    #muteScroll(fn) {
+        this.#suppressContinue = true
+        try {
+            fn()
+        } finally {
+            this.#scrollTick = this.#absScroll()
+            const token = ++this.#muteToken
+            requestAnimationFrame(() => {
+                if (token !== this.#muteToken) return
+                this.#scrollTick = this.#absScroll()
+                this.#suppressContinue = false
+            })
+        }
+    }
+    #viewOrigin() {
+        if (!this.#view) return 0
+        const el = this.#view.element
+        return this.scrollProp === 'scrollTop' ? el.offsetTop : el.offsetLeft
+    }
+    /** 上面那一章变高时补上滚动位置，正在看的字不会被顶走 */
+    #holdScrolledScroll(view) {
+        const el = view.element
+        // 还在屏幕外加载的章不占滚动高度，补了会把正在看的字拽走
+        if (!el?.isConnected || el.style.position === 'absolute') return
+        let listed = false
+        for (const v of this.#spine.values()) if (v === view) { listed = true; break }
+        if (!listed) return
+        const next = el.getBoundingClientRect()[this.sideProp]
+        const prev = Number(el.dataset.spineH || 0)
+        el.dataset.spineH = String(next)
+        if (!(prev > 0) || Math.abs(next - prev) < 1) return
+        const origin = this.scrollProp === 'scrollTop' ? el.offsetTop : el.offsetLeft
+        const scroll = this.#absScroll()
+        if (origin + prev > scroll + 1) return
+        this.#muteScroll(() => { this.#container[this.scrollProp] += next - prev })
+    }
+    #forgetSpine() {
+        for (const [index, view] of this.#spine) {
+            if (view === this.#view) continue
+            view.destroy()
+            view.element.remove()
+            this.sections[index]?.unload?.()
+        }
+        this.#spine.clear()
+        this.#extending.clear()
+    }
+    #adoptScrolled() {
+        if (!this.scrolled || !this.#view) return
+        const el = this.#view.element
+        el.style.position = 'relative'
+        el.style.left = ''
+        el.style.top = ''
+        el.style.visibility = ''
+        el.style.pointerEvents = ''
+        el.dataset.spineH = String(el.getBoundingClientRect()[this.sideProp])
+        this.#spine.set(this.#index, this.#view)
+        this.#armScrolled(this.#view)
+        void this.#extendScrolled(1)
+        void this.#extendScrolled(-1)
+    }
+    /** 章滚进屏幕再量一次并补画。屏幕外量高会偏大，文字层也会是空的 */
+    #armScrolled(view) {
+        if (!view?.element || !this.scrolled) return
+        if (!this.#paintObs) {
+            this.#paintObs = new IntersectionObserver(entries => {
+                for (const entry of entries) {
+                    if (entry.intersectionRatio <= 0) continue
+                    this.#paintObs.unobserve(entry.target)
+                    const v = this.#views.get(entry.target)
+                    if (!v?.document || !this.scrolled) continue
+                    this.#prepareDoc(v.document)
+                    v.render(this.#beforeRender({
+                        vertical: this.#vertical,
+                        rtl: this.#rtl,
+                    }))
+                    v.kickPaint()
+                }
+            }, { root: this.#container, rootMargin: '80px' })
+        }
+        this.#views.set(view.element, view)
+        this.#paintObs.observe(view.element)
+    }
+    #sectionBox(view) {
+        const el = view.element
+        const top = this.scrollProp === 'scrollTop' ? el.offsetTop : el.offsetLeft
+        const extent = this.scrollProp === 'scrollTop' ? el.offsetHeight : el.offsetWidth
+        return { top, bottom: top + extent }
+    }
+    #placeScrolled(index, el) {
+        const next = [...this.#spine.entries()].filter(([i]) => i > index).sort((a, b) => a[0] - b[0])[0]
+        if (next) this.#container.insertBefore(el, next[1].element)
+        else this.#container.append(el)
+    }
+    /** 邻章还在当前章旁边就接上。滚到邻章时不要把正在加载的那一章丢掉 */
+    #extendStillWanted(index) {
+        return this.scrolled && !!this.#view && !this.#spine.has(index) && this.#index !== index && Math.abs(index - this.#index) <= 1
+    }
+    /** 插入或拆掉一章后，把视口补回原来的字。浏览器若已经锚定过，就不再补一次 */
+    #keepPlace(beforeTop, beforeScroll) {
+        if (!this.#view?.element?.isConnected) return
+        const prop = this.scrollProp
+        const need = (this.#sectionBox(this.#view).top - beforeTop) - (this.#container[prop] - beforeScroll)
+        if (Math.abs(need) > 1) this.#container[prop] += need
+    }
+    /** 把旁边那一章接到当前章的上面或下面，滚动位置不动 */
+    async #extendScrolled(dir) {
+        if (!this.scrolled || !this.#view) return
+        const index = this.#adjacentIndex(dir)
+        if (index == null || this.#spine.has(index) || this.#extending.has(index)) return
+        this.#extending.add(index)
+        let loaded = false
+        const view = this.#hiddenView()
+        const el = view.element
+        // 先放到最终顺序再加载。加载完再挪 iframe，文档会重开，阅读设置和点按都会丢
+        this.#placeScrolled(index, el)
+        try {
+            const src = await this.sections[index].load()
+            loaded = true
+            if (!this.#extendStillWanted(index)) {
+                this.sections[index].unload?.()
+                loaded = false
+                view.destroy()
+                view.element.remove()
+                return
+            }
+            await view.load(src, doc => this.#prepareDoc(doc), this.#beforeRender.bind(this))
+            await Promise.race([view.document?.fonts?.ready, wait(800)])
+            if (!this.#extendStillWanted(index)) {
+                view.destroy()
+                view.element.remove()
+                this.sections[index].unload?.()
+                loaded = false
+                return
+            }
+            const beforeTop = this.#sectionBox(this.#view).top
+            const beforeScroll = this.#container[this.scrollProp]
+            this.#muteScroll(() => {
+                el.style.position = 'relative'
+                el.style.left = ''
+                el.style.top = ''
+                el.style.visibility = 'visible'
+                el.style.pointerEvents = 'auto'
+                el.style.width = '100%'
+                this.#prepareDoc(view.document)
+                view.render(this.#beforeRender({
+                    vertical: this.#vertical,
+                    rtl: this.#rtl,
+                }))
+                view.kickPaint()
+                this.#keepPlace(beforeTop, beforeScroll)
+                el.dataset.spineH = String(el.getBoundingClientRect()[this.sideProp])
+            })
+            this.#spine.set(index, view)
+            this.#armScrolled(view)
+            this.dispatchEvent(new CustomEvent('create-overlayer', {
+                detail: {
+                    doc: view.document, index,
+                    attach: overlayer => view.overlayer = overlayer,
+                },
+            }))
+            this.dispatchEvent(new CustomEvent('load', { detail: { doc: view.document, index } }))
+            requestAnimationFrame(() => {
+                if (this.#spine.get(index) !== view || !this.scrolled) return
+                view.expand()
+            })
+        } catch (e) {
+            console.warn(e)
+            view.destroy()
+            view.element.remove()
+            if (loaded) this.sections[index].unload?.()
+        } finally {
+            this.#extending.delete(index)
+        }
+    }
+    #trimScrolled() {
+        const keep = new Set([this.#index - 1, this.#index, this.#index + 1])
+        for (const [index, view] of [...this.#spine]) {
+            if (keep.has(index) || view === this.#view) continue
+            const beforeTop = this.#view?.element?.isConnected ? this.#sectionBox(this.#view).top : 0
+            const beforeScroll = this.#container[this.scrollProp]
+            this.#spine.delete(index)
+            view.destroy()
+            view.element.remove()
+            this.sections[index]?.unload?.()
+            this.#muteScroll(() => this.#keepPlace(beforeTop, beforeScroll))
+        }
+    }
+    /** 视线跨过章界时只改当前章，不把画面拉回章首 */
+    #followScrolled() {
+        if (!this.scrolled || this.#spine.size < 2 || !this.#view) return
+        const scroll = this.#absScroll()
+        const max = Math.max(0, this.#container.scrollHeight - this.size)
+        // 短的最后一章贴不到屏幕顶。已经滚到底时，用屏幕下沿判断，章节名才会换成它
+        const anchor = scroll >= max - 2
+            ? scroll + Math.max(0, this.size - 8)
+            : scroll + Math.min(48, Math.max(24, this.size * 0.12))
+        const here = this.#sectionBox(this.#view)
+        // 还在当前章附近就不要换。章界上高度来回补几像素时，章节名会闪个不停
+        if (anchor >= here.top - 20 && anchor < here.bottom + 20) return
+        let found = null
+        for (const [index, view] of [...this.#spine.entries()].sort((a, b) => a[0] - b[0])) {
+            const box = this.#sectionBox(view)
+            if (anchor >= box.top && anchor < box.bottom) {
+                found = index
+                break
+            }
+        }
+        if (found == null || found === this.#index) return
+        const view = this.#spine.get(found)
+        if (!view) return
+        this.#view = view
+        this.#index = found
+        this.#afterScroll('scroll')
+        void this.#extendScrolled(1)
+        void this.#extendScrolled(-1)
+        this.#trimScrolled()
+    }
+    /** 快到章界时把下一章接上，而不是滚到底再整页换掉 */
+    #continueScrolled(dir) {
+        if (this.#suppressContinue || this.#locked) return
+        if (!this.scrolled || !this.#view) return
+        if (!(this.size > 0) || !(this.viewSize > 0)) return
+        if (this.#adjacentIndex(dir) == null) return
+        const remain = dir > 0 ? this.viewSize - this.end : this.start
+        if (remain > this.size * 1.2) return
+        void this.#extendScrolled(dir)
+    }
+    #onUserScroll() {
+        if (this.#suppressContinue || this.#container?.dataset.sparkMeasure) return
+        if (!this.scrolled || this.#locked) {
+            this.#scrollTick = this.#absScroll()
+            return
+        }
+        // 用容器的滚动距离判断方向。换成下一章后 start 会从章末跳回 0，看起来像往回滑了一大截
+        const scroll = this.#absScroll()
+        const delta = scroll - this.#scrollTick
+        this.#scrollTick = scroll
+        this.#followScrolled()
+        this.#scrollTick = this.#absScroll()
+        if (delta > 0.5) this.#continueScrolled(1)
+        else if (delta < -0.5) this.#continueScrolled(-1)
+    }
+    /** 章比屏幕短、或已经贴着章末再拽时，容器不会再滚动，靠这一下换章 */
+    #watchSectionEdge(doc) {
+        let x = 0
+        let y = 0
+        doc.addEventListener('touchstart', e => {
+            if (!this.scrolled) return
+            const t = e.changedTouches[0]
+            if (!t) return
+            x = t.screenX
+            y = t.screenY
+        }, { passive: true })
+        doc.addEventListener('touchend', e => {
+            if (!this.scrolled) return
+            const t = e.changedTouches[0]
+            if (!t) return
+            const dx = x - t.screenX
+            const dy = y - t.screenY
+            if (Math.abs(dy) < 48 || Math.abs(dy) < Math.abs(dx) * 1.2) return
+            this.#continueScrolled(dy > 0 ? 1 : -1)
+        }, { passive: true })
+    }
     async #scrollTo(offset, reason, smooth) {
         const element = this.#container
+        this.#resetCrossScroll()
         const { scrollProp, size } = this
         if (element[scrollProp] === offset) {
+            this.#scrollTick = this.#absScroll()
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
             return
@@ -1041,13 +1538,14 @@ export class Paginator extends HTMLElement {
         if (this.scrolled && this.#vertical) offset = -offset
         if ((reason === 'snap' || smooth) && this.hasAttribute('animated')) return animate(
             element[scrollProp], offset, 300, easeOutQuad,
-            x => element[scrollProp] = x,
+            x => this.#setScroll(element, scrollProp, x),
         ).then(() => {
+            this.#scrollTick = this.#absScroll()
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
         })
         else {
-            element[scrollProp] = offset
+            this.#setScroll(element, scrollProp, offset)
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
         }
@@ -1074,7 +1572,7 @@ export class Paginator extends HTMLElement {
         }
         // if anchor is a fraction
         if (this.scrolled) {
-            await this.#scrollTo(anchor * this.viewSize, reason)
+            await this.#scrollTo(this.#flowOffset(anchor * this.viewSize), reason)
             return
         }
         const { pages } = this
@@ -1149,6 +1647,7 @@ export class Paginator extends HTMLElement {
             await Promise.race([this.#view.document.fonts.ready, wait(400)])
         }
         if (hasFocus) this.focusView()
+        if (this.scrolled) this.#adoptScrolled()
     }
     #canGoToIndex(index) {
         return index >= 0 && index <= this.sections.length - 1
@@ -1180,8 +1679,8 @@ export class Paginator extends HTMLElement {
     #scrollPrev(distance) {
         if (!this.#view) return true
         if (this.scrolled) {
-            if (this.start > 0) return this.#scrollTo(
-                Math.max(0, this.start - (distance ?? this.size)), null, true)
+            if (this.start > 12) return this.#scrollTo(
+                this.#flowOffset(Math.max(0, this.start - (distance ?? this.size))), null, true)
             return true
         }
         if (this.atStart) return
@@ -1191,8 +1690,8 @@ export class Paginator extends HTMLElement {
     #scrollNext(distance) {
         if (!this.#view) return true
         if (this.scrolled) {
-            if (this.viewSize - this.end > 2) return this.#scrollTo(
-                Math.min(this.viewSize, distance ? this.start + distance : this.end), null, true)
+            if (this.viewSize - this.end > 12) return this.#scrollTo(
+                this.#flowOffset(Math.min(this.viewSize, distance ? this.start + distance : this.end)), null, true)
             return true
         }
         if (this.atEnd) return
@@ -1213,16 +1712,21 @@ export class Paginator extends HTMLElement {
     async #turnPage(dir, distance) {
         if (this.#locked) return
         this.#locked = true
-        this.unpeek()
-        const prev = dir === -1
-        const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
-        if (shouldGo) await this.#goTo({
-            index: this.#adjacentIndex(dir),
-            anchor: prev ? () => 1 : () => 0,
-        })
-        // 同一章里翻页是瞬间换的。这里再等 100ms 会把锁占住，快滑时下一页就慢一拍
-        if (shouldGo) await wait(100)
-        this.#locked = false
+        let shouldGo = false
+        try {
+            this.unpeek()
+            const prev = dir === -1
+            shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
+            if (shouldGo) await this.#goTo({
+                index: this.#adjacentIndex(dir),
+                anchor: prev ? () => 1 : () => 0,
+            })
+            // 同一章里翻页是瞬间换的。这里再等 100ms 会把锁占住，快滑时下一页就慢一拍
+            if (shouldGo) await wait(100)
+        } finally {
+            this.#locked = false
+            this.#scrollTick = this.#absScroll()
+        }
     }
     prev(distance) {
         return this.#turnPage(-1, distance)
@@ -1245,6 +1749,15 @@ export class Paginator extends HTMLElement {
         return this.goTo({ index })
     }
     getContents() {
+        if (this.scrolled && this.#spine.size) {
+            return [...this.#spine.entries()]
+                .sort((a, b) => a[0] - b[0])
+                .map(([index, view]) => ({
+                    index,
+                    overlayer: view.overlayer,
+                    doc: view.document,
+                }))
+        }
         if (this.#view) return [{
             index: this.#index,
             overlayer: this.#view.overlayer,
@@ -1268,16 +1781,28 @@ export class Paginator extends HTMLElement {
         // preloaded sections were laid out with the old styles
         if (styles !== this.#styles) this.#dropSpares()
         this.#styles = styles
-        // a section that is still loading gets the new styles too
-        if (this.#pendingView) this.#applyStyles(this.#pendingView.document)
-        if (!this.#applyStyles(this.#view?.document)) return
+        const views = []
+        if (this.#pendingView) views.push(this.#pendingView)
+        if (this.#view) views.push(this.#view)
+        for (const view of this.#spine.values()) if (!views.includes(view)) views.push(view)
+        let applied = false
+        for (const view of views) {
+            if (!view?.document || !this.#applyStyles(view.document)) continue
+            applied = true
+            // 上下滚动里前后章也要跟着字号、行距重排，不然只有当前章是阅读设置
+            if (this.scrolled && view.element?.isConnected && view.element.style.position !== 'absolute')
+                view.expand()
+        }
+        if (!applied) return
 
         // NOTE: needs `requestAnimationFrame` in Chromium
-        requestAnimationFrame(() =>
-            this.#background.style.background = getBackground(this.#view.document))
+        requestAnimationFrame(() => {
+            const doc = this.#view?.document
+            if (doc) this.#paintBackground(getBackground(doc))
+        })
 
         // needed because the resize observer doesn't work in Firefox
-        this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())
+        this.#view?.document?.fonts?.ready?.then(() => this.#view?.expand())
     }
     focusView() {
         this.#view.document.defaultView.focus()

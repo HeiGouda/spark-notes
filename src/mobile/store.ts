@@ -56,7 +56,28 @@ export const useMobile = defineStore("mobile", () => {
   });
 
   const current = computed(() => vaults.value.find((v) => v.id === currentId.value) ?? null);
-  const homePage = computed(() => (vaults.value.length ? "files" : "welcome"));
+  /** 首次打开可以先不绑 WebDAV，下次直接进文件页 */
+  const SKIP_WELCOME = "spark-skip-welcome";
+  const skippedWelcome = ref(false);
+  const homePage = computed(() => (vaults.value.length || skippedWelcome.value ? "files" : "welcome"));
+
+  function skipWelcome() {
+    skippedWelcome.value = true;
+    try {
+      localStorage.setItem(SKIP_WELCOME, "1");
+    } catch {
+      /* 存不住也先放进这一次 */
+    }
+  }
+
+  function clearSkipWelcome() {
+    skippedWelcome.value = false;
+    try {
+      localStorage.removeItem(SKIP_WELCOME);
+    } catch {
+      /* 清不掉下次仍会进欢迎页 */
+    }
+  }
 
   let inflight: { id: string; promise: Promise<void> } | null = null;
 
@@ -118,6 +139,11 @@ export const useMobile = defineStore("mobile", () => {
   }
 
   async function init() {
+    try {
+      skippedWelcome.value = localStorage.getItem(SKIP_WELCOME) === "1";
+    } catch {
+      skippedWelcome.value = false;
+    }
     const prefs = await loadPrefs();
     meta.value = prefs.meta;
     reader.value = prefs.reader;
@@ -213,11 +239,12 @@ export const useMobile = defineStore("mobile", () => {
       currentId.value = vaults.value[0]?.id ?? null;
       await openCurrent();
     }
+    if (!vaults.value.length) clearSkipWelcome();
     await persist();
   }
 
   return {
     vaults, currentId, root, tree, order, sort, favorites, meta, reader, recent, sync, current, homePage,
-    init, loadTree, runSync, confirmHeld, selectVault, addVault, updateVault, removeVault, setReader, rememberOpen,
+    init, loadTree, runSync, confirmHeld, selectVault, addVault, updateVault, removeVault, skipWelcome, setReader, rememberOpen,
   };
 });

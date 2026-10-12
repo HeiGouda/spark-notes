@@ -40,6 +40,7 @@ const lastSaved = () => m.saved[m.saved.length - 1];
 const done: SyncOutcome = { kind: "done", report: { downloaded: 1, localTrashed: 0, skipped: 0, errors: [] } };
 
 beforeEach(() => {
+  localStorage.clear();
   setActivePinia(createPinia());
   m.vaults = [vault("a"), vault("b")];
   m.prefs = { current: "a", meta: { a: { lastSyncMs: 1, files: 1 }, b: { lastSyncMs: 1, files: 1 } }, reader: { theme: "light", size: "medium" }, recent: {} };
@@ -168,6 +169,18 @@ describe("欢迎页", () => {
     const s = useMobile();
     await s.init();
     expect(s.homePage).toBe("welcome");
+  });
+
+  it("点以后再说后，没绑 WebDAV 也进文件页", async () => {
+    m.vaults = [];
+    const s = useMobile();
+    await s.init();
+    expect(s.homePage).toBe("welcome");
+    s.skipWelcome();
+    expect(s.homePage).toBe("files");
+    const again = useMobile();
+    await again.init();
+    expect(again.homePage).toBe("files");
   });
 
   it("删除最后一个笔记库后回到欢迎页", async () => {

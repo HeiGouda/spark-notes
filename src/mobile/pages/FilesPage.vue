@@ -125,15 +125,16 @@ function onTouchEnd() {
         <button class="ib" @click="back()"><Icon name="back" /></button>
         <h1>{{ title }}<small>{{ crumbs }}</small></h1>
       </template>
-      <template v-else>
+      <template v-else-if="store.current">
         <button class="libsw" @click="open({ t: 'libs' })">
-          <span>{{ store.current?.name }}</span><Icon name="down" :size="18" />
+          <span>{{ store.current.name }}</span><Icon name="down" :size="18" />
         </button>
         <span class="grow"></span>
         <button class="ib" title="最近打开" @click="go({ p: 'recent' })"><Icon name="recent" /></button>
       </template>
+      <h1 v-else>绑定 WebDAV</h1>
     </div>
-    <StatusLine />
+    <StatusLine v-if="store.current" />
     <div
       ref="scroller"
       class="scroll"
@@ -142,11 +143,19 @@ function onTouchEnd() {
       @touchend="onTouchEnd"
       @touchcancel="onTouchEnd"
     >
-      <div class="ptr" :style="{ height: Math.min(pull * 0.5, 56) + 'px', transition: pull ? 'none' : '' }">
+      <div v-if="store.current" class="ptr" :style="{ height: Math.min(pull * 0.5, 56) + 'px', transition: pull ? 'none' : '' }">
         {{ pull > 100 ? "松开刷新" : "下拉刷新" }}
       </div>
+      <div v-if="!store.current" class="m-empty">
+        <Icon name="cloud" :size="44" />
+        <p>绑定 WebDAV</p>
+        <p style="margin-top: 14px">
+          <button class="btn pri" @click="go({ p: 'form', id: null })">去绑定</button>
+        </p>
+      </div>
+      <template v-else>
       <button v-if="!path" class="search-box" @click="go({ p: 'search' })">
-        <Icon name="search" :size="18" />搜索 {{ store.current?.name }}
+        <Icon name="search" :size="18" />搜索 {{ store.current.name }}
       </button>
       <div v-if="!synced" class="m-empty">
         <Icon name="cloud" :size="44" />
@@ -180,6 +189,7 @@ function onTouchEnd() {
           </span>
         </button>
         <div v-if="!items.length" class="m-empty">{{ path ? "这个文件夹是空的" : "云端目录里还没有笔记" }}</div>
+      </template>
       </template>
     </div>
     <div v-if="menu" class="m-ovl">
