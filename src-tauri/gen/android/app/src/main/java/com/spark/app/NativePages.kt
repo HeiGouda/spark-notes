@@ -63,7 +63,14 @@ class NativePages(context: android.content.Context) : View(context) {
   private var face: Typeface = Typeface.SERIF
 
   private var scrollMode = false
+  /** 上下滚动时屏幕顶到当前章顶的距离。可以暂时是负的或超过这一章，前后章接着画 */
   private var scrollY = 0f
+  private val flinger = android.widget.OverScroller(context)
+  private var flingY = 0
+  /** 排版重来后要回到的那一行：字符下标，和屏幕顶比那一行低了多少 */
+  private var scrollKeep: Pair<Int, Float>? = null
+  /** 向网页要章节的时间，滑动中每帧都会判断，别反复要 */
+  private val askedAt = HashMap<String, Long>()
   private val webChapters = HashSet<Int>()
   private var chapter = 0
   private var page = 0
@@ -192,6 +199,7 @@ class NativePages(context: android.content.Context) : View(context) {
     anim = animName
     loadFace(fontName)
     setBackgroundColor(Color.TRANSPARENT)
+    keepScrollSpot()
     rasterToken++
     styleGen++
     laid.clear()
@@ -229,6 +237,8 @@ class NativePages(context: android.content.Context) : View(context) {
   }
 
   private fun publishLaid(index: Int, built: Laid) {
+    // 图到了、这一章重排时，屏幕顶上那一行不能被上面变高的图顶走
+    if (scrollMode && index == chapter && scrollKeep == null) laid[index]?.let { scrollKeep = spotIn(it, scrollY) }
     laid[index] = built
     textKeys[index]?.let { laidKeys[index] = it }
     markCache.remove(index)
@@ -238,6 +248,8 @@ class NativePages(context: android.content.Context) : View(context) {
       invalidate()
       reportPage()
       warmEdges()
+    } else if (scrollMode) {
+      invalidate()
     } else if (!landPending(index) && (nextOf[chapter] == index || prevOf[chapter] == index)) {
       rasterAroundSoon(forceChapter = index)
     }
@@ -249,12 +261,20 @@ class NativePages(context: android.content.Context) : View(context) {
     val offsetWins = pendingOffset >= 0 && pendingOffsetChapter == index && landToken != fractionToken
     if (offsetWins) {
       page = pageForOffset(book, pendingOffset)
+      if (scrollMode) scrollY = yOfOffset(book, pendingOffset)
       if (consumeAnchor) pendingAnchor = -1.0
     } else if (pendingAnchor >= 0 && fractionToken == landToken) {
       val count = book.pages.size.coerceAtLeast(1)
       val span = (count - 1).coerceAtLeast(0)
       page = kotlin.math.floor(pendingAnchor * span).toInt().coerceIn(0, span)
+      if (scrollMode) scrollY = (pendingAnchor * (spanOf(book) - height)).toFloat().coerceAtLeast(0f)
       if (consumeAnchor) pendingAnchor = -1.0
+    } else if (scrollMode) {
+      scrollKeep?.let { (at, dy) -> scrollY = yOfOffset(book, at) + dy }
+    }
+    if (scrollMode) {
+      scrollKeep = null
+      scrollY = scrollY.coerceIn(minScroll(), maxScroll())
     }
     if (selA >= 0) {
       val found = book.pages.indexOfFirst { items ->
@@ -346,7 +366,10 @@ class NativePages(context: android.content.Context) : View(context) {
     flush()
     if (pages.isEmpty()) pages.add(ArrayList())
     // 整页只有一张图（插图页、分部页）时上下居中，不贴在页顶
+    // 上下滚动时页高是个极大的数，居中会把图推到几千万像素以外，前面全是空白
+    val tall = contentH > 1_000_000
     for (p in pages.indices) {
+      if (tall) break
       val only = pages[p].singleOrNull() ?: continue
       if (only.image == null || only.height >= contentH) continue
       pages[p] = mutableListOf(Placed(null, null, 0, 0, only.image, only.height, (contentH - only.height) / 2, only.origin, only.left, only.imageWidth))
@@ -1245,34 +1268,63 @@ class NativePages(context: android.content.Context) : View(context) {
 
   private fun holeAt(x: Float, y: Float): Boolean = holes.any { it.contains(x, y) }
 
-  /** 上下滚动把整章的行盒竖着画，手指只改变滚动位置 */
+  /**
+   * 上下滚动把当前章和前后已经排好的章竖着接成一条来画，手指只改变滚动位置。
+   * 章界滚过屏幕顶时只换当前章、换算 scrollY，画面不跳
+   */
   private fun drawScroll(canvas: Canvas) {
     val book = laid[chapter] ?: return
     val padX = width * marginFrac
     val padY = padTop()
-    val marks = marksFor(chapter)
-    canvas.save()
-    canvas.translate(0f, -scrollY)
-    var base = 0
-    for (items in book.pages) {
-      for (item in items) {
-        val top = base + item.top
-        if (top + item.height < scrollY - 80 || top > scrollY + height + 80) continue
-        canvas.save()
-        canvas.translate(0f, base.toFloat())
-        drawPlaced(canvas, item, padX, padY, marks)
-        canvas.restore()
-      }
-      base += items.maxOfOrNull { it.top + it.height } ?: 0
+    val top = -scrollY
+    drawFlow(canvas, chapter, book, top, padX, padY)
+    var index = chapter
+    var edge = top
+    var guard = 0
+    while (edge > 0f && guard++ < CHAIN_MAX) {
+      val other = scrollNeighbor(index, -1)
+      val prev = laid[other] ?: break
+      edge -= spanOf(prev)
+      drawFlow(canvas, other, prev, edge, padX, padY)
+      index = other
     }
+    index = chapter
+    edge = top + spanOf(book)
+    guard = 0
+    while (edge < height && guard++ < CHAIN_MAX) {
+      val other = scrollNeighbor(index, 1)
+      val next = laid[other] ?: break
+      drawFlow(canvas, other, next, edge, padX, padY)
+      edge += spanOf(next)
+      index = other
+    }
+    canvas.save()
+    canvas.translate(0f, top)
     drawSelection(canvas)
     canvas.restore()
   }
 
-  private fun drawPlaced(canvas: Canvas, item: Placed, padX: Float, padY: Float, marks: List<Pair<Int, Int>>) {
+  /** 一章的行盒，top 是这一章的顶在屏幕上的位置 */
+  private fun drawFlow(canvas: Canvas, index: Int, book: Laid, top: Float, padX: Float, padY: Float) {
+    val marks = marksFor(index)
+    var base = 0
+    for (items in book.pages) {
+      for (item in items) {
+        val y = top + base + item.top
+        if (y + item.height < -80f || y > height + 80f) continue
+        canvas.save()
+        canvas.translate(0f, top + base)
+        drawPlaced(canvas, book, item, padX, padY, marks)
+        canvas.restore()
+      }
+      base += items.maxOfOrNull { it.top + it.height } ?: 0
+    }
+  }
+
+  private fun drawPlaced(canvas: Canvas, book: Laid, item: Placed, padX: Float, padY: Float, marks: List<Pair<Int, Int>>) {
     val image = item.image
     if (image != null && !image.isRecycled) {
-      val bookW = laid[chapter]?.width?.toFloat() ?: (width - padX * 2)
+      val bookW = book.width.toFloat()
       val w = if (item.imageWidth > 0) item.imageWidth.toFloat() else bookW
       val dst = RectF(padX + item.left, padY + item.top, padX + item.left + w, padY + item.top + item.height)
       canvas.drawBitmap(image, null, dst, contentImagePaint)
@@ -1294,29 +1346,194 @@ class NativePages(context: android.content.Context) : View(context) {
     canvas.restore()
   }
 
-  private fun flowHeight(): Int {
-    val book = laid[chapter] ?: return 0
-    var y = 0
-    for (items in book.pages) y += items.maxOfOrNull { it.top + it.height } ?: 0
-    return y + (24f * resources.displayMetrics.density).roundToInt()
+  /** 上下滚动里一章占多高，章末留一点空再接下一章 */
+  private fun spanOf(book: Laid): Int = book.flow + (24f * resources.displayMetrics.density).roundToInt()
+
+  private fun flowHeight(): Int = laid[chapter]?.let { spanOf(it) } ?: 0
+
+  /** 能和 index 接在同一条滚动里的邻章：原生已经排好的。网页章、还没排好的不接 */
+  private fun scrollNeighbor(index: Int, dir: Int): Int {
+    val other = (if (dir > 0) nextOf[index] else prevOf[index]) ?: return -1
+    if (webChapters.contains(other) || laid[other] == null) return -1
+    return other
   }
 
-  private fun maxScroll(): Float = (flowHeight() - height).coerceAtLeast(0).toFloat()
+  /** 从当前章往 dir 一直接下去，接上的最后一章 */
+  private fun chainEnd(dir: Int): Int {
+    var index = chapter
+    repeat(CHAIN_MAX) {
+      val other = scrollNeighbor(index, dir)
+      if (other < 0) return index
+      index = other
+    }
+    return index
+  }
+
+  /** 往上最多滚到哪：上面接着的章都能滚进来 */
+  private fun minScroll(): Float {
+    var index = chapter
+    var up = 0
+    repeat(CHAIN_MAX) {
+      val other = scrollNeighbor(index, -1)
+      val book = laid[other] ?: return -up.toFloat()
+      up += spanOf(book)
+      index = other
+    }
+    return -up.toFloat()
+  }
+
+  private fun maxScroll(): Float {
+    var index = chapter
+    var down = flowHeight()
+    repeat(CHAIN_MAX) {
+      val other = scrollNeighbor(index, 1)
+      val book = laid[other] ?: return (down - height).coerceAtLeast(0).toFloat()
+      down += spanOf(book)
+      index = other
+    }
+    return (down - height).coerceAtLeast(0).toFloat()
+  }
+
+  /** 上下滚动挪 dy（往后读为正），返回实际挪了多少。到了接上的最后一章的头尾就停住 */
+  private fun scrollByPx(dy: Float): Float {
+    val before = scrollY
+    scrollY = (scrollY + dy).coerceIn(minScroll(), maxScroll())
+    val moved = scrollY - before
+    if (!selecting) settleChapter()
+    prepareScroll()
+    return moved
+  }
+
+  /** 屏幕顶跨过章界时只换当前章，scrollY 跟着换算，画面不动 */
+  private fun settleChapter() {
+    var dir = 0
+    var guard = 0
+    while (guard++ < CHAIN_MAX) {
+      val book = laid[chapter] ?: break
+      val span = spanOf(book)
+      if (scrollY >= span) {
+        val other = scrollNeighbor(chapter, 1)
+        if (other < 0) break
+        scrollY -= span
+        chapter = other
+        dir = 1
+      } else if (scrollY < 0f) {
+        val other = scrollNeighbor(chapter, -1)
+        val prev = laid[other] ?: break
+        scrollY += spanOf(prev)
+        chapter = other
+        dir = -1
+      } else break
+    }
+    if (dir == 0) return
+    page = 0
+    reportPage()
+    callJs("window.__sparkNeedChapter&&window.__sparkNeedChapter($chapter,$dir)")
+    warmEdges()
+  }
+
+  /** 离接上的最后一章的头尾不到几屏时，把再往外的那一章要过来排好，滑到那里不用停下来等 */
+  private fun prepareScroll() {
+    val ahead = height.coerceAtLeast(1) * 4
+    if (maxScroll() - scrollY < ahead) prepareBeyond(1)
+    if (scrollY - minScroll() < ahead) prepareBeyond(-1)
+  }
+
+  private fun prepareBeyond(dir: Int) {
+    val last = chainEnd(dir)
+    val other = (if (dir > 0) nextOf[last] else prevOf[last]) ?: -1
+    if (other >= 0 && (webChapters.contains(other) || laid[other] != null)) return
+    if (other >= 0 && texts.containsKey(other)) {
+      ensureLaid(other)
+      return
+    }
+    val key = "$last:$dir"
+    val now = SystemClock.uptimeMillis()
+    if (now - (askedAt[key] ?: 0L) < 3000L) return
+    askedAt[key] = now
+    callJs("window.__sparkNeedChapter&&window.__sparkNeedChapter($last,$dir)")
+  }
+
+  /** 已经滚到接上的最后一章的头尾还往外甩：书的两头提示，复杂章交给网页，没到的章去要 */
+  private fun scrollEdge(dir: Int) {
+    val last = chainEnd(dir)
+    val other = (if (dir > 0) nextOf[last] else prevOf[last]) ?: -1
+    when {
+      other < 0 -> callJs("window.__sparkNativeEdge&&window.__sparkNativeEdge($dir)")
+      webChapters.contains(other) -> callJs("window.__sparkHandoff&&window.__sparkHandoff($other,$dir)")
+      else -> prepareBeyond(dir)
+    }
+  }
+
+  private fun startFling(vy: Float) {
+    flingY = 0
+    flinger.fling(0, 0, 0, (-vy).roundToInt(), 0, 0, -FLING_SPAN, FLING_SPAN)
+    postInvalidateOnAnimation()
+  }
+
+  override fun computeScroll() {
+    if (!scrollMode || flinger.isFinished || !flinger.computeScrollOffset()) return
+    val y = flinger.currY
+    val want = (y - flingY).toFloat()
+    flingY = y
+    val got = scrollByPx(want)
+    // 撞到接上的最后一章的头尾就停，那一章到了再接着滑
+    if (abs(want) >= 1f && abs(got) < abs(want) - 0.5f) flinger.forceFinished(true)
+    if (flinger.isFinished) reportPage() else postInvalidateOnAnimation()
+  }
+
+  /** 长按选字：选区只在一章里，先把当前章换成手指下面那一章 */
+  private fun selectScrollAt(x: Float, y: Float) {
+    var index = chapter
+    var local = y + scrollY
+    var guard = 0
+    while (guard++ < CHAIN_MAX) {
+      val book = laid[index] ?: break
+      val span = spanOf(book)
+      if (local >= span) {
+        val other = scrollNeighbor(index, 1)
+        if (other < 0) break
+        local -= span
+        index = other
+      } else if (local < 0f) {
+        val other = scrollNeighbor(index, -1)
+        val prev = laid[other] ?: break
+        local += spanOf(prev)
+        index = other
+      } else break
+    }
+    if (index != chapter) {
+      chapter = index
+      page = 0
+      scrollY = local - y
+    }
+    selectAt(x, local)
+  }
+
+  /** 按下时正在惯性滑：这一下只是停住，不算点按 */
+  private var caughtFling = false
 
   private fun onScrollTouch(event: MotionEvent): Boolean {
     when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
+        if (visibility != VISIBLE) return false
+        val onBar = selecting && barButton(event.x, event.y) >= 0
+        if (!onBar && holeAt(event.x, event.y)) return false
+        caughtFling = !flinger.isFinished
+        flinger.forceFinished(true)
         downX = event.x
         downY = event.y
         dragging = true
         moved = false
+        barDown = if (onBar) barButton(event.x, event.y) else -1
         velocity?.recycle()
         velocity = VelocityTracker.obtain().also { it.addMovement(event) }
         cancelPress()
+        if (barDown >= 0) return true
         val run = Runnable {
           press = null
           if (!dragging || moved) return@Runnable
-          selectAt(downX, downY + scrollY)
+          selectScrollAt(downX, downY)
           moved = true
         }
         press = run
@@ -1326,12 +1543,21 @@ class NativePages(context: android.content.Context) : View(context) {
       MotionEvent.ACTION_MOVE -> {
         if (!dragging) return false
         velocity?.addMovement(event)
-        val dy = event.y - downY
-        val dx = event.x - downX
-        if (!moved && kotlin.math.hypot(dx.toDouble(), dy.toDouble()) < ViewConfiguration.get(context).scaledTouchSlop * 2) return true
-        cancelPress()
-        moved = true
-        scrollY = (scrollY - dy).coerceIn(0f, maxScroll())
+        if (barDown >= 0) return true
+        if (!moved) {
+          val dx = event.x - downX
+          val dy = event.y - downY
+          if (kotlin.math.hypot(dx.toDouble(), dy.toDouble()) < ViewConfiguration.get(context).scaledTouchSlop * 2) return true
+          cancelPress()
+          moved = true
+          // 自己滚过了，之前要落的位置作废，图到了重排时不再跳回去
+          pendingOffset = -1
+          pendingAnchor = -1.0
+          // 从过了阈值的这一点开始跟手，不然第一下会跳一截
+          downY = event.y
+          return true
+        }
+        scrollByPx(downY - event.y)
         downY = event.y
         invalidate()
         return true
@@ -1340,28 +1566,44 @@ class NativePages(context: android.content.Context) : View(context) {
         if (!dragging) return true
         dragging = false
         cancelPress()
+        val config = ViewConfiguration.get(context)
         velocity?.addMovement(event)
-        velocity?.computeCurrentVelocity(1000)
+        velocity?.computeCurrentVelocity(1000, config.scaledMaximumFlingVelocity.toFloat())
         val vy = velocity?.yVelocity ?: 0f
         velocity?.recycle()
         velocity = null
-        if (!moved && event.actionMasked == MotionEvent.ACTION_UP) {
-          val zone = when {
-            event.x < width * 0.3f -> "edge"
-            event.x > width * 0.7f -> "edge"
-            else -> "menu"
-          }
-          if (zone == "menu") callJs("window.__sparkNativeTap&&window.__sparkNativeTap('menu')")
+        val up = event.actionMasked == MotionEvent.ACTION_UP
+        if (barDown >= 0) {
+          val hit = barButton(event.x, event.y)
+          val action = if (hit == barDown) barHits[hit].first else ""
+          barDown = -1
+          if (action.isNotEmpty() && up) callJs("window.__sparkNativeAction&&window.__sparkNativeAction('$action')")
           return true
         }
-        val density = resources.displayMetrics.density
-        if (scrollY <= 1f && vy > 900f * density) {
-          if (finishTurn(-1)) scrollY = maxScroll()
-        } else if (scrollY >= maxScroll() - 1f && vy < -900f * density) {
-          if (finishTurn(1)) scrollY = 0f
+        if (!moved) {
+          if (!up || caughtFling) return true
+          if (selecting) {
+            clearSelection()
+            callJs("window.__sparkNativeSelectClear&&window.__sparkNativeSelectClear()")
+            return true
+          }
+          if (event.x >= width * 0.3f && event.x <= width * 0.7f) callJs("window.__sparkNativeTap&&window.__sparkNativeTap('menu')")
+          return true
         }
+        if (selectionGesture) {
+          selectionGesture = false
+          invalidate()
+          return true
+        }
+        val edgeV = 900f * resources.displayMetrics.density
+        when {
+          !up -> {}
+          scrollY >= maxScroll() - 1f && vy < -edgeV -> scrollEdge(1)
+          scrollY <= minScroll() + 1f && vy > edgeV -> scrollEdge(-1)
+          abs(vy) > config.scaledMinimumFlingVelocity -> startFling(vy)
+        }
+        if (flinger.isFinished) reportPage()
         invalidate()
-        reportPage()
         return true
       }
     }
@@ -1767,7 +2009,9 @@ class NativePages(context: android.content.Context) : View(context) {
       }
     }
     if (l == Float.POSITIVE_INFINITY) return null
-    return RectF(l, t, r, b)
+    // 上下滚动时行盒是章里的坐标，要换成屏幕上的
+    val shift = if (scrollMode) scrollY else 0f
+    return RectF(l, t - shift, r, b - shift)
   }
 
   private fun hitChar(book: Laid, x: Float, y: Float): Int {
@@ -1943,21 +2187,61 @@ class NativePages(context: android.content.Context) : View(context) {
   /** 当前页在这一章正文里的字符偏移。没有字的页记 0 */
   private fun pageStartOffset(): Int {
     val book = laid[chapter] ?: return 0
-    if (scrollMode) {
-      val items = book.pages.firstOrNull() ?: return 0
-      val y = scrollY.toInt()
-      for (item in items) {
-        if (item.charCount() <= 0) continue
-        if (item.top + item.height >= y) return item.origin + item.lineStart(item.line0)
-      }
-      return 0
-    }
+    if (scrollMode) return spotIn(book, scrollY).first
     val items = book.pages.getOrNull(page) ?: return 0
     for (item in items) {
       if (item.charCount() <= 0) continue
       return item.origin + item.lineStart(item.line0)
     }
     return 0
+  }
+
+  /** 章里纵坐标 y 落在哪一行：那一行首字的下标，和 y 比那一行顶低了多少 */
+  private fun spotIn(book: Laid, y: Float): Pair<Int, Float> {
+    var base = 0
+    for (items in book.pages) {
+      for (item in items) {
+        if (item.charCount() <= 0) continue
+        val top = base + item.top
+        if (top + item.height <= y) continue
+        val first = item.lineTop(item.line0)
+        val local = (y - top).toInt().coerceAtLeast(0)
+        val line = item.lineForVertical(first + local).coerceIn(item.line0, item.line1)
+        val lineY = top + item.lineTop(line) - first
+        return (item.origin + item.lineStart(line)) to (y - lineY)
+      }
+      base += items.maxOfOrNull { it.top + it.height } ?: 0
+    }
+    return 0 to y
+  }
+
+  /** 字符下标所在那一行的顶在章里的纵坐标 */
+  private fun yOfOffset(book: Laid, offset: Int): Float {
+    var base = 0
+    var nearest = 0f
+    for (items in book.pages) {
+      for (item in items) {
+        val n = item.charCount()
+        if (n <= 0) continue
+        val top = base + item.top
+        if (item.origin <= offset) nearest = top.toFloat()
+        val at = offset - item.origin
+        if (at < 0 || at >= n) continue
+        val line = item.lineForOffset(at)
+        if (line !in item.line0..item.line1) continue
+        return (top + item.lineTop(line) - item.lineTop(item.line0)).toFloat()
+      }
+      base += items.maxOfOrNull { it.top + it.height } ?: 0
+    }
+    return nearest
+  }
+
+  /** 字号、页宽变了要整章重排：先记下屏幕顶上那一行，排好后回到那里 */
+  private fun keepScrollSpot() {
+    flinger.forceFinished(true)
+    if (!scrollMode) return
+    val book = laid[chapter] ?: return
+    scrollKeep = spotIn(book, scrollY).first to 0f
   }
 
   /** 同一帧里连翻几页时只报最后一页，免得网页跟着抖 */
@@ -1985,6 +2269,12 @@ class NativePages(context: android.content.Context) : View(context) {
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     if (w <= 0 || h <= 0 || (w == oldw && h == oldh) || !texts.containsKey(chapter)) return
+    // 上下滚动排版不看高度，只是视口高矮变了（菜单、页脚）时不必整章重排
+    if (scrollMode && w == oldw) {
+      invalidate()
+      return
+    }
+    keepScrollSpot()
     rasterToken++
     styleGen++
     laid.clear()
@@ -2098,8 +2388,19 @@ class NativePages(context: android.content.Context) : View(context) {
       main.post {
         val next = mode == "scroll"
         if (next == scrollMode) return@post
+        // 换了翻页方式还停在同一行字上，不回到章首
+        val at = if (laid[chapter] != null) pageStartOffset() else -1
+        flinger.forceFinished(true)
         scrollMode = next
         scrollY = 0f
+        scrollKeep = null
+        pendingJump = 0
+        if (at > 0) {
+          landToken++
+          pendingOffsetChapter = chapter
+          pendingOffset = at
+          pendingAnchor = -1.0
+        }
         styleGen++
         laid.clear()
         dropShots()
@@ -2129,6 +2430,8 @@ class NativePages(context: android.content.Context) : View(context) {
       main.post {
         val show = anchor >= 0
         if (show) {
+          flinger.forceFinished(true)
+          scrollKeep = null
           pendingJump = 0
           chapter = index
           fractionToken = landToken
@@ -2182,6 +2485,8 @@ class NativePages(context: android.content.Context) : View(context) {
       main.post {
         landToken++
         stopMotion()
+        flinger.forceFinished(true)
+        scrollKeep = null
         flying = 0
         clearSelection()
         pendingOffsetChapter = index
@@ -2195,6 +2500,7 @@ class NativePages(context: android.content.Context) : View(context) {
         val book = laid[index]
         if (book != null) {
           page = pageForOffset(book, pendingOffset)
+          if (scrollMode) scrollY = yOfOffset(book, pendingOffset).coerceIn(minScroll(), maxScroll())
           rasterAroundSoon()
           reportPage()
           warmEdges()
@@ -2229,6 +2535,7 @@ class NativePages(context: android.content.Context) : View(context) {
       main.post {
         if (next >= 0) nextOf[index] = next else nextOf.remove(index)
         if (prev >= 0) prevOf[index] = prev else prevOf.remove(index)
+        if (scrollMode) invalidate()
         // 章末在等的章被跳过（空章）时，链接换成了已经备好的那一章，马上接上
         val dir = pendingJump
         if (dir != 0 && index == chapter) {
@@ -2268,6 +2575,10 @@ class NativePages(context: android.content.Context) : View(context) {
       main.post {
         rasterToken++
         stopMotion()
+        flinger.forceFinished(true)
+        scrollY = 0f
+        scrollKeep = null
+        askedAt.clear()
         flying = 0
         cancelPress()
         for (list in texts.values) recycleBlocks(list)
@@ -2454,7 +2765,10 @@ class NativePages(context: android.content.Context) : View(context) {
     }
   }
   private class MarkSpan(val section: Int, val start: Int, val end: Int)
-  private class Laid(val pages: List<List<Placed>>, val plain: String, val width: Int, val height: Int, val gen: Int)
+  private class Laid(val pages: List<List<Placed>>, val plain: String, val width: Int, val height: Int, val gen: Int) {
+    /** 所有页竖着接起来的高度，上下滚动用 */
+    val flow: Int by lazy { pages.sumOf { items -> items.maxOfOrNull { it.top + it.height } ?: 0 } }
+  }
   private class PageDraw(val key: Key, val book: Laid, val page: Int)
   private data class Key(val chapter: Int, val page: Int, val gen: Int, val width: Int, val height: Int)
 
@@ -2483,6 +2797,10 @@ class NativePages(context: android.content.Context) : View(context) {
     private const val PAD_BOTTOM_DP = 8f
     /** 选区把手圆点的半径（dp） */
     private const val HANDLE_DP = 9f
+    /** 上下滚动时最多往一侧接几章（短章连着时也盖得满一屏） */
+    private const val CHAIN_MAX = 8
+    /** 惯性滑动不设边界，到头由 scrollByPx 停住 */
+    private const val FLING_SPAN = 50_000_000
     /** 竖排形式标点和对应的横排标点，按位置一一对应 */
     private const val VERTICAL_FORMS = "\uFE10\uFE11\uFE12\uFE13\uFE14\uFE15\uFE16\uFE17\uFE18\uFE19\uFE30\uFE31\uFE32\uFE33\uFE34\uFE35\uFE36\uFE37\uFE38\uFE39\uFE3A\uFE3B\uFE3C\uFE3D\uFE3E\uFE3F\uFE40\uFE41\uFE42\uFE43\uFE44\uFE47\uFE48"
     private const val HORIZONTAL_FORMS = "，、。：；！？〖〗…‥—–__（）｛｝〔〕【】《》〈〉「」『』［］"

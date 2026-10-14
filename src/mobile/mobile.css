@@ -413,7 +413,8 @@ mark { background: var(--hl); color: inherit; font-weight: 600; border-radius: 2
 .shelf-book .cover .tag, .shelf-book .cover .pb { z-index: 1; }
 .btn { white-space: nowrap; }
 .ebook-view.hidden { opacity: 0; }
-.ebook-view.native { visibility: hidden; }
+/* 上下滚动时阅读器给每一章都写了 visibility:visible，盖得过 visibility:hidden，文字会从缝里透出来；用 opacity 才盖得住 */
+.ebook-view.native { visibility: hidden; opacity: 0; pointer-events: none; }
 .ebook-view:not(.hidden) { transition: opacity .18s ease; }
 .ebook-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; pointer-events: none; }
 .seg-hint { margin: -8px 0 10px; padding: 0 16px; }

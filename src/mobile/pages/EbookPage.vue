@@ -1069,7 +1069,11 @@ function applyNativeFrame() {
   if (!rect || rect.width < 2 || rect.height < 2) return;
   // 菜单盖在书页上。页面高度保持不变，文字不重排、不缩放。
   const foot = measureFoot();
-  const frameH = Math.max(1, rect.height - (foot > 0 ? foot : 0));
+  // 上下滚动时书页容器本来就让出了页脚的位置，不能再减一次；一直铺到页脚上沿，中间不留空白
+  const footTop = document.querySelector(".ebook-foot")?.getBoundingClientRect().top ?? 0;
+  const frameH = scrolled.value && footTop > rect.top + 2
+    ? Math.max(1, footTop - rect.top)
+    : Math.max(1, rect.height - (foot > 0 ? foot : 0));
   bridge.setFrame(rect.left, rect.top, rect.width, frameH);
   bridge.setHoles(JSON.stringify(nativeHoles(rect, frameH)));
   bridge.setVisible(true);
