@@ -1,3 +1,8 @@
+<script lang="ts">
+/** 笔记阅读位置。编辑器被拆掉重建后还要能还原，不能放在某个组件实例上 */
+const scrollMemory = new Map<string, number>();
+</script>
+
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useSettingsStore } from "../stores/settings";
@@ -7,7 +12,7 @@ import BacklinksPanel from "./BacklinksPanel.vue";
 import Icon from "./Icon.vue";
 import { externalUrl } from "../editor/link";
 import { parseWiki } from "../editor/wikilink";
-import { goToHeading, goToText } from "../editor/navigate";
+import { goToHeading, goToText, type Heading } from "../editor/navigate";
 import { contentCandidates, linkCandidates, linkDisplay, resolveLink } from "../lib/links";
 import { DOC_LABEL } from "../lib/doctype";
 import { isBookPath } from "../lib/book";
@@ -35,6 +40,7 @@ const props = defineProps<{ tab: Tab }>();
 const tabs = useTabsStore();
 const settings = useSettingsStore();
 const editorStore = useEditorStore();
+const ui = useUiStore();
 const host = ref<HTMLElement | null>(null);
 let editor: Editor | null = null;
 let destroyed = false;
@@ -43,6 +49,15 @@ let mountId = 0;
 let applyingDisk = false;
 /** Milkdown 载入时会规范化 Markdown；未编辑时不因规范化结果写回文件 */
 let baseline: string | null = null;
+let cachedWords = 0;
+let cachedHeadings: Heading[] = [];
+let boundPath = "";
+/** 这次切换是跳到搜索命中或标题，不要再用上次的滚动位置盖掉 */
+let revealed = false;
+
+function isCurrent() {
+  return tabs.activePath === props.tab.path;
+}
 
 /** 斜杠菜单的 h1~h3 对应标题级别命令，其余对应格式工具的命令 */
 function formatCommandId(id: string): string {
@@ -108,6 +123,10 @@ function accept(markdown: string) {
   tabs.update(tab.path, markdown);
 }
 
+function flush() {
+  if (editor) accept(readMarkdown(editor));
+}
+
 async function destroyEditor() {
   if (!editor) return;
   const old = editor;
@@ -116,8 +135,57 @@ async function destroyEditor() {
   await old.destroy();
 }
 
+/** 这篇笔记重新成为当前项：工具栏和状态栏改看它，不改滚动位置 */
+function claim() {
+  if (!editor || !isCurrent()) return;
+  editorStore.attach(editor, props.tab.path, flush);
+  editorStore.words = cachedWords;
+  editorStore.headings = cachedHeadings;
+  editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx);
+    view.dispatch(view.state.tr.setMeta("addToHistory", false));
+  });
+}
+
+function blurEditor() {
+  editor?.action((ctx) => {
+    const dom = ctx.get(editorViewCtx).dom as HTMLElement;
+    if (dom.contains(document.activeElement)) dom.blur();
+  });
+}
+
+/** 切走后收起浮层。表格工具条挂在 body 上，编辑器隐藏后还要再排一次才会自己关掉 */
+function park() {
+  if (!editor) return;
+  flush();
+  blurEditor();
+  editorStore.detach(editor);
+  editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx);
+    if (view.dom instanceof HTMLElement && view.dom.offsetParent === null) {
+      view.dispatch(view.state.tr.setMeta("addToHistory", false));
+    }
+  });
+}
+
+function restoreScroll() {
+  if (revealed) {
+    revealed = false;
+    return;
+  }
+  const top = scrollMemory.get(props.tab.path) ?? 0;
+  if (top <= 0) return;
+  requestAnimationFrame(() => {
+    const el = scroller.value;
+    if (!el || el.scrollTop > 0) return;
+    el.scrollTop = top;
+  });
+}
+
 /** 用给定正文新建编辑器。同一路径被重新载入时也走这里，避免屏幕上仍是旧正文、再输入时把磁盘内容盖掉。 */
 async function mountEditor(markdown: string) {
+  const kept = scroller.value?.scrollTop ?? 0;
+  if (kept > 0) scrollMemory.set(props.tab.path, kept);
   const id = ++mountId;
   applyingDisk = true;
   await destroyEditor();
@@ -132,15 +200,24 @@ async function mountEditor(markdown: string) {
       markdown,
       onChange: accept,
       onCursor: (info) => {
+        if (!isCurrent()) return;
         editorStore.block = info.block;
         editorStore.marks = info.marks;
         editorStore.line = info.line;
         editorStore.col = info.col;
         editorStore.cursor = info.pos;
       },
-      onWords: (n) => (editorStore.words = n),
-      onOutline: (h) => (editorStore.headings = h),
-      onDocChange: () => editorStore.docVersion++,
+      onWords: (n) => {
+        cachedWords = n;
+        if (isCurrent()) editorStore.words = n;
+      },
+      onOutline: (h) => {
+        cachedHeadings = h;
+        if (isCurrent()) editorStore.headings = h;
+      },
+      onDocChange: () => {
+        if (isCurrent()) editorStore.docVersion++;
+      },
       onOpenLink: (href) => {
         const url = externalUrl(href);
         if (url) {
@@ -186,8 +263,13 @@ async function mountEditor(markdown: string) {
     editor = e;
     host.value?.querySelector(".pm")?.setAttribute("spellcheck", settings.spellcheck ? "true" : "false");
     baseline = readMarkdown(e);
-    editorStore.attach(e, props.tab.path, () => editor && accept(readMarkdown(editor)));
+    if (boundPath && boundPath !== props.tab.path) editorStore.unbind(boundPath, flush);
+    boundPath = props.tab.path;
+    editorStore.bind(boundPath, flush);
+    const reveal = tabs.pendingReveal?.path === props.tab.path;
+    if (isCurrent()) claim();
     applyReveal();
+    if (!reveal) restoreScroll();
   } catch (err) {
     if (!destroyed && id === mountId) useNoticeStore().report(`编辑器初始化失败 ${props.tab.name}`, err);
   } finally {
@@ -208,14 +290,34 @@ watch(
   { deep: false },
 );
 
+watch(
+  () => tabs.activePath === props.tab.path,
+  (on) => {
+    if (on) return;
+    const top = scroller.value?.scrollTop ?? 0;
+    if (top > 0) scrollMemory.set(props.tab.path, top);
+  },
+);
+watch(
+  () => tabs.activePath === props.tab.path,
+  (on) => {
+    if (!editor) return;
+    if (on) {
+      claim();
+      restoreScroll();
+    } else park();
+  },
+  { flush: "post" },
+);
+
 /* ---------- 双向链接、定位、标签 ---------- */
-const ui = useUiStore();
 /** 正文里的 #标签（不含已写在 Front Matter 里的），只能在正文中修改 */
 const bodyTags = computed(() => {
   const own = new Set(props.tab.tags.map((t) => t.toLowerCase()));
   return mergeTags(inlineTags(props.tab.body)).filter((t) => !own.has(t.toLowerCase()));
 });
 
+const tagListId = computed(() => `note-tags-${encodeURIComponent(props.tab.path)}`);
 const addingTag = ref(false);
 const tagDraft = ref("");
 const tagInput = ref<HTMLInputElement | null>(null);
@@ -289,10 +391,12 @@ function applyReveal() {
   const r = tabs.pendingReveal;
   if (!r || !editor || r.path !== props.tab.path) return;
   tabs.pendingReveal = null;
+  revealed = true;
   const e = editor;
   requestAnimationFrame(() => {
     if (r.heading) goToHeading(e, r.heading);
     else if (r.text) goToText(e, r.text);
+    revealed = false;
   });
 }
 watch(() => tabs.pendingReveal, applyReveal);
@@ -356,7 +460,9 @@ let wheelAcc = 0;
 
 function onScroll() {
   const el = scroller.value;
-  if (el) showTop.value = el.scrollTop > el.clientHeight;
+  if (!el) return;
+  showTop.value = el.scrollTop > el.clientHeight;
+  scrollMemory.set(props.tab.path, el.scrollTop);
 }
 
 function toTop() {
@@ -381,8 +487,10 @@ onBeforeUnmount(() => {
   clearTimeout(hintTimer);
   destroyed = true;
   mountId++;
-  if (!editor) return;
-  if (!applyingDisk) accept(readMarkdown(editor));
+  const top = scroller.value?.scrollTop;
+  if (top != null) scrollMemory.set(props.tab.path, top);
+  if (editor && !applyingDisk) accept(readMarkdown(editor));
+  if (boundPath) editorStore.unbind(boundPath, flush);
   void destroyEditor();
 });
 </script>
@@ -412,7 +520,7 @@ onBeforeUnmount(() => {
             ref="tagInput"
             v-model="tagDraft"
             class="tag-input"
-            list="note-tag-options"
+            :list="tagListId"
             placeholder="输入标签，回车添加"
             spellcheck="false"
             @keydown.enter.prevent="commitTag()"
@@ -420,7 +528,7 @@ onBeforeUnmount(() => {
             @blur="commitTag()"
           />
           <button v-else class="tag-add" type="button" title="添加标签（多个用空格分隔）" @click="startTag()">+ 标签</button>
-          <datalist id="note-tag-options"><option v-for="t in knownTags" :key="t" :value="t" /></datalist>
+          <datalist :id="tagListId"><option v-for="t in knownTags" :key="t" :value="t" /></datalist>
           <span v-if="tab.created" class="date">创建于 {{ tab.created }}</span>
         </div>
         <div ref="host" @contextmenu="onEditorMenu" />

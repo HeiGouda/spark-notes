@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Editor } from "@milkdown/kit/core";
 import { createEditor, readMarkdown } from "./createEditor";
-import { attachmentName, clipboardFiles, handlePaste, insertAttachments, isImageName, joinImageTitle, splitImageTitle } from "./attachments";
+import { attachmentName, clipboardFiles, handlePaste, imageFailReason, insertAttachments, isImageName, joinImageTitle, splitImageTitle } from "./attachments";
 import type { EditorView } from "@milkdown/kit/prose/view";
 
 let editor: Editor | null = null;
@@ -25,6 +25,14 @@ describe("attachmentName", () => {
   it("按扩展名识别图片", () => {
     expect(isImageName("a.PNG")).toBe(true);
     expect(isImageName("a.pdf")).toBe(false);
+  });
+});
+
+describe("打不开的图片", () => {
+  it("按链接说明原因", () => {
+    expect(imageFailReason("http://www.kdocs.cn/api/v3/office/copy/x")).toBe("金山文档图片需要登录，无法显示");
+    expect(imageFailReason("https://example.com/a.png")).toBe("网络图片加载失败");
+    expect(imageFailReason("宏观经济学.assets/a.png")).toBe("找不到图片文件");
   });
 });
 

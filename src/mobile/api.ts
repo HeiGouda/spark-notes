@@ -150,6 +150,10 @@ export interface ReadPoint {
   cfi: string;
   fraction: number;
   updatedMs: number;
+  /** 原生左右翻页的章节号。滚动、PDF 和桌面不写 */
+  section?: number;
+  /** 这一章正文里的字符偏移 */
+  charOffset?: number;
 }
 
 export interface SyncedPoint {

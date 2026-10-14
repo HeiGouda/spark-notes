@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -45,9 +45,32 @@ const ui = useUiStore();
 const chatShown = computed(() => ui.chatOpen && ui.mainView === "chat");
 const diagramShown = computed(() => !!tabs.active && tabs.active.kind !== "note");
 
-/** 从文件树、快速打开等处打开笔记时回到笔记 */
-watch(() => tabs.activePath, (path) => {
-  if (path && ui.mainView === "chat") ui.showNotes();
+/** 最近看过的笔记继续留着编辑器，切回来不用重新解析长文，滚动位置也还在。恢复会话时会连续激活每一篇，那段时间先不建 */
+const WARM_NOTES = 8;
+const warmNotes = ref<string[]>([]);
+watch(
+  () => [tabs.activePath, tabs.restoring] as const,
+  ([path, restoring]) => {
+    if (path && ui.mainView === "chat") ui.showNotes();
+    if (restoring || !path) return;
+    const tab = tabs.tabs.find((t) => t.path === path);
+    if (!tab || tab.kind !== "note") return;
+    const next = [path, ...warmNotes.value.filter((p) => p !== path)];
+    warmNotes.value = next.slice(0, WARM_NOTES);
+  },
+  { immediate: true },
+);
+watch(
+  () => tabs.tabs.map((t) => t.path).join("\0"),
+  () => {
+    const has = new Set(tabs.tabs.map((t) => t.path));
+    const kept = warmNotes.value.filter((p) => has.has(p));
+    if (kept.length !== warmNotes.value.length) warmNotes.value = kept;
+  },
+);
+const shownNotes = computed(() => {
+  const warm = new Set(warmNotes.value);
+  return tabs.tabs.filter((t) => t.kind === "note" && warm.has(t.path));
 });
 
 /** 捕获阶段处理应用级快捷键，先于编辑器自身的按键映射 */
@@ -122,9 +145,9 @@ onBeforeUnmount(() => {
       <main class="main">
         <FormatToolbar v-if="settings.toolbarVisible && !chatShown && !diagramShown" />
         <DiagramView v-if="tabs.active && diagramShown" v-show="!chatShown" :key="tabs.active.path" :tab="tabs.active" />
-        <!-- 切到 AI 对话时编辑器只隐藏不销毁，保留光标位置供“插入到笔记”使用 -->
-        <NoteEditor v-else-if="tabs.active" v-show="!chatShown" :key="tabs.active.path" :tab="tabs.active" />
-        <div v-else-if="!chatShown" class="main-empty">在左侧选择一篇笔记</div>
+        <!-- 切到 AI 对话、或切到别的笔记时，编辑器只隐藏不销毁，留下光标和阅读位置 -->
+        <NoteEditor v-for="tab in shownNotes" v-show="tab.path === tabs.activePath && !chatShown" :key="tab.path" :tab="tab" />
+        <div v-if="!tabs.active && !chatShown" class="main-empty">在左侧选择一篇笔记</div>
         <FindBar v-if="tabs.active && !chatShown" />
         <SheetBar v-if="book.activeBook && !chatShown" />
         <ChatView v-if="ui.chatOpen" v-show="chatShown" />

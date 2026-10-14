@@ -280,6 +280,12 @@ pub struct ReadPoint {
     pub cfi: String,
     pub fraction: f64,
     pub updated_ms: u64,
+    /// 原生左右翻页的章节号。没有时仍用 cfi
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<i32>,
+    /// 这一章正文里的字符偏移。没有时仍用 cfi
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_offset: Option<i32>,
 }
 
 fn progress_path(base: &Path) -> PathBuf {
@@ -863,8 +869,8 @@ mod tests {
 
     #[test]
     fn newer_progress_wins_and_merge_keeps_other_books() {
-        let local = ReadPoint { cfi: "local".into(), fraction: 0.2, updated_ms: 10 };
-        let cloud = ReadPoint { cfi: "cloud".into(), fraction: 0.8, updated_ms: 20 };
+        let local = ReadPoint { cfi: "local".into(), fraction: 0.2, updated_ms: 10, section: None, char_offset: None };
+        let cloud = ReadPoint { cfi: "cloud".into(), fraction: 0.8, updated_ms: 20, section: None, char_offset: None };
         assert_eq!(newer_point(Some(local.clone()), Some(cloud.clone())).unwrap().cfi, "cloud");
         assert_eq!(newer_point(Some(cloud.clone()), Some(local.clone())).unwrap().cfi, "cloud");
         let merged = merge_progress_json(r#"{"另一本.epub":{"cfi":"x","fraction":0.1,"updatedMs":1}}"#, "三体.epub", &local).unwrap();

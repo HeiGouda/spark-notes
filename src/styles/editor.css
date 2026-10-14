@@ -61,7 +61,10 @@
 .pm .img-zoom:hover { border-color: var(--accent); color: var(--accent) }
 .pm .img-resize { display: none; position: absolute; right: 4px; bottom: 4px; width: 12px; height: 12px; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 2px; background: var(--paper); cursor: nwse-resize }
 .pm .img-frame.is-selected .img-resize { display: block }
-.pm img.is-broken { display: inline-block; min-width: 120px; min-height: 40px; padding: 8px 12px; border: 1px dashed var(--line-strong); border-radius: 4px; color: var(--muted); font-size: 12px }
+.pm img.is-broken { display: inline-block; min-width: 220px; min-height: 64px; padding: 8px 12px; border: 1px dashed var(--line-strong); border-radius: 4px; color: var(--muted); font-size: 12px }
+.pm .img-fallback { display: none; position: absolute; inset: 0; align-items: center; padding: 8px 12px; color: var(--muted); font: 12px/1.4 var(--f-ui); pointer-events: none }
+.pm .img-frame.is-selected.is-broken .img-fallback { padding-top: 30px }
+.pm .img-frame.is-broken .img-fallback { display: flex }
 .pm ul, .pm ol { margin: 0 0 14px; padding-left: 24px }
 .pm ul { list-style: disc }
 .pm ol { list-style: decimal }

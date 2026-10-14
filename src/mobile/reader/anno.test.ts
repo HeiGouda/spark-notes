@@ -74,6 +74,17 @@ author: 尤瓦尔·赫拉利
     expect(readingNoteRel("人类简史", "别的.epub", existing)).toBe("读书笔记/人类简史/人类简史.md");
     expect(readingNoteRel("a/b", "x.epub", [])).toBe("读书笔记/a_b/a_b.md");
   });
+
+  it("划线的章节和起止会写进注释，旧注释仍能读", () => {
+    const md = withAnno("", META, (doc) => {
+      doc.annos.push({ id: "a1", cfi: "epubcfi(/6/4)", time: "2026-10-08T21:40:00.000Z", quote: "甲", note: "想法", chapter: "第一章", section: 2, start: 10, end: 12 });
+    });
+    const parsed = parseReadingNote(md);
+    expect(parsed.annos[0]).toMatchObject({ section: 2, start: 10, end: 12, note: "想法" });
+    const old = parseReadingNote("<!-- spark-anno a9 epubcfi(/6/2) 2026-10-08T21:40:00.000Z -->\n留下的话\n");
+    expect(old.annos[0]).toMatchObject({ id: "a9", cfi: "epubcfi(/6/2)", note: "留下的话" });
+    expect(old.annos[0].start).toBeUndefined();
+  });
 });
 
 describe("书签", () => {

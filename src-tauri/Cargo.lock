@@ -3638,7 +3638,7 @@ dependencies = [
 
 [[package]]
 name = "spark"
-version = "3.1.6"
+version = "3.1.8"
 dependencies = [
  "chrono",
  "notify",

@@ -42,10 +42,9 @@ import kotlin.math.abs
  * 截图盖在 PopupWindow 里，才能在盖着的同时用 PixelCopy 去截下面的 WebView。这个窗口在阅读页里一直开着（没在翻页时
  * 是透明的），每次翻页临时开窗口，窗口还没上屏网页就已经换页了，新页会先闪一下。
  *
- * 跟手：书页停稳后网页调 prefetch，这里盖上当前页的截图（看起来没有变化），让网页把前两页、后四页依次显示出来
- * （window.__sparkPeek，下一章、上一章的页面网页事先在后台排好），各截一张再换回来。翻页时直接拿这两张图做动画，
- * 手指一动页面就跟着走，新页也一直有字。按下手指时先截一张和预截的当前页比一比，不一样（书页变过）就不用。
- * 没有预截好时退回慢的做法：先盖上，等网页换好页、截到新页再动。
+ * 跟手：书页停稳后网页调 prefetch，把当前页、前两页、后四页画成纹理（邻章由网页事先排好，再逐页显示出来截）。
+ * 网页用 SparkPicture 同步版式代数。代数没变、邻页纹理也在时，手指一过滑动阈值就平移这两张纹理，按下时不再整屏比对。
+ * 版式变了（字号、字体、边距、主题）就丢掉纹理。没有纹理时退回慢的做法：先盖上，等网页换好页、截到新页再动。
  *
  * 点两侧翻页：网页先调 start，盖好后自己换页，换好后调 ready。
  * 左右滑动：手指横向滑出去时把这次触摸从 WebView 拿过来（给它发 CANCEL）。有预截时松手翻过去才通过
@@ -63,9 +62,6 @@ object PageTurn {
    * BACKING 没翻过去，等网页换回原来那页；REVEALING 最后一帧画好就拿掉截图
    */
   private enum class Phase { IDLE, PREFETCH, CAPTURING, COVERED, PREPARING, CATCHUP, FOLLOW, ANIMATING, LANDING, BACKING, REVEALING }
-
-  /** 按下手指时截的画面和预截的当前页比过没有 */
-  private enum class Check { NONE, PENDING, OK, BAD }
 
   private const val READY_TIMEOUT_MS = 15000L
   private const val PAINT_TIMEOUT_MS = 1800L
@@ -154,8 +150,14 @@ object PageTurn {
   private var queuedAt = 0L
   /** 用预截的图翻完，网页换好的页和预截的一样 */
   private var landedSame = false
-  private var downCheck = Check.NONE
-  private var checkGen = 0
+  /** 网页排版的代数。字号、字体、边距、主题一变就加一，翻页本身不加 */
+  private var pageGen = 0
+  /** 现有纹理是按哪一版排版截的；对不上 pageGen 就不能拿来跟手 */
+  private var cacheGen = -1
+  /** 翻页过程中版式变了，收尾时再丢纹理 */
+  private var pictureStale = false
+  /** 这一轮预截开始时的排版代数，截完时变过就整套作废 */
+  private var prefetchEpoch = 0
   private var tracking = false
   private var hijacked = false
   private var edgeDrag = false
@@ -172,6 +174,20 @@ object PageTurn {
     this.activity = activity
     web = webView
     webView.addJavascriptInterface(SelectingFlag(), "SparkSelecting")
+    webView.addJavascriptInterface(PictureFlag(), "SparkPicture")
+  }
+
+  /** 网页排版变了。翻页过程中先记下来，这一下走完再丢纹理，避免把正在画的图回收掉 */
+  private fun noteGeneration(value: Int) {
+    if (value == pageGen) return
+    pageGen = value
+    if (phase == Phase.IDLE || phase == Phase.PREFETCH) {
+      if (phase == Phase.PREFETCH) prefetchAbort = true
+      dropCache()
+      return
+    }
+    pictureStale = true
+    cacheGen = -1
   }
 
   /** enabled 只管能不能用滑动翻页；正在进行的翻页不受影响 */
@@ -267,12 +283,16 @@ object PageTurn {
     if (w.width <= 0 || w.height <= 0) return
     gen++
     val g = gen
+    prefetchEpoch = pageGen
     phase = Phase.PREFETCH
     prefetchAbort = false
     recycleRetired()
     val cur = newShot() ?: return endPrefetch(g)
     copyWindow(cur) { s ->
-      if (g != gen) return@copyWindow
+      if (g != gen) {
+        recycleIfLoose(s ?: cur)
+        return@copyWindow
+      }
       if (s == null) return@copyWindow endPrefetch(g)
       // 画面和已有的当前页一样（比如刚翻过来时用上一页的截图接上了），只补还没有的那一边
       val old = cacheCur
@@ -284,7 +304,10 @@ object PageTurn {
       val needPrev = !kept || cachePrev == null
       val needPrev2 = !kept || cachePrev2 == null
       if (kept) s.recycle() else dropCache()
-      if (!needNext && !needNext2 && !needNext3 && !needNext4 && !needPrev && !needPrev2) return@copyWindow endPrefetch(g)
+      if (!needNext && !needNext2 && !needNext3 && !needNext4 && !needPrev && !needPrev2) {
+        if (prefetchEpoch == pageGen) cacheGen = pageGen
+        return@copyWindow endPrefetch(g)
+      }
       val shot = if (kept) old!! else s.also { prepare(it) }
       val l = showLayer(shot, null)
       if (l == null) {
@@ -304,13 +327,17 @@ object PageTurn {
         afterPresented {
           if (g != gen) return@afterPresented
           peekAll(steps, shot, g) { shots ->
+            if (g != gen) {
+              shots.forEach { recycleIfLoose(it) }
+              return@peekAll
+            }
             web?.evaluateJavascript("window.__sparkUnpeek&&window.__sparkUnpeek()", null)
             settleTo(shot, g) { same ->
               if (g != gen) {
-                shots.forEach { it?.recycle() }
+                shots.forEach { recycleIfLoose(it) }
                 return@settleTo
               }
-              if (same) {
+              if (same && prefetchEpoch == pageGen) {
                 cacheCur = shot
                 shots.getOrNull(0)?.let { cacheNext = it }
                 shots.getOrNull(1)?.let { cacheNext2 = it }
@@ -318,10 +345,11 @@ object PageTurn {
                 shots.getOrNull(3)?.let { cacheNext4 = it }
                 shots.getOrNull(4)?.let { cachePrev = it }
                 shots.getOrNull(5)?.let { cachePrev2 = it }
+                cacheGen = pageGen
               } else {
                 // 截的时候书页变了（比如打开了菜单），这一套不能用
                 if (kept) dropCache() else retire(shot)
-                shots.forEach { it?.recycle() }
+                shots.forEach { recycleIfLoose(it) }
               }
               endPrefetch(g)
             }
@@ -483,7 +511,7 @@ object PageTurn {
    */
   private fun tryChain(): Boolean {
     val next = pendingCover ?: return false
-    if (anim == "none" || !fast) return false
+    if (anim == "none" || !fast || !cacheFresh()) return false
     val shown = fastTarget ?: return false
     if (shown.isRecycled) return false
     val going = if (queuedDir == 0) dir else queuedDir
@@ -516,9 +544,9 @@ object PageTurn {
     when (ev.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
         fingerDown = true
-        downCheck = Check.NONE
         missedDir = 0
-        if (phase == Phase.PREFETCH) prefetchAbort = true
+        // 邻页纹理还没好才打断预截。已经能跟手时留着纹理，滑动直接用
+        if (phase == Phase.PREFETCH && !cacheFresh()) prefetchAbort = true
         candidate = enabled && web != null
         tracking = candidate
         downX = ev.rawX
@@ -526,7 +554,6 @@ object PageTurn {
         downTime = ev.eventTime
         gestureVt?.recycle()
         gestureVt = if (candidate) VelocityTracker.obtain().also { it.addMovement(ev) } else null
-        if (tracking && phase == Phase.IDLE && cacheCur != null) checkCache()
       }
       MotionEvent.ACTION_POINTER_DOWN -> {
         tracking = false
@@ -575,22 +602,26 @@ object PageTurn {
     return if (android.os.SystemClock.uptimeMillis() - queuedAt < 1500L) s else 0f
   }
 
-  /** 截一张现在的画面和预截的当前页比一比，一样才能拿预截的前后页翻页 */
-  private fun checkCache() {
-    val cur = cacheCur ?: return
-    val shot = scratchShot() ?: return
-    checkGen++
-    val cg = checkGen
-    downCheck = Check.PENDING
-    copyWindow(shot) { s ->
-      if (cg != checkGen) return@copyWindow
-      downCheck = if (s != null && !cur.isRecycled && s.sameAs(cur)) Check.OK else Check.BAD
-    }
+  /** 纹理和当前 WebView 一样大，才能盖上去跟手 */
+  private fun fits(b: Bitmap?): Boolean {
+    val w = web ?: return false
+    return b != null && !b.isRecycled && b.width == w.width && b.height == shotHeight(w)
+  }
+
+  /** 当前页纹理还是这一版排版截的 */
+  private fun cacheFresh(): Boolean = cacheGen == pageGen && fits(cacheCur)
+
+  /** 这一侧的邻页纹理能直接拿来翻 */
+  private fun textureReady(d: Int): Boolean {
+    if (cacheGen != pageGen) return false
+    val neighbor = if (d > 0) cacheNext else cachePrev
+    return fits(cacheCur) && fits(neighbor) && neighbor !== cacheCur
   }
 
   /**
-   * 只有书页停稳才跟着手指。正在翻页时把新的滑动抢过来，这一下经常翻不成页，
-   * 快滑好几次就只剩一页。忙的时候记下方向，松手再按一次滑动补翻。
+   * 只有书页停稳，或预截还在进行但这一侧的纹理已经好了，才跟着手指。
+   * 正在翻页时把新的滑动抢过来，这一下经常翻不成页，快滑好几次就只剩一页。
+   * 忙的时候记下方向，松手再按一次滑动补翻。
    */
   private fun canHijack(): Boolean = pendingCover == null && phase == Phase.IDLE
 
@@ -615,28 +646,18 @@ object PageTurn {
       return false
     }
     val d = if (dx < 0) 1 else -1
-    // 正忙就不跟手：每一次滑够了，松手都补翻一页
-    if (!canHijack()) {
+    val edge = if (d > 0) !canNext else !canPrev
+    // 预截进行中只要这一侧的纹理好了就立刻跟手，fastDrag 会把这一轮预截作废
+    val takeover = phase == Phase.PREFETCH && !edge && textureReady(d)
+    if (!takeover && !canHijack()) {
       missedDir = d
+      // 预截时网页正停在旁边那一页，这次滑动不能再交给它
+      if (phase == Phase.PREFETCH) return true
       return false
     }
-    val edge = if (d > 0) !canNext else !canPrev
-    val neighbor = if (d > 0) cacheNext else cachePrev
-    var useCache = false
-    if (!edge && phase == Phase.IDLE && neighbor != null && cacheCur != null && anim != "none") {
-      when (downCheck) {
-        Check.NONE -> {
-          checkCache()
-          missedDir = d
-          return false
-        }
-        Check.PENDING -> {
-          missedDir = d
-          return false
-        }
-        Check.OK -> useCache = true
-        Check.BAD -> {}
-      }
+    if (takeover) {
+      prefetchAbort = true
+      w.evaluateJavascript("window.__sparkUnpeek&&window.__sparkUnpeek()", null)
     }
     tracking = false
     missedDir = 0
@@ -654,7 +675,8 @@ object PageTurn {
     gestureVt = null
     edgeDrag = edge
     if (edge) return true
-    if (useCache && neighbor != null && fastDrag(d, neighbor)) return true
+    val neighbor = if (d > 0) cacheNext else cachePrev
+    if (anim != "none" && neighbor != null && textureReady(d) && fastDrag(d, neighbor)) return true
     beginDrag(d)
     return true
   }
@@ -666,7 +688,10 @@ object PageTurn {
     resetTurn(d, true)
     fast = true
     fastTarget = neighbor
-    showLayer(cur, neighbor) ?: return false
+    showLayer(cur, neighbor) ?: run {
+      phase = Phase.IDLE
+      return false
+    }
     follow()
     return true
   }
@@ -934,25 +959,26 @@ object PageTurn {
     slowCover(d, drag, done)
   }
 
-  /** 点两侧、有预截：确认画面没变就马上开始动，截图上屏后再让网页换页 */
+  /** 点两侧、纹理还对得上：盖上就播，不再整屏比对。连翻时截图本来就盖着，不用再等窗口上屏 */
   private fun fastTap(d: Int, neighbor: Bitmap, done: (Boolean) -> Unit) {
-    if (chainTrust) {
-      chainTrust = false
-      val cur = cacheCur
-      if (cur == null || cur.isRecycled || neighbor.isRecycled) return slowCover(d, false, done)
-      gen++
-      val g = gen
-      phase = Phase.CAPTURING
-      resetTurn(d, false)
-      val l = showLayer(cur, neighbor)
-      if (l == null) {
-        phase = Phase.IDLE
-        return slowCover(d, false, done)
-      }
-      fast = true
-      fastTarget = neighbor
+    val cur = cacheCur
+    if (cur == null || !fits(cur) || !fits(neighbor)) return slowCover(d, false, done)
+    if (!chainTrust && !cacheFresh()) return slowCover(d, false, done)
+    val alreadyCovered = chainTrust
+    chainTrust = false
+    gen++
+    val g = gen
+    phase = Phase.CAPTURING
+    resetTurn(d, false)
+    val l = showLayer(cur, neighbor)
+    if (l == null) {
+      phase = Phase.IDLE
+      return slowCover(d, false, done)
+    }
+    fast = true
+    fastTarget = neighbor
+    if (alreadyCovered) {
       playTurn(1f, takeQueuedSpeed()) { motionDone() }
-      // 截图本来就盖着，不用再等窗口上屏
       afterLayerFrame(l) {
         if (g != gen) return@afterLayerFrame
         jumpSent = true
@@ -961,29 +987,17 @@ object PageTurn {
       }
       return
     }
-    val cur = cacheCur ?: return slowCover(d, false, done)
-    val shot = scratchShot() ?: return slowCover(d, false, done)
-    gen++
-    val g = gen
-    phase = Phase.CAPTURING
-    resetTurn(d, false)
-    copyWindow(shot) { s ->
-      if (g != gen) return@copyWindow done(false)
-      val l = if (s != null && !cur.isRecycled && s.sameAs(cur)) showLayer(cur, neighbor) else null
-      if (l == null) {
-        phase = Phase.IDLE
-        return@copyWindow slowCover(d, false, done)
-      }
-      fast = true
-      fastTarget = neighbor
-      playTurn(1f, takeQueuedSpeed()) { motionDone() }
-      afterLayerFrame(l) {
-        afterPresented {
-          if (g != gen) return@afterPresented
-          jumpSent = true
-          scheduleReadyTimeout()
-          done(true)
+    apply(0f)
+    afterLayerFrame(l) {
+      afterPresented {
+        if (g != gen) {
+          done(false)
+          return@afterPresented
         }
+        playTurn(1f, takeQueuedSpeed()) { motionDone() }
+        jumpSent = true
+        scheduleReadyTimeout()
+        done(true)
       }
     }
   }
@@ -1186,6 +1200,10 @@ object PageTurn {
     val pop = popup ?: PopupWindow(l, w.width, height, false).also {
       it.isTouchable = false
       it.isFocusable = false
+      // 不可聚焦的弹窗默认排在输入法上面。这层一直开着，搜索时就盖住键盘：
+      // 系统按“不受信任的遮挡”丢掉键盘的触摸，ColorOS 还会提示“正在悬浮显示，是否关闭”。
+      // 声明需要输入法，系统就把它排到键盘下面
+      it.inputMethodMode = PopupWindow.INPUT_METHOD_NEEDED
       it.isClippingEnabled = false
       it.elevation = 0f
       it.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -1324,6 +1342,10 @@ object PageTurn {
     catchUp = null
     clearReadyTimeout()
     if (pageChanged) seedCache()
+    if (pictureStale) {
+      dropCache()
+      pictureStale = false
+    }
     // 缓存已经丢掉时，截图层里可能还画着即将回收的图，先清空再回收
     if (next == null || cacheCur == null) {
       layer?.let {
@@ -1337,7 +1359,6 @@ object PageTurn {
     incoming = null
     phase = Phase.IDLE
     resetTurn(dir, false)
-    downCheck = Check.NONE
     chainTrust = false
     if (next != null) next() else notifyDone()
   }
@@ -1353,6 +1374,7 @@ object PageTurn {
   }
 
   private fun seedCache() {
+    if (pictureStale) return dropCache()
     val landedOn = when {
       fast && landedSame -> fastTarget
       !fast -> incoming
@@ -1401,7 +1423,7 @@ object PageTurn {
     cacheNext4 = newNext4
     if (outgoing === left) outgoing = null
     if (incoming === landedOn) incoming = null
-    downCheck = Check.NONE
+    cacheGen = pageGen
   }
 
   private fun dropCache() {
@@ -1419,7 +1441,7 @@ object PageTurn {
     cacheNext4 = null
     cachePrev = null
     cachePrev2 = null
-    downCheck = Check.NONE
+    cacheGen = -1
   }
 
   private fun notifyDone() {
@@ -1428,6 +1450,17 @@ object PageTurn {
 
   private fun retire(shot: Bitmap?) {
     if (shot != null && !shot.isRecycled && !retired.contains(shot)) retired.add(shot)
+  }
+
+  /** 还在纹理槽或截图层里的图不能回收 */
+  private fun held(b: Bitmap): Boolean =
+    b === cacheCur || b === cacheNext || b === cacheNext2 || b === cacheNext3 || b === cacheNext4 ||
+      b === cachePrev || b === cachePrev2 || b === outgoing || b === incoming || b === fastTarget ||
+      b === scratch || b === mismatch
+
+  private fun recycleIfLoose(b: Bitmap?) {
+    if (b == null || b.isRecycled || held(b)) return
+    b.recycle()
   }
 
   private fun recycleRetired() {
@@ -1553,6 +1586,14 @@ object PageTurn {
     @JavascriptInterface
     fun set(on: Boolean) {
       textSelecting = on
+    }
+  }
+
+  /** 网页排版代数。方法要 public，系统才能从 JavaScript 调到 */
+  class PictureFlag {
+    @JavascriptInterface
+    fun setGeneration(value: Int) {
+      main.post { noteGeneration(value) }
     }
   }
 }

@@ -908,8 +908,16 @@ class Loader {
     }
 }
 
-const getHTMLFragment = (doc, id) => doc.getElementById(id)
-    ?? doc.querySelector(`[name="${CSS.escape(id)}"]`)
+const getHTMLFragment = (doc, id) => {
+    if (!id) return null
+    let key = id
+    try { key = decodeURIComponent(id) } catch { /* 已经是明文 */ }
+    const esc = CSS.escape(key)
+    // XHTML 用 XML 解析时 getElementById 经常是空的，还要按属性找
+    return doc.getElementById(key)
+        ?? doc.querySelector(`[id="${esc}"]`)
+        ?? doc.querySelector(`[name="${esc}"]`)
+}
 
 const getPageSpread = properties => {
     for (const p of properties) {

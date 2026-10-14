@@ -405,15 +405,23 @@ export const useTabsStore = defineStore("tabs", () => {
     historyIndex.value = Math.min(Math.max(historyIndex.value - removedBefore, kept.length ? 0 : -1), kept.length - 1);
   }
 
+  /** 正在恢复上次打开的标签页。这段时间里标签会逐个变成当前项，界面不要为每一篇都建编辑器 */
+  const restoring = ref(false);
+
   /** 恢复上次会话；返回打不开的笔记数量 */
   async function restore(paths: string[], activeTab: string | null): Promise<number> {
-    let missing = 0;
-    for (const p of paths) {
-      const ok = await open(p, { record: false }).catch(() => false);
-      if (!ok) missing++;
+    restoring.value = true;
+    try {
+      let missing = 0;
+      for (const p of paths) {
+        const ok = await open(p, { record: false }).catch(() => false);
+        if (!ok) missing++;
+      }
+      if (activeTab && find(activeTab)) setActive(activeTab);
+      return missing;
+    } finally {
+      restoring.value = false;
     }
-    if (activeTab && find(activeTab)) setActive(activeTab);
-    return missing;
   }
 
   function resetHistory() {
@@ -470,6 +478,6 @@ export const useTabsStore = defineStore("tabs", () => {
     tabs, activePath, active, canBack, canForward, history, editedTick, savedTick,
     open, openDraft, finalizeDraft, pin, update, setTags, save, saveActive, flushAll, flushUnder, close, closeMany, closeGroup, groupKey, closeAll, closeOthers, closeRight,
     activate, cycle, reorder, back, forward, remap, reload, dropUnder, restore, resetHistory,
-    pendingReveal, openAt, onExternalChange,
+    pendingReveal, openAt, onExternalChange, restoring,
   };
 });

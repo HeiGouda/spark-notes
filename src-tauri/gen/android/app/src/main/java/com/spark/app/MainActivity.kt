@@ -1,11 +1,8 @@
 package com.spark.app
 
-import android.content.Context
-import android.graphics.Rect
 import android.os.Bundle
 import android.view.ActionMode
 import android.view.Menu
-import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.webkit.WebView
@@ -13,7 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.view.menu.MenuBuilder
 
 class MainActivity : TauriActivity() {
-  private var readerWeb: WebView? = null
+  private var nativePages: NativePages? = null
   /** 系统的两个参数实现会再调回一个参数的版本，这里挡住，避免选字时栈溢出 */
   private var actionModeGuard = false
 
@@ -24,8 +21,25 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
-    readerWeb = webView
     PageTurn.attach(this, webView)
+    val pages = NativePages(this)
+    pages.bind(webView)
+    nativePages = pages
+    webView.addJavascriptInterface(pages.bridge(), "NativePages")
+    val pdf = PdfTiles(this)
+    pdf.bind(webView)
+    webView.addJavascriptInterface(pdf.bridge(), "PdfTiles")
+    webView.post {
+      val parent = webView.parent as? android.view.ViewGroup ?: return@post
+      if (pages.parent == null) {
+        parent.addView(pages, android.view.ViewGroup.LayoutParams(0, 0))
+        pages.visibility = View.GONE
+      }
+      if (pdf.parent == null) {
+        parent.addView(pdf, android.view.ViewGroup.LayoutParams(0, 0))
+        pdf.visibility = View.GONE
+      }
+    }
     webView.setOnCreateContextMenuListener { menu, _, _ ->
       if (!SecretPlugin.hideSelectionMenu) return@setOnCreateContextMenuListener
       try {
@@ -37,6 +51,7 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
+    nativePages?.bridge()?.clear()
     PageTurn.stop()
     super.onDestroy()
   }
@@ -55,56 +70,12 @@ class MainActivity : TauriActivity() {
     if (actionModeGuard || !SecretPlugin.hideSelectionMenu) return null
     actionModeGuard = true
     try {
-      return floatingSelection(callback) ?: SelectionMode(callback)
+      // 阅读页自己画选区和菜单。系统的浮动工具条会再弹出一个，这里只占住回调。
+      return SelectionMode(callback)
     } finally {
       actionModeGuard = false
     }
   }
-
-  /**
-   * 这台机上 FloatingActionMode 的构造方法和公开签名对不上，反射会失败。
-   * 失败后如果返回 null，系统会自己弹出复制、分享。改由 [SelectionMode] 占住，系统就不再建那一套。
-   */
-  private fun floatingSelection(callback: ActionMode.Callback): ActionMode? {
-    val origin = readerWeb ?: return null
-    val parent = window?.decorView ?: return null
-    val cls = try {
-      Class.forName("com.android.internal.view.FloatingActionMode")
-    } catch (_: Throwable) {
-      return null
-    }
-    val wrapped = HiddenMenuCallback(callback)
-    for (ctor in cls.declaredConstructors) {
-      val types = ctor.parameterTypes
-      ctor.isAccessible = true
-      val args = arrayOfNulls<Any>(types.size)
-      var views = 0
-      var supported = true
-      for (i in types.indices) {
-        val p = types[i]
-        args[i] = when {
-          Context::class.java.isAssignableFrom(p) -> this
-          ActionMode.Callback::class.java.isAssignableFrom(p) -> wrapped
-          p == java.lang.Boolean.TYPE -> false
-          p == Integer.TYPE -> typeFloating
-          View::class.java.isAssignableFrom(p) -> if (views++ == 0) origin else parent
-          else -> {
-            supported = false
-            null
-          }
-        }
-        if (!supported) break
-      }
-      if (!supported) continue
-      try {
-        return ctor.newInstance(*args) as ActionMode
-      } catch (_: Throwable) {
-      }
-    }
-    return null
-  }
-
-  private val typeFloating = ActionMode.TYPE_FLOATING
 
   override fun onActionModeStarted(mode: ActionMode) {
     if (SecretPlugin.hideSelectionMenu) hideSelectionItems(mode.menu)
@@ -114,28 +85,6 @@ class MainActivity : TauriActivity() {
   private fun hideSelectionItems(menu: Menu?) {
     if (menu == null) return
     for (i in 0 until menu.size()) menu.getItem(i)?.isVisible = false
-  }
-
-  /** 交给系统创建真正的选区模式（两端把手靠它），但不要显示复制、分享 */
-  private inner class HiddenMenuCallback(private val inner: ActionMode.Callback) : ActionMode.Callback2() {
-    override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean = inner.onCreateActionMode(mode, menu)
-
-    override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
-      inner.onPrepareActionMode(mode, menu)
-      if (SecretPlugin.hideSelectionMenu) hideSelectionItems(menu)
-      return true
-    }
-
-    override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean = false
-
-    override fun onDestroyActionMode(mode: ActionMode) {
-      inner.onDestroyActionMode(mode)
-    }
-
-    override fun onGetContentRect(mode: ActionMode, view: View, outRect: Rect) {
-      val cb = inner
-      if (cb is ActionMode.Callback2) cb.onGetContentRect(mode, view, outRect)
-    }
   }
 
   /**

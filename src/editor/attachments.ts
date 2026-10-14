@@ -21,6 +21,13 @@ export interface AttachmentHost {
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico)$/i;
+
+/** 图片节点加载失败时给读者看的原因。金山文档的链接不带登录态，接口会返回空内容 */
+export function imageFailReason(src: string): string {
+  if (/kdocs\.cn|wps\.cn/i.test(src)) return "金山文档图片需要登录，无法显示";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return "网络图片加载失败";
+  return "找不到图片文件";
+}
 /** 写入图片 title 的宽度，例如 `w=320` 或 `说明|w=320`，标准 Markdown 能原样往返 */
 const WIDTH_MARK = /^(?:([\s\S]*)\|)?w=(\d+)$/;
 export const IMAGE_MIN_W = 48;
@@ -168,9 +175,16 @@ export function imageView(host: AttachmentHost) {
     wrap.contentEditable = "false";
     const img = document.createElement("img");
     img.draggable = false;
-    img.addEventListener("load", () => img.classList.remove("is-broken"));
+    const fallback = document.createElement("span");
+    fallback.className = "img-fallback";
+    const markBroken = (broken: boolean) => {
+      img.classList.toggle("is-broken", broken);
+      wrap.classList.toggle("is-broken", broken);
+      fallback.textContent = broken ? imageFailReason(String(node.attrs.src ?? "")) : "";
+    };
+    img.addEventListener("load", () => markBroken(false));
     img.addEventListener("error", () => {
-      img.classList.add("is-broken");
+      markBroken(true);
       console.warn("图片加载失败", node.attrs.src, img.src);
     });
     const tools = document.createElement("span");
@@ -182,10 +196,15 @@ export function imageView(host: AttachmentHost) {
     const handle = document.createElement("span");
     handle.className = "img-resize";
     handle.title = "拖动调整大小";
-    wrap.append(img, tools, handle);
+    wrap.append(img, fallback, tools, handle);
 
     const render = () => {
-      img.src = host.resolve(node.attrs.src as string);
+      const next = host.resolve(node.attrs.src as string);
+      if (img.dataset.src !== next) {
+        img.dataset.src = next;
+        markBroken(false);
+        img.src = next;
+      }
       img.alt = (node.attrs.alt as string) ?? "";
       const meta = splitImageTitle(node.attrs.title);
       const where = meta.title || String(node.attrs.src ?? "");

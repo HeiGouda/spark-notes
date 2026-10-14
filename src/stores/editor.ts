@@ -29,11 +29,21 @@ export const useEditorStore = defineStore("editor", () => {
   const currentHeading = computed(() => currentHeadingIndex(headings.value, cursor.value));
   /** 立即把编辑器里的最新内容同步到标签页（跳过监听器的防抖） */
   let pullFn: (() => void) | null = null;
+  /** 每个已挂载的笔记编辑器各有一份，切走后仍能按路径把未同步的内容收回来 */
+  const pullers = new Map<string, () => void>();
 
   function attach(e: Editor, notePath: string, pull: () => void) {
     editor.value = markRaw(e);
     path.value = notePath;
     pullFn = pull;
+  }
+
+  function bind(notePath: string, pull: () => void) {
+    pullers.set(notePath, pull);
+  }
+
+  function unbind(notePath: string, pull?: () => void) {
+    if (pull === undefined || pullers.get(notePath) === pull) pullers.delete(notePath);
   }
 
   function detach(e: Editor) {
@@ -50,7 +60,12 @@ export const useEditorStore = defineStore("editor", () => {
   }
 
   function pull(notePath?: string) {
-    if (pullFn && (notePath === undefined || notePath === path.value)) pullFn();
+    if (notePath !== undefined && notePath !== path.value) {
+      pullers.get(notePath)?.();
+      return;
+    }
+    if (pullFn) pullFn();
+    else if (notePath !== undefined) pullers.get(notePath)?.();
   }
 
   /** 当前选中的文字（段落之间换行） */
@@ -63,5 +78,5 @@ export const useEditorStore = defineStore("editor", () => {
     });
   }
 
-  return { editor, path, block, marks, line, col, words, docVersion, headings, cursor, currentHeading, attach, detach, pull, selectionText };
+  return { editor, path, block, marks, line, col, words, docVersion, headings, cursor, currentHeading, attach, detach, bind, unbind, pull, selectionText };
 });

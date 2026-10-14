@@ -873,7 +873,8 @@ class MOBI6 {
         const filepos = href.match(/filepos:(.*)/)[1]
         const number = Number(filepos)
         const index = this.#sections.findIndex(section => section.end > number)
-        const anchor = doc => doc.getElementById(`filepos${filepos}`)
+        const id = `filepos${filepos}`
+        const anchor = doc => doc.getElementById(id) ?? doc.querySelector(`[id="${CSS.escape(id)}"]`)
         return { index, anchor }
     }
     splitTOCHref(href) {
@@ -1217,7 +1218,7 @@ class KF8 {
         const str = this.mobi.decode(fragRaw.slice(off))
         const selector = getFragmentSelector(str)
         this.#setFragmentSelector(fid, off, selector)
-        const anchor = doc => doc.querySelector(selector)
+        const anchor = selector ? doc => doc.querySelector(selector) : () => 0
         return { index, anchor }
     }
     splitTOCHref(href) {

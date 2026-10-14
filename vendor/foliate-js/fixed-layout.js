@@ -30,7 +30,7 @@ const getViewport = (doc, viewport) => {
 }
 
 export class FixedLayout extends HTMLElement {
-    static observedAttributes = ['zoom']
+    static observedAttributes = ['zoom', 'pan']
     #root = this.attachShadow({ mode: 'closed' })
     #observer = new ResizeObserver(() => this.#render())
     #spreads
@@ -43,6 +43,8 @@ export class FixedLayout extends HTMLElement {
     #center
     #side
     #zoom
+    #panX = 0
+    #panY = 0
     constructor() {
         super()
 
@@ -51,10 +53,9 @@ export class FixedLayout extends HTMLElement {
         sheet.replaceSync(`:host {
             width: 100%;
             height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            overflow: auto;
+            display: block;
+            overflow: hidden;
+            touch-action: none;
         }`)
 
         this.#observer.observe(this)
@@ -62,9 +63,12 @@ export class FixedLayout extends HTMLElement {
     attributeChangedCallback(name, _, value) {
         switch (name) {
             case 'zoom':
-                this.#zoom = value !== 'fit-width' && value !== 'fit-page'
+                this.#zoom = value != null && value !== 'fit-width' && value !== 'fit-page'
                     ? parseFloat(value) : value
                 this.#render()
+                break
+            case 'pan':
+                this.#applyPan()
                 break
         }
     }
@@ -103,39 +107,144 @@ export class FixedLayout extends HTMLElement {
             iframe.src = src
         })
     }
+    #applyPan() {
+        const panX = Number(this.dataset.panX) || 0
+        const panY = Number(this.dataset.panY) || 0
+        for (const frame of [this.#left, this.#center, this.#right]) {
+            if (frame?.element) frame.element.style.transform = `translate(${panX}px, ${panY}px)`
+        }
+    }
+    #sheet() {
+        if (this.#center?.element) return this.#center
+        const side = this.#side === 'left' ? this.#left : this.#right
+        if (side?.element) return side
+        return this.#left?.element ? this.#left : this.#right
+    }
+    /** 手指在页面上的相对位置，用来让缩放绕着捏合中心转 */
+    focal(clientX, clientY) {
+        const rect = this.#sheet()?.element?.getBoundingClientRect()
+        if (!rect || rect.width < 1 || rect.height < 1) return { fx: 0.5, fy: 0.5 }
+        return {
+            fx: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+            fy: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
+        }
+    }
+    /** 只变换 iframe 里面的 canvas。变换 iframe 本身时，WebView 会留一张旧快照，拖动就有残影 */
+    #pageCanvas() {
+        return this.#sheet()?.iframe?.contentDocument?.querySelector('#canvas canvas') ?? null
+    }
+    previewScale(ratio, fx, fy, dx, dy) {
+        const canvas = this.#pageCanvas()
+        if (!canvas) return
+        canvas.style.transformOrigin = `${fx * 100}% ${fy * 100}%`
+        canvas.style.transform = `translate3d(${-this.#panX + dx}px, ${-this.#panY + dy}px, 0) scale(${ratio})`
+    }
+    panNow() {
+        return { x: this.#panX, y: this.#panY }
+    }
+    panTo(x, y) {
+        this.#panX = x
+        this.#panY = y
+        this.#applyPanTransform()
+    }
+    #zoomed() {
+        const fit = Number(this.dataset.fitScale) || 0
+        return typeof this.#zoom === 'number' && !isNaN(this.#zoom) && fit > 0 && this.#zoom > fit * 1.02
+    }
+    #applyPanTransform() {
+        const canvas = this.#pageCanvas()
+        const el = this.#sheet()?.element
+        if (!canvas || !el) return
+        const view = this.getBoundingClientRect()
+        const maxX = Math.max(0, el.offsetWidth - view.width)
+        const maxY = Math.max(0, el.offsetHeight - view.height)
+        this.#panX = Math.min(maxX, Math.max(0, this.#panX))
+        this.#panY = Math.min(maxY, Math.max(0, this.#panY))
+        el.style.transform = 'none'
+        if (maxX <= 0 && maxY <= 0) {
+            canvas.style.transform = 'none'
+            return
+        }
+        canvas.style.transformOrigin = '0 0'
+        canvas.style.transform = `translate3d(${-this.#panX}px, ${-this.#panY}px, 0)`
+    }
+    #clearPreview() {
+        const canvas = this.#pageCanvas()
+        if (canvas) canvas.style.transform = 'none'
+        const el = this.#sheet()?.element
+        if (el) el.style.transform = 'none'
+    }
+    /** 双指平移但倍数没变时，把预览的位移收成页面偏移 */
+    nudge(dx, dy) {
+        this.#panX -= dx
+        this.#panY -= dy
+        this.#applyPanTransform()
+    }
+    /**
+     * 把放大倍数落到排版上，并让 (fx, fy) 仍留在手指下。
+     * 缩回整页时去掉倍数，页面重新居中。
+     */
+    commitZoom(zoom, fx, fy, clientX, clientY) {
+        this.#clearPreview()
+        const fit = Number(this.dataset.fitScale) || 0
+        const snapped = fit > 0 && zoom <= fit * 1.02
+        if (snapped) {
+            this.#panX = 0
+            this.#panY = 0
+            if (this.hasAttribute('zoom')) this.removeAttribute('zoom')
+            else this.#render()
+            return
+        }
+        const text = String(zoom)
+        if (this.getAttribute('zoom') !== text) this.setAttribute('zoom', text)
+        else this.#render()
+        const el = this.#sheet()?.element
+        if (!el) return
+        const host = this.getBoundingClientRect()
+        this.#panX = fx * el.offsetWidth - (clientX - host.left)
+        this.#panY = fy * el.offsetHeight - (clientY - host.top)
+        this.#applyPanTransform()
+    }
     #render(side = this.#side) {
         if (!side) return
         const left = this.#left ?? {}
         const right = this.#center ?? this.#right ?? {}
         const target = side === 'left' ? left : right
-        const { width, height } = this.getBoundingClientRect()
+        const view = this.getBoundingClientRect()
+        const viewW = view.width
+        const viewH = view.height
         const portrait = this.spread !== 'both' && this.spread !== 'portrait'
-            && height > width
+            && viewH > viewW
         this.#portrait = portrait
         const blankWidth = left.width ?? right.width ?? 0
         const blankHeight = left.height ?? right.height ?? 0
 
-        const scale = typeof this.#zoom === 'number' && !isNaN(this.#zoom)
-            ? this.#zoom
-            : (this.#zoom === 'fit-width'
-                ? (portrait || this.#center
-                    ? width / (target.width ?? blankWidth)
-                    : width / ((left.width ?? blankWidth) + (right.width ?? blankWidth)))
-                : (portrait || this.#center
-                    ? Math.min(
-                        width / (target.width ?? blankWidth),
-                        height / (target.height ?? blankHeight))
-                    : Math.min(
-                        width / ((left.width ?? blankWidth) + (right.width ?? blankWidth)),
-                        height / Math.max(
-                            left.height ?? blankHeight,
-                            right.height ?? blankHeight)))
-            ) || 1
+        const fitWidth = portrait || this.#center
+            ? viewW / (target.width ?? blankWidth)
+            : viewW / ((left.width ?? blankWidth) + (right.width ?? blankWidth))
+        const fitPage = portrait || this.#center
+            ? Math.min(
+                viewW / (target.width ?? blankWidth),
+                viewH / (target.height ?? blankHeight))
+            : Math.min(
+                viewW / ((left.width ?? blankWidth) + (right.width ?? blankWidth)),
+                viewH / Math.max(
+                    left.height ?? blankHeight,
+                    right.height ?? blankHeight))
+        const fit = this.#zoom === 'fit-width' ? fitWidth : fitPage
+        const scale = (typeof this.#zoom === 'number' && !isNaN(this.#zoom) ? this.#zoom : fit) || 1
+        if (Number.isFinite(fit) && fit > 0) this.dataset.fitScale = String(fit)
+        if (Number.isFinite(scale) && scale > 0) this.dataset.pageScale = String(scale)
 
         const transform = frame => {
             let { element, iframe, width, height, blank, onZoom } = frame
             if (!iframe) return
-            if (onZoom) onZoom({ doc: frame.iframe.contentDocument, scale })
+            if (onZoom) {
+                const drawn = onZoom({ doc: frame.iframe.contentDocument, scale })
+                Promise.resolve(drawn).then(() => {
+                    if (this.#zoomed()) this.#applyPanTransform()
+                })
+            }
             const iframeScale = onZoom ? scale : 1
             Object.assign(iframe.style, {
                 width: `${width * iframeScale}px`,
@@ -144,13 +253,23 @@ export class FixedLayout extends HTMLElement {
                 transformOrigin: 'top left',
                 display: blank ? 'none' : 'block',
             })
+            let pageW = (width ?? blankWidth) * scale
+            let pageH = (height ?? blankHeight) * scale
+            if (!(pageW > viewW + 0.5)) pageW = Math.min(pageW, viewW)
+            if (!(pageH > viewH + 0.5)) pageH = Math.min(pageH, viewH)
+            const ox = Math.max(0, (viewW - pageW) / 2)
+            const oy = Math.max(0, (viewH - pageH) / 2)
             Object.assign(element.style, {
-                width: `${(width ?? blankWidth) * scale}px`,
-                height: `${(height ?? blankHeight) * scale}px`,
+                width: `${pageW}px`,
+                height: `${pageH}px`,
                 overflow: 'hidden',
                 display: 'block',
                 flexShrink: '0',
-                marginBlock: 'auto',
+                margin: '0',
+                marginLeft: `${ox}px`,
+                marginTop: `${oy}px`,
+                transform: 'none',
+                backfaceVisibility: 'hidden',
             })
             if (portrait && frame !== target) {
                 element.style.display = 'none'
@@ -162,8 +281,18 @@ export class FixedLayout extends HTMLElement {
             transform(left)
             transform(right)
         }
+        this.style.overflow = 'hidden'
+        if (this.#zoomed()) this.#applyPanTransform()
+        else {
+            this.#panX = 0
+            this.#panY = 0
+        }
     }
     async #showSpread({ left, right, center, side }) {
+        this.#panX = 0
+        this.#panY = 0
+        this.scrollLeft = 0
+        this.scrollTop = 0
         this.#root.replaceChildren()
         this.#left = null
         this.#right = null

@@ -185,6 +185,11 @@ class TableBar {
   }
 
   place() {
+    const root = this.view.dom;
+    if (!(root instanceof HTMLElement) || root.offsetParent === null) {
+      this.el.style.display = "none";
+      return;
+    }
     const found = findTable(this.view.state.selection.$from);
     const dom = found ? this.view.nodeDOM(found.pos) : null;
     const table = dom instanceof HTMLElement ? (dom.tagName === "TABLE" ? dom : dom.querySelector("table")) : null;

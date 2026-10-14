@@ -16,21 +16,41 @@ const annotationLayerBuilderCSS = await fetchText(pdfjsPath('annotation_layer_bu
 
 const render = async (page, doc, zoom) => {
     const scale = zoom * devicePixelRatio
-    doc.documentElement.style.transform = `scale(${1 / devicePixelRatio})`
-    doc.documentElement.style.transformOrigin = 'top left'
-    doc.documentElement.style.setProperty('--scale-factor', scale)
     const viewport = page.getViewport({ scale })
+    const cssW = viewport.width / devicePixelRatio
+    const cssH = viewport.height / devicePixelRatio
+    // 位图按像素密度画清晰，排版尺寸用屏幕像素，避免默认比屏幕大、只露出一角
+    const meta = doc.querySelector('meta[name="viewport"]')
+    if (meta) meta.setAttribute('content', `width=${cssW}, height=${cssH}, initial-scale=1, maximum-scale=1`)
+    doc.documentElement.style.transform = 'none'
+    doc.documentElement.style.width = `${cssW}px`
+    doc.documentElement.style.height = `${cssH}px`
+    doc.documentElement.style.overflow = 'hidden'
+    doc.documentElement.style.touchAction = 'none'
+    doc.body.style.margin = '0'
+    doc.body.style.touchAction = 'none'
+    doc.body.style.width = `${cssW}px`
+    doc.body.style.height = `${cssH}px`
+    doc.body.style.overflow = 'hidden'
+    doc.documentElement.style.setProperty('--scale-factor', String(zoom))
 
     // the canvas must be in the `PDFDocument`'s `ownerDocument`
     // (`globalThis.document` by default); that's where the fonts are loaded
     const canvas = document.createElement('canvas')
     canvas.height = viewport.height
     canvas.width = viewport.width
+    canvas.style.width = `${cssW}px`
+    canvas.style.height = `${cssH}px`
     const canvasContext = canvas.getContext('2d')
     await page.render({ canvasContext, viewport }).promise
     doc.querySelector('#canvas').replaceChildren(doc.adoptNode(canvas))
 
     const container = doc.querySelector('.textLayer')
+    // 手机上文字层会在放大拖动时叠出一层重影。阅读页不靠它选字。
+    if ('NativePages' in globalThis) {
+        container.replaceChildren()
+        container.style.display = 'none'
+    } else {
     const textLayer = new pdfjsLib.TextLayer({
         textContentSource: await page.streamTextContent(),
         container, viewport,
@@ -57,8 +77,13 @@ const render = async (page, doc, zoom) => {
     // TODO: this only works in Firefox; see https://github.com/mozilla/pdf.js/pull/17923
     container.onpointerdown = () => container.classList.add('selecting')
     container.onpointerup = () => container.classList.remove('selecting')
+    }
 
     const div = doc.querySelector('.annotationLayer')
+    if ('NativePages' in globalThis) {
+        div.replaceChildren()
+        div.style.display = 'none'
+    } else {
     const linkService = {
         goToDestination: () => {},
         getDestinationHash: dest => JSON.stringify(dest),
@@ -66,6 +91,7 @@ const render = async (page, doc, zoom) => {
     }
     await new pdfjsLib.AnnotationLayer({ page, viewport, div, linkService })
         .render({ annotations: await page.getAnnotations() })
+    }
 }
 
 const renderPage = async (page, getImageBlob) => {

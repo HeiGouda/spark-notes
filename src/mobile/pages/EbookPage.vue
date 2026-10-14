@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import Icon from "../Icon.vue";
 import { mobileApi, type PageTurnAnim, type ReadPoint } from "../api";
 import { bookStem, useShelf } from "../shelf";
 import { decodeTxt, txtBook } from "../reader/txt";
 import { parseReadingNote, readingNoteRel, renderReadingNote, toggleBookmark, withAnno, type Anno, type Bookmark } from "../reader/anno";
+import { blocksFrom, findInPlain, isImageSvg, locateAnchor, offsetOfAnchor, plainOf, rangeAtOffset, rangeOfOccurrence, withImages } from "../reader/nativeBlocks";
+import { horizontalPunct } from "../reader/punct";
+import { styleResolver, type StyleOf } from "../reader/cssHints";
 import { selectionFits, type SelBox } from "../reader/selection";
-import { READER_THEMES, isReaderFont, readerCss, tocDepth, type ReaderFont, type ReaderTheme } from "../reader/style";
+import { LEADING, READER_THEMES, isReaderFont, readerCss, tocDepth, type ReaderFont, type ReaderTheme } from "../reader/style";
 import serifFont from "../fonts/NotoSerifSC-Regular-gb2312.woff2?url";
 import kaiFont from "../fonts/LXGWWenKai-Regular-gb2312.woff2?url";
 import { api, type TreeNode } from "../../lib/api";
@@ -34,10 +37,18 @@ const chapter = ref("");
 const chapterHref = ref("");
 const title = ref("");
 const info = ref("");
-/** 底部面板：目录 / 笔记 / 书签三个标签在同一个面板里 */
+/** 底部面板：目录 / 搜索 / 笔记 / 书签在同一个面板里 */
 const sheet = ref<"" | "panel" | "settings" | "info">("");
-const tab = ref<"toc" | "notes" | "marks">("toc");
+const tab = ref<"toc" | "notes" | "marks" | "search">("toc");
 const toc = ref<{ label: string; href: string; depth: number; percent: number | null }[]>([]);
+const query = ref("");
+/** 搜索框停手一会儿再找，免得每敲一个字就把整本书扫一遍 */
+const searchFor = ref("");
+/** 全书正文。fold 是转成小写的一份，长度和 plain 一样时才有 */
+const indexed = shallowRef<{ index: number; plain: string; fold?: string }[]>([]);
+const indexing = ref(false);
+const findInput = ref<HTMLInputElement | null>(null);
+let indexGen = 0;
 const dragging = ref<number | null>(null);
 const backTo = ref<number | null>(null);
 const annos = ref<Anno[]>([]);
@@ -45,7 +56,7 @@ const summary = ref("");
 const marks = ref<Bookmark[]>([]);
 const missing = ref(new Set<string>());
 /** 选中文字后的菜单；cfi 对应已有划线时是划线菜单 */
-const pick = ref<{ cfi: string; text: string; top: number; left: number; below: boolean } | null>(null);
+const pick = ref<{ cfi: string; text: string; top: number; left: number; below: boolean; section?: number; start?: number; end?: number } | null>(null);
 /** 写感悟的输入框：anno 是要写进去的那一条（新的还没存时 isNew 为 true） */
 const editing = ref<{ anno: Anno; isNew: boolean } | null>(null);
 /** 写读完后的总结，和单条感悟共用同一个输入框 */
@@ -58,6 +69,7 @@ let fileName = "";
 let authorName = "";
 let noteRel = "";
 let pdfBook = false;
+const pdfMode = ref(false);
 let activeDoc: Document | null = null;
 
 const size = ref(18);
@@ -75,7 +87,7 @@ const FONT_FILES = { serif: new URL(serifFont, location.href).href, kai: new URL
 const GAP = { 窄: "4%", 标准: "7%", 宽: "12%" } as const;
 
 const palette = computed(() => READER_THEMES[theme.value]);
-const scrolled = computed(() => flow.value === "上下滚动");
+const scrolled = computed(() => flow.value === "上下滚动" && !pdfMode.value);
 /** 整个阅读页（包括菜单、面板）用阅读主题的颜色，不跟 App 的主题 */
 const themeVars = computed(() => {
   const p = palette.value;
@@ -100,14 +112,15 @@ type FoliateView = HTMLElement & {
   init: (o: { lastLocation?: string; showTextStart?: boolean }) => Promise<void>;
   goTo: (target: unknown) => Promise<void>;
   goToFraction: (n: number) => Promise<void>;
-  goLeft: () => Promise<void>;
-  goRight: () => Promise<void>;
+  /** 按阅读顺序翻，从右往左翻页的书也一样 */
+  next: () => Promise<void>;
+  prev: () => Promise<void>;
   close: () => void;
   deselect: () => void;
   getCFI: (index: number, range: Range) => string;
   addAnnotation: (a: { value: string }) => Promise<unknown>;
   deleteAnnotation: (a: { value: string }) => Promise<unknown>;
-  resolveNavigation: (target: string) => { index: number } | undefined;
+  resolveNavigation: (target: string) => { index: number; anchor?: (doc: Document) => unknown } | undefined;
   getSectionFractions: () => number[];
   book: { toc?: TocItem[]; metadata?: { title?: unknown; author?: unknown } };
   renderer?: HTMLElement & {
@@ -127,7 +140,7 @@ let saveTimer = 0;
 
 function flatToc(items: TocItem[] = [], depth = 0, out: { label: string; href: string; depth: number }[] = []) {
   for (const item of items) {
-    out.push({ label: (item.label ?? "").trim(), href: String(item.href ?? ""), depth });
+    out.push({ label: horizontalPunct((item.label ?? "").trim()), href: String(item.href ?? ""), depth });
     if (Array.isArray(item.subitems)) flatToc(item.subitems as TocItem[], depth + 1, out);
   }
   return out;
@@ -169,7 +182,29 @@ function applyLayout() {
     r.setStyles?.(readerCss({ palette: palette.value, size: size.value, leading: leading.value, font: font.value, files: FONT_FILES }));
   }
   syncPageColor();
-  schedulePrefetch(600);
+  void Promise.race([activeDoc?.fonts?.ready ?? Promise.resolve(), wait(1500)]).then(() => {
+    if (!view) return;
+    invalidatePicture();
+  });
+}
+
+/** 排版代数。只在版式变化时加一，翻页不加，连翻才能接着用已经画好的纹理 */
+let pictureGen = 0;
+
+function publishPicture() {
+  const bridge = (window as unknown as { SparkPicture?: { setGeneration: (value: number) => void } }).SparkPicture;
+  try {
+    bridge?.setGeneration(pictureGen);
+  } catch {
+    /* 不在安卓里就没有这个接口 */
+  }
+}
+
+/** 字号、字体、边距、主题变了：告诉原生丢掉纹理，停稳后再截 */
+function invalidatePicture() {
+  pictureGen += 1;
+  publishPicture();
+  schedulePrefetch(300);
 }
 
 /** 状态栏那一条是页面底色露出来的，跟着阅读主题变；图标颜色也跟着深浅换 */
@@ -196,6 +231,106 @@ function unlockZoom() {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
   if (meta && viewportBefore != null) meta.setAttribute("content", viewportBefore);
   viewportBefore = null;
+}
+
+
+type ZoomHost = HTMLElement & {
+  focal?: (x: number, y: number) => { fx: number; fy: number };
+  previewScale?: (ratio: number, fx: number, fy: number, dx: number, dy: number) => void;
+  commitZoom?: (zoom: number, fx: number, fy: number, clientX: number, clientY: number) => void;
+  nudge?: (dx: number, dy: number) => void;
+  panNow?: () => { x: number; y: number };
+  panTo?: (x: number, y: number) => void;
+};
+
+/** 刚拖过或捏过，松手不要当成点按翻页 */
+let pdfGestureAt = 0;
+
+/** PDF 默认整页。双指绕手指缩放，放大后单指滚动，位移和手指一样 */
+function bindPdfGestures(doc: Document) {
+  let pinch: { dist: number; zoom: number; fx: number; fy: number; midX: number; midY: number; next: number; lastX: number; lastY: number } | null = null;
+  let pan: { x: number; y: number; left: number; top: number } | null = null;
+  const hostOf = (): ZoomHost | null => {
+    const frame = doc.defaultView?.frameElement as HTMLElement | null;
+    const root = frame?.getRootNode();
+    return root instanceof ShadowRoot ? (root.host as ZoomHost) : null;
+  };
+  const zoomed = (host: ZoomHost) => {
+    const fit = Number(host.dataset.fitScale) || 0;
+    const scale = Number(host.dataset.pageScale) || 0;
+    return fit > 0 && scale > fit * 1.02;
+  };
+  doc.addEventListener("touchstart", (e) => {
+    const host = hostOf();
+    if (!host) return;
+    if (e.touches.length >= 2) {
+      pan = null;
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const zoom = Number(host.dataset.pageScale || host.dataset.fitScale || 1);
+      const midX = (a.clientX + b.clientX) / 2;
+      const midY = (a.clientY + b.clientY) / 2;
+      const focal = host.focal?.(midX, midY) ?? { fx: 0.5, fy: 0.5 };
+      pinch = {
+        dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+        zoom,
+        fx: focal.fx,
+        fy: focal.fy,
+        midX,
+        midY,
+        next: zoom,
+        lastX: midX,
+        lastY: midY,
+      };
+      pdfGestureAt = performance.now();
+      return;
+    }
+    if (pinch) return;
+    if (zoomed(host)) {
+      const here = host.panNow?.() ?? { x: 0, y: 0 };
+      pan = { x: e.touches[0].clientX, y: e.touches[0].clientY, left: here.x, top: here.y };
+    }
+    else pan = null;
+  }, { passive: true, capture: true });
+  doc.addEventListener("touchmove", (e) => {
+    const host = hostOf();
+    if (!host) return;
+    if (pinch && e.touches.length >= 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      const fit = Number(host.dataset.fitScale || pinch.zoom);
+      const midX = (a.clientX + b.clientX) / 2;
+      const midY = (a.clientY + b.clientY) / 2;
+      pinch.next = Math.min(fit * 4, Math.max(fit, pinch.zoom * (dist / Math.max(pinch.dist, 1))));
+      pinch.lastX = midX;
+      pinch.lastY = midY;
+      host.previewScale?.(pinch.next / Math.max(pinch.zoom, 0.01), pinch.fx, pinch.fy, midX - pinch.midX, midY - pinch.midY);
+      pdfGestureAt = performance.now();
+      e.preventDefault();
+      return;
+    }
+    if (pan && e.touches.length === 1) {
+      const dx = e.touches[0].clientX - pan.x;
+      const dy = e.touches[0].clientY - pan.y;
+      host.panTo?.(pan.left - dx, pan.top - dy);
+      if (Math.hypot(dx, dy) > 2) pdfGestureAt = performance.now();
+      e.preventDefault();
+    }
+  }, { passive: false, capture: true });
+  const end = (e: TouchEvent) => {
+    if (e.touches.length > 0) return;
+    const host = hostOf();
+    const gesture = pinch;
+    if (host && gesture) {
+      const moved = Math.abs(gesture.next - gesture.zoom) > 0.01;
+      if (moved && host.commitZoom) host.commitZoom(gesture.next, gesture.fx, gesture.fy, gesture.lastX, gesture.lastY);
+      else if (moved) host.setAttribute("zoom", String(gesture.next));
+      else host.nudge?.(gesture.lastX - gesture.midX, gesture.lastY - gesture.midY);
+    }
+    pinch = null;
+    pan = null;
+  };
+  doc.addEventListener("touchend", end, { passive: true, capture: true });
+  doc.addEventListener("touchcancel", end, { passive: true, capture: true });
 }
 
 function restorePageColor() {
@@ -251,6 +386,7 @@ function onPointerUp(e: PointerEvent, doc: Document) {
   const start = down;
   down = null;
   if (!start || !e.isPrimary) return;
+  if (performance.now() - pdfGestureAt < 500) return;
   // 拖动（滑动翻页、拖选字的把手）和长按不算点按。上下滚动时父级在滚，松手用 click 判断
   if (scrolled.value) return;
   if (Math.hypot(e.screenX - start.x, e.screenY - start.y) > 12 || e.timeStamp - start.t > 500) return;
@@ -264,9 +400,9 @@ function onFrameClick(e: MouseEvent, doc: Document) {
 }
 
 /*
- * 左右翻页。动画由安卓原生做（见 PageTurn.kt）：书页停稳后先在后台排好前后两章，原生把前一页、后一页
- * 预先截好（见 schedulePrefetch）。翻页时拿截图做动画，阅读器在截图下面换页，换好后才拿掉截图，
- * 换页和换章的过程都不会露出来。没预截好时先盖上当前画面，等阅读器换好页、截到新页再动。
+ * 左右翻页。动画在安卓上平移已经画好的页纹理（见 PageTurn.kt）：书页停稳后先排好前后两章，
+ * 再把前两页、后四页截成纹理。版式没变时，手指一过滑动阈值纹理就跟着走，不再整屏比对。
+ * 字号、字体、边距、主题一变就丢掉纹理，重新截。没有纹理时先盖住当前页，等换好页再动。
  * - 平移：旧页滑出、新页从另一侧滑入，两页一起动。
  * - 覆盖：下一页时只有旧页滑走，新页不动；往回翻时只有上一页从旁边盖上来。
  * 点两侧和手指滑动用同一种位移、同一种速度。
@@ -291,6 +427,7 @@ let pumpingFollow = false;
  */
 let nativeAnimating = false;
 let gesture: { x: number; y: number } | null = null;
+const nativeOn = ref(false);
 const atStart = ref(false);
 const atEnd = ref(false);
 const selecting = ref(false);
@@ -300,6 +437,8 @@ const selecting = ref(false);
  */
 const shownChapter = ref("");
 const shownPercent = ref(0);
+const shownPage = ref(0);
+const shownPages = ref(0);
 const shownRibbon = ref(false);
 let footFrozen = false;
 let footTimer = 0;
@@ -326,7 +465,8 @@ function unpeek() {
 }
 
 function goSide(dir: 1 | -1): Promise<unknown> {
-  const going = Promise.resolve(dir > 0 ? view!.goRight() : view!.goLeft()).catch((e) => console.warn("翻页失败", e));
+  // 不能用 goRight、goLeft：从右往左翻页的书（竖排书）里往右是上一页，点下一页会退回去
+  const going = Promise.resolve(dir > 0 ? view!.next() : view!.prev()).catch((e) => console.warn("翻页失败", e));
   settling = going;
   return going;
 }
@@ -651,7 +791,7 @@ function measureFoot(): number {
 let sentConfig = "";
 function syncTurnConfig() {
   if (!nativeTurn) return;
-  const o = { enabled: swipeOn.value, anim: ANIM_CODE[turnAnim.value], canPrev: !atStart.value, canNext: !atEnd.value, footer: measureFoot() };
+  const o = { enabled: swipeOn.value && !nativeOn.value, anim: ANIM_CODE[turnAnim.value], canPrev: !atStart.value, canNext: !atEnd.value, footer: measureFoot() };
   const key = JSON.stringify(o);
   if (key === sentConfig) return;
   sentConfig = key;
@@ -685,6 +825,8 @@ async function startNativeTurn() {
     await mobileApi.pageTurnConfig({ enabled: false, anim: ANIM_CODE[turnAnim.value], canPrev: true, canNext: true });
     nativeTurn = true;
     syncTurnConfig();
+    publishPicture();
+    schedulePrefetch(120);
   } catch (e) {
     console.warn("安卓翻页动画不可用，直接换页", e);
   }
@@ -701,7 +843,665 @@ function stopNativeTurn() {
   nativeTurn = false;
 }
 
-watch([swipeOn, turnAnim, atStart, atEnd], syncTurnConfig);
+type NativeBridge = {
+  setVisible: (on: boolean) => void;
+  setFrame: (l: number, t: number, w: number, h: number) => void;
+  setStyle: (bg: string, fg: string, sizePx: number, leading: number, margin: number, anim: string, font: string) => void;
+  setMode: (mode: string) => void;
+  setKind: (index: number, kind: string) => void;
+  setChapter: (index: number, json: string, anchor: number) => void;
+  setEnds: (index: number, next: number, prev: number) => void;
+  setMarks: (json: string) => void;
+  setHoles: (json: string) => void;
+  showAt: (index: number, charOffset: number) => void;
+  setSelectKind: (kind: string) => void;
+  clearSelect: () => void;
+  clear: () => void;
+};
+
+type BookSection = { id?: unknown; linear?: string; createDocument?: () => Promise<Document> };
+/** 各格式的书取资源的办法不一样：EPUB 按包内路径取，AZW3 用 kindle: 地址，老 MOBI 用 recindex */
+type BookLoader = {
+  loadText?: (path: string) => Promise<string | null | undefined>;
+  loadBlob?: (path: string, type?: string) => Promise<Blob | null | undefined>;
+  loadResource?: (str: string) => Promise<string>;
+  loadRecindex?: (recindex: string) => Promise<string>;
+};
+
+function nativeBridge(): NativeBridge | null {
+  const bridge = (window as unknown as { NativePages?: NativeBridge }).NativePages;
+  return bridge ?? null;
+}
+
+function bookSections(): BookSection[] {
+  return (view?.book as { sections?: BookSection[] } | undefined)?.sections ?? [];
+}
+
+/** 没有正文的章（只有不认识的标签、空白页）。前后翻页时直接跳过，不能被下一次链接改回来 */
+const emptySections = new Set<number>();
+
+function nextLinear(index: number, dir: 1 | -1): number {
+  const sections = bookSections();
+  for (let i = index + dir; i >= 0 && i < sections.length; i += dir) {
+    if (sections[i]?.linear !== "no" && !emptySections.has(i)) return i;
+  }
+  return -1;
+}
+
+const chapterJson = new Map<number, string>();
+const chapterDocs = new Map<number, Document>();
+const chapterBusy = new Set<number>();
+const webChapters = new Set<number>();
+/**
+ * 原生已经拿到正文的章。网页模式下先排好的章只缓存不发，切回原生后要补发，
+ * 否则原生翻到章末一直等这一章，就翻不动了
+ */
+const sentChapters = new Set<number>();
+
+/** 书里的相对路径按这一章的位置换成包内路径 */
+function packagePath(href: string, base: unknown): string | null {
+  if (typeof base !== "string") return null;
+  try {
+    return decodeURIComponent(new URL(href, `https://book.invalid/${base}`).pathname.slice(1));
+  } catch {
+    return null;
+  }
+}
+
+/** 图的原始地址换成网页能取的地址。新建的 blob 地址记进 made，用完由调用方释放 */
+async function imageUrl(index: number, raw: string, made: string[]): Promise<string | null> {
+  const book = view?.book as BookLoader | undefined;
+  if (/^(data|blob):/i.test(raw)) return raw;
+  if (raw.startsWith("recindex:")) return book?.loadRecindex ? await book.loadRecindex(raw.slice("recindex:".length)) : null;
+  if (raw.startsWith("kindle:")) return book?.loadResource ? await book.loadResource(raw) : null;
+  if (/^https?:/i.test(raw)) return raw;
+  const path = packagePath(raw, bookSections()[index]?.id);
+  if (book?.loadBlob && path) {
+    const blob = await book.loadBlob(path);
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    made.push(url);
+    return url;
+  }
+  return null;
+}
+
+const cssTexts = new Map<string, Promise<string>>();
+
+function cssText(href: string, base: unknown): Promise<string> {
+  const book = view?.book as BookLoader | undefined;
+  const key = href.startsWith("kindle:") ? href : packagePath(href, base);
+  if (!key || !book) return Promise.resolve("");
+  let hit = cssTexts.get(key);
+  if (!hit) {
+    hit = (async () => {
+      try {
+        if (key.startsWith("kindle:")) {
+          if (!book.loadResource) return "";
+          const res = await fetch(await book.loadResource(key));
+          return res.ok ? await res.text() : "";
+        }
+        return book.loadText ? ((await book.loadText(key)) ?? "") : "";
+      } catch {
+        return "";
+      }
+    })();
+    cssTexts.set(key, hit);
+  }
+  return hit;
+}
+
+/** 这一章用到的样式表（内嵌的和链接的），原生排版靠它认出标题、居中 */
+async function stylesFor(index: number, doc: Document): Promise<StyleOf | undefined> {
+  const texts = Array.from(doc.querySelectorAll("style")).map((el) => el.textContent ?? "");
+  const base = bookSections()[index]?.id;
+  for (const link of Array.from(doc.querySelectorAll("link"))) {
+    const href = link.getAttribute("href");
+    if (href && /stylesheet/i.test(link.getAttribute("rel") ?? "")) texts.push(await cssText(href, base));
+  }
+  const usable = texts.filter((text) => text.trim());
+  return usable.length ? styleResolver(usable) : undefined;
+}
+
+function sendChapter(index: number, json: string, anchor: number) {
+  const bridge = nativeBridge();
+  if (!bridge) return;
+  bridge.setChapter(index, json, anchor);
+  sentChapters.add(index);
+}
+let nativeFollow = false;
+/** 原生页当前落在哪一章的哪个字上。滚动、PDF 不用它 */
+let nativeSpot: { index: number; offset: number } | null = null;
+/** 打开书时已有字符偏移，第一次 relocate 用它，不用全书百分比猜页 */
+let restoreNative: { index: number; offset: number } | null = null;
+
+function readingPoint(cfi: string, frac: number): ReadPoint {
+  const point: ReadPoint = { cfi, fraction: frac, updatedMs: Date.now() };
+  if (nativeOn.value && nativeSpot) {
+    point.section = nativeSpot.index;
+    point.charOffset = nativeSpot.offset;
+  }
+  return point;
+}
+
+function rememberCfi(index: number, offset: number) {
+  const doc = chapterDocs.get(index);
+  if (!doc || !view) return;
+  const range = rangeAtOffset(doc, offset);
+  if (!range) return;
+  try {
+    const cfi = view.getCFI(index, range);
+    if (cfi) currentCfi.value = cfi;
+  } catch (e) {
+    console.warn("记录阅读位置失败", e);
+  }
+}
+
+function sectionWithin(index: number, bookFraction: number): number {
+  const marks = view?.getSectionFractions?.() ?? [];
+  const start = marks[index] ?? 0;
+  const end = marks[index + 1] ?? 1;
+  const span = end - start;
+  if (!(span > 0)) return 0;
+  return Math.min(1, Math.max(0, (bookFraction - start) / span));
+}
+
+function syncNativeMode() {
+  try {
+    nativeBridge()?.setMode(scrolled.value ? "scroll" : "page");
+  } catch {
+    /* 桌面没有这个接口 */
+  }
+}
+
+function chapterKind(doc: Document): "web" | "native" {
+  const el = doc.body ?? doc.documentElement;
+  let vertical = false;
+  let rtl = false;
+  try {
+    vertical = /vertical/.test(getComputedStyle(el).writingMode);
+    rtl = doc.documentElement.dir === "rtl" || el.dir === "rtl";
+  } catch {
+    /* 文档还没挂到窗口上就按横排 */
+  }
+  if (vertical || rtl) return "web";
+  if (doc.querySelector("table, math, ruby")) return "web";
+  // 只包着一张图的 SVG（整页插图）原生也能排，不必切到网页
+  if (Array.from(doc.querySelectorAll("svg")).some((svg) => !isImageSvg(svg))) return "web";
+  return "native";
+}
+
+function markKind(index: number, kind: "web" | "native") {
+  if (kind === "web") webChapters.add(index);
+  else webChapters.delete(index);
+  try {
+    nativeBridge()?.setKind(index, kind);
+  } catch {
+    /* 桌面没有这个接口 */
+  }
+}
+
+/** 复杂章回到网页。往后翻进来落在这一章开头，往回翻进来落在末尾 */
+function handoffWeb(index: number, dir = 1) {
+  nativeFollow = true;
+  nativeOn.value = false;
+  try {
+    nativeBridge()?.setVisible(false);
+  } catch {
+    /* 桌面没有这个接口 */
+  }
+  void syncFoliate(index, dir < 0 ? 1 : 0);
+}
+
+function syncNativeFrame() {
+  void nextTick(() => applyNativeFrame());
+}
+
+function applyNativeFrame() {
+  const bridge = nativeBridge();
+  if (!bridge) return;
+  const obscured = !!sheet.value || (!!pick.value && !nativeOn.value) || !!editing.value || editingSummary.value || !!currentOverlay.value;
+  if (!nativeOn.value || obscured || pdfBook) {
+    bridge.setVisible(false);
+    return;
+  }
+  const rect = host.value?.getBoundingClientRect();
+  if (!rect || rect.width < 2 || rect.height < 2) return;
+  // 菜单盖在书页上。页面高度保持不变，文字不重排、不缩放。
+  const foot = measureFoot();
+  const frameH = Math.max(1, rect.height - (foot > 0 ? foot : 0));
+  bridge.setFrame(rect.left, rect.top, rect.width, frameH);
+  bridge.setHoles(JSON.stringify(nativeHoles(rect, frameH)));
+  bridge.setVisible(true);
+}
+
+function nativeHoles(host: DOMRect, frameH: number) {
+  const holes: { x: number; y: number; w: number; h: number }[] = [];
+  const push = (left: number, top: number, right: number, bottom: number) => {
+    const x0 = Math.max(0, left - host.left);
+    const y0 = Math.max(0, top - host.top);
+    const x1 = Math.min(host.width, right - host.left);
+    const y1 = Math.min(frameH, bottom - host.top);
+    if (x1 - x0 > 1 && y1 - y0 > 1) holes.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+  };
+  if (chrome.value) {
+    const topH = Math.max(52, (document.querySelector(".ebook-top") as HTMLElement | null)?.offsetHeight ?? 0);
+    push(host.left, host.top, host.right, host.top + topH);
+    const botH = (document.querySelector(".ebook-bottom") as HTMLElement | null)?.offsetHeight ?? 0;
+    if (botH > 0) push(host.left, host.bottom - botH, host.right, host.bottom);
+  }
+  if (pick.value) {
+    const menu = document.querySelector(".sel-menu")?.getBoundingClientRect();
+    if (menu) push(menu.left - 12, menu.top - 14, menu.right + 12, menu.bottom + 14);
+  }
+  return holes;
+}
+
+let styleKey = "";
+function syncNativeStyle() {
+  const bridge = nativeBridge();
+  if (!bridge || !nativeOn.value) return;
+  const gap = margin.value === "窄" ? 0.04 : margin.value === "宽" ? 0.12 : 0.07;
+  const face = font.value === "楷体" ? "kai" : font.value === "宋体" ? "serif" : "";
+  const key = `${palette.value.bg}|${palette.value.fg}|${size.value}|${LEADING[leading.value]}|${gap}|${ANIM_CODE[turnAnim.value]}|${face}`;
+  if (key === styleKey) return;
+  styleKey = key;
+  bridge.setStyle(palette.value.bg, palette.value.fg, size.value, Number(LEADING[leading.value]), gap, ANIM_CODE[turnAnim.value], face);
+  syncNativeMarks();
+}
+
+async function pushChapter(index: number, anchor: number, warm = false) {
+  const bridge = nativeBridge();
+  const section = bookSections()[index];
+  if (!bridge || !section?.createDocument || section.linear === "no") return;
+  if (webChapters.has(index)) {
+    if (anchor >= 0) handoffWeb(index);
+    return;
+  }
+  let json = chapterJson.get(index);
+  if (json && anchor < 0) {
+    if (nativeOn.value && !sentChapters.has(index)) sendChapter(index, json, -1);
+    if (warm) prefetchAround(index);
+    return;
+  }
+  if (!json && anchor < 0 && chapterBusy.has(index)) return;
+  if (!json) {
+    if (anchor < 0) chapterBusy.add(index);
+    try {
+      const doc = chapterDocs.get(index) ?? (await section.createDocument());
+      chapterDocs.set(index, doc);
+      const kind = chapterKind(doc);
+      markKind(index, kind);
+      if (kind === "web") {
+        if (anchor >= 0) handoffWeb(index);
+        return;
+      }
+      const blocks = blocksFrom(doc, await stylesFor(index, doc));
+      if (!blocks.length) {
+        emptySections.add(index);
+        const next = nextLinear(index, 1);
+        const prev = nextLinear(index, -1);
+        if (prev >= 0) linkChapter(prev);
+        if (next >= 0) linkChapter(next);
+        if (next >= 0 && anchor < 0) void pushChapter(next, -1);
+        return;
+      }
+      // 先只发字，图还没取到时不把书里的原始地址交给原生
+      const firstJson = JSON.stringify(blocks.filter((block) => !("img" in block)));
+      if (anchor >= 0) nativeOn.value = true;
+      if (nativeOn.value) sendChapter(index, firstJson, anchor);
+      // 纯文本一上屏就准备前后章，不等这章的图
+      if (anchor >= 0 || warm) prefetchAround(index);
+      const made: string[] = [];
+      let full: typeof blocks;
+      try {
+        full = await withImages(blocks, (raw) => imageUrl(index, raw, made));
+      } finally {
+        for (const url of made) URL.revokeObjectURL(url);
+      }
+      json = JSON.stringify(full);
+      chapterJson.set(index, json);
+      if (!nativeOn.value) return;
+      if (json !== firstJson || !sentChapters.has(index)) sendChapter(index, json, -1);
+    } catch (e) {
+      console.warn("准备章节失败", e);
+    } finally {
+      if (anchor < 0) chapterBusy.delete(index);
+    }
+    return;
+  }
+  if (anchor >= 0) nativeOn.value = true;
+  if (!nativeOn.value) return;
+  sendChapter(index, json, anchor);
+  if (anchor >= 0 || warm) prefetchAround(index);
+}
+
+function linkChapter(index: number) {
+  const bridge = nativeBridge();
+  if (!bridge || index < 0) return;
+  try {
+    bridge.setEnds(index, nextLinear(index, 1), nextLinear(index, -1));
+  } catch {
+    /* 桌面没有这个接口 */
+  }
+}
+
+function prefetchAround(index: number) {
+  linkChapter(index);
+  let next = index;
+  for (let step = 0; step < 2; step++) {
+    next = nextLinear(next, 1);
+    if (next < 0) break;
+    linkChapter(next);
+    void pushChapter(next, -1);
+  }
+  const prev = nextLinear(index, -1);
+  if (prev >= 0) {
+    linkChapter(prev);
+    void pushChapter(prev, -1);
+  }
+}
+
+async function showNativeAt(index: number, within: number) {
+  await pushChapter(index, within);
+  prefetchAround(index);
+  syncNativeStyle();
+  syncNativeFrame();
+}
+
+/** 按章节和字符偏移打开原生页，不用全书百分比换算页码 */
+async function openAtOffset(index: number, offset: number) {
+  bindNativeCallbacks();
+  nativeSpot = { index, offset };
+  await pushChapter(index, 0);
+  if (!nativeOn.value) return;
+  try {
+    nativeBridge()?.showAt(index, offset);
+  } catch {
+    /* 桌面没有这个接口 */
+  }
+  prefetchAround(index);
+  syncNativeStyle();
+  syncNativeFrame();
+}
+
+function armNative(index: number, within: number) {
+  if (!nativeBridge() || pdfBook || webChapters.has(index) || index < 0) return;
+  bindNativeCallbacks();
+  syncNativeMode();
+  syncTurnConfig();
+  void showNativeAt(index, within);
+}
+
+function bindNativeCallbacks() {
+  const w = window as unknown as {
+    __sparkNativeTap?: (zone: string) => void;
+    __sparkNativeEdge?: (dir: number) => void;
+    __sparkNativePage?: (index: number, page: number, pages: number, offset?: number) => void;
+    __sparkNeedChapter?: (index: number, dir: number) => void;
+    __sparkNativeSelect?: (index: number, text: string, nth: number, boxTop?: number, boxBottom?: number, boxCenter?: number, start?: number, end?: number) => void;
+    __sparkNativeSelectClear?: () => void;
+    __sparkNativeAction?: (action: string) => void;
+    __sparkHandoff?: (index: number, dir?: number) => void;
+  };
+  w.__sparkNativeTap = (zone) => {
+    if (zone === "menu") chrome.value = !chrome.value;
+    syncNativeFrame();
+  };
+  w.__sparkNativeEdge = (dir) => {
+    toast(dir > 0 ? "已经是最后一页" : "已经是第一页");
+  };
+  w.__sparkNativePage = (index, page, pages, offset) => {
+    const at = Math.max(0, offset ?? 0);
+    nativeSpot = { index, offset: at };
+    shownPage.value = page + 1;
+    shownPages.value = Math.max(pages, 1);
+    const marks = view?.getSectionFractions?.() ?? [];
+    const start = marks[index] ?? 0;
+    const end = marks[index + 1] ?? 1;
+    const within = pages <= 1 ? 0 : page / (pages - 1);
+    fraction.value = start + (end - start) * within;
+    // 原生翻进下一章时页脚马上换章节名，不等网页那边同步位置
+    const title = sectionTitle(index);
+    if (title?.label) {
+      chapter.value = title.label;
+      chapterHref.value = title.href;
+    }
+    showFoot();
+    rememberCfi(index, at);
+    scheduleSave(readingPoint(currentCfi.value, fraction.value));
+    scheduleFoliateSync(index, within);
+  };
+  w.__sparkNeedChapter = (index, dir) => {
+    linkChapter(index);
+    const step: 1 | -1 = dir < 0 ? -1 : 1;
+    let cursor = index;
+    for (let i = 0; i < 2; i++) {
+      cursor = nextLinear(cursor, step);
+      if (cursor < 0) break;
+      linkChapter(cursor);
+      void pushChapter(cursor, -1);
+    }
+  };
+  w.__sparkNativeSelect = (index, text, nth, boxTop, boxBottom, boxCenter, start, end) => {
+    const doc = chapterDocs.get(index);
+    const sentence = decodeNativeText(text);
+    if (!doc || !view || !sentence) return;
+    let range = rangeOfOccurrence(doc, sentence, nth);
+    if (typeof start === "number" && typeof end === "number" && end > start) {
+      const from = rangeAtOffset(doc, start);
+      const to = rangeAtOffset(doc, end);
+      if (from && to) {
+        const span = doc.createRange();
+        try {
+          span.setStart(from.startContainer, from.startOffset);
+          span.setEnd(to.startContainer, to.startOffset);
+          if (!span.collapsed) range = span;
+        } catch {
+          /* 两端对不齐时仍用句子出现的位置 */
+        }
+      }
+    }
+    if (!range) {
+      toast("找不到这句话");
+      try {
+        nativeBridge()?.clearSelect();
+      } catch {
+        /* 桌面没有这个接口 */
+      }
+      return;
+    }
+    const hostRect = host.value?.getBoundingClientRect();
+    const top = boxTop ?? 80;
+    const bottom = boxBottom ?? top + 24;
+    const center = boxCenter ?? (hostRect?.width ?? window.innerWidth) / 2;
+    const cfi = view.getCFI(index, range);
+    const span = typeof start === "number" && typeof end === "number" && end > start ? { section: index, start, end } : undefined;
+    placePick(cfi, sentence, { top, bottom, left: center, width: 0 } as DOMRect, {
+      left: hostRect?.left ?? 0,
+      top: hostRect?.top ?? 0,
+    }, span);
+    const kind = annos.value.some((anno) => anno.cfi === cfi || (span && anno.section === span.section && anno.start === span.start && anno.end === span.end)) ? "anno" : "new";
+    try {
+      nativeBridge()?.setSelectKind(kind);
+    } catch {
+      /* 桌面没有这个接口 */
+    }
+    syncNativeFrame();
+  };
+  w.__sparkNativeAction = (action) => {
+    if (!pick.value) return;
+    if (action === "mark") void highlight(false);
+    else if (action === "note") void highlight(true);
+    else if (action === "copy") void copyPick();
+    else if (action === "ai") askAi(pick.value.text);
+    else if (action === "delete") {
+      const anno = annos.value.find((item) => item.cfi === pick.value?.cfi);
+      if (anno) void removeAnno(anno);
+    }
+  };
+  w.__sparkNativeSelectClear = () => {
+    pick.value = null;
+  };
+  w.__sparkHandoff = (index, dir) => handoffWeb(index, dir ?? 1);
+}
+
+function decodeNativeText(b64: string): string {
+  try {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return "";
+  }
+}
+
+let syncingMarks = false;
+
+function offsetsOf(doc: Document, range: Range): { start: number; end: number } {
+  const start = offsetOfAnchor(doc, () => range);
+  const endRange = doc.createRange();
+  try {
+    endRange.setStart(range.endContainer, range.endOffset);
+    endRange.collapse(true);
+  } catch {
+    return { start, end: start };
+  }
+  return { start, end: Math.max(offsetOfAnchor(doc, () => endRange), start) };
+}
+
+async function spanFromCfi(cfi: string): Promise<{ section: number; start: number; end: number } | null> {
+  if (!view || !cfi) return null;
+  type NavHit = { index?: number; anchor?: (doc: Document) => unknown };
+  const pending = view.resolveNavigation(cfi) as NavHit | Promise<NavHit> | undefined;
+  const resolved = (pending && typeof (pending as Promise<NavHit>).then === "function" ? await (pending as Promise<NavHit>) : pending) as NavHit | undefined;
+  if (!resolved || typeof resolved.index !== "number") return null;
+  const index = resolved.index;
+  let doc = chapterDocs.get(index);
+  if (!doc) {
+    const section = bookSections()[index];
+    if (!section?.createDocument) return null;
+    try {
+      doc = await section.createDocument();
+      chapterDocs.set(index, doc);
+    } catch {
+      return null;
+    }
+  }
+  let frag: unknown = null;
+  try {
+    frag = typeof resolved.anchor === "function" ? resolved.anchor(doc) : null;
+  } catch {
+    frag = null;
+  }
+  if (!(frag instanceof Range)) return null;
+  const span = offsetsOf(doc, frag);
+  if (span.end <= span.start) return null;
+  return { section: index, start: span.start, end: span.end };
+}
+
+async function syncNativeMarks() {
+  const bridge = nativeBridge();
+  if (!bridge || !nativeOn.value || syncingMarks) return;
+  syncingMarks = true;
+  try {
+    const spans: { s: number; a: number; b: number }[] = [];
+    const gained: Anno[] = [];
+    for (const anno of annos.value) {
+      let section = anno.section;
+      let start = anno.start;
+      let end = anno.end;
+      if (section == null || start == null || end == null || end <= start) {
+        const span = anno.cfi ? await spanFromCfi(anno.cfi) : null;
+        if (span) {
+          section = span.section;
+          start = span.start;
+          end = span.end;
+          gained.push({ ...anno, section, start, end });
+        }
+      }
+      if (section != null && start != null && end != null && end > start) spans.push({ s: section, a: start, b: end });
+    }
+    try {
+      bridge.setMarks(JSON.stringify(spans));
+    } catch {
+      /* 桌面没有这个接口 */
+    }
+    if (gained.length && shelf.vaultId) {
+      await commit((doc) => {
+        for (const next of gained) {
+          const hit = doc.annos.find((item) => item.id === next.id);
+          if (!hit || (hit.section === next.section && hit.start === next.start && hit.end === next.end)) continue;
+          hit.section = next.section;
+          hit.start = next.start;
+          hit.end = next.end;
+        }
+      });
+    }
+  } catch (e) {
+    console.warn("同步划线失败", e);
+  } finally {
+    syncingMarks = false;
+  }
+}
+
+let foliateSyncTimer = 0;
+let foliateSynced = "";
+function scheduleFoliateSync(index: number, within: number) {
+  const key = `${index}:${within.toFixed(3)}`;
+  if (key === foliateSynced) return;
+  clearTimeout(foliateSyncTimer);
+  foliateSyncTimer = window.setTimeout(() => {
+    foliateSynced = key;
+    void syncFoliate(index, within);
+  }, 1500);
+}
+
+async function syncFoliate(index: number, within: number) {
+  const renderer = view?.renderer as { goTo?: (target: { index: number; anchor: number }) => Promise<void> } | undefined;
+  if (!renderer?.goTo) return;
+  try {
+    await renderer.goTo({ index, anchor: within });
+  } catch (e) {
+    console.warn("同步阅读位置失败", e);
+  }
+}
+
+function stopNativePages() {
+  clearTimeout(foliateSyncTimer);
+  nativeOn.value = false;
+  nativeSpot = null;
+  shownPage.value = 0;
+  shownPages.value = 0;
+  chapterJson.clear();
+  chapterDocs.clear();
+  sentChapters.clear();
+  try {
+    nativeBridge()?.clear();
+  } catch {
+    /* 桌面没有这个接口 */
+  }
+  syncTurnConfig();
+}
+
+watch([swipeOn, turnAnim, atStart, atEnd, nativeOn], syncTurnConfig);
+watch([chrome, sheet, pick, editing, editingSummary, flow, currentOverlay], () => {
+  if (pdfBook) {
+    if (nativeOn.value) stopNativePages();
+    syncPdfFrame();
+    return;
+  }
+  syncNativeMode();
+  syncNativeFrame();
+});
+watch([size, leading, margin, theme, font, turnAnim], () => {
+  if (pdfOn.value) pdfBridge()?.setColor(palette.value.bg);
+  if (!nativeOn.value || pdfBook) return;
+  syncNativeStyle();
+});
+watch(annos, () => {
+  if (syncingMarks) return;
+  void syncNativeMarks();
+}, { deep: true });
 // 菜单、面板收起后画面回到书页，截好的前后页可能还能用，不能用的话重新截
 watch([swipeOn, turnAnim], () => schedulePrefetch());
 
@@ -727,17 +1527,17 @@ function reportSelecting(on: boolean) {
 function watchSwipe(doc: Document) {
   const opts = { capture: true, passive: true } as const;
   doc.addEventListener("touchstart", (e: TouchEvent) => {
-    if (scrolled.value || pdfBook) return;
+    if (pdfBook || (scrolled.value && !nativeOn.value)) return;
     e.stopPropagation();
     const t = e.touches[0];
     gesture = nativeTurn || e.touches.length > 1 ? null : { x: t.screenX, y: t.screenY };
   }, opts);
   doc.addEventListener("touchmove", (e: TouchEvent) => {
-    if (scrolled.value || pdfBook) return;
+    if (pdfBook || (scrolled.value && !nativeOn.value)) return;
     e.stopPropagation();
   }, opts);
   const end = (e: TouchEvent) => {
-    if (scrolled.value || pdfBook) return;
+    if (pdfBook || (scrolled.value && !nativeOn.value)) return;
     e.stopPropagation();
     const g = gesture;
     gesture = null;
@@ -752,6 +1552,11 @@ function watchSwipe(doc: Document) {
 function clearPick() {
   pick.value = null;
   reportSelecting(false);
+  try {
+    nativeBridge()?.clearSelect();
+  } catch {
+    /* 桌面没有这个接口 */
+  }
   try {
     activeDoc?.getSelection()?.removeAllRanges();
     view?.deselect?.();
@@ -1094,10 +1899,11 @@ function captureSelection(doc: Document, index: number) {
   chrome.value = false;
   const rect = range.getBoundingClientRect();
   const off = frameOffset(doc);
-  placePick(view.getCFI(index, range), text, rect, off);
+  const span = offsetsOf(doc, range);
+  placePick(view.getCFI(index, range), text, rect, off, span.end > span.start ? { section: index, ...span } : undefined);
 }
 
-function placePick(cfi: string, text: string, rect: DOMRect, off: { left: number; top: number }) {
+function placePick(cfi: string, text: string, rect: DOMRect, off: { left: number; top: number }, span?: { section: number; start: number; end: number }) {
   const top = rect.top + off.top;
   const bottom = rect.bottom + off.top;
   const below = top < 72;
@@ -1109,6 +1915,9 @@ function placePick(cfi: string, text: string, rect: DOMRect, off: { left: number
     below,
     top: below ? bottom + 12 : top - 52,
     left: Math.min(Math.max(centre, half + 8), window.innerWidth - half - 8),
+    section: span?.section,
+    start: span?.start,
+    end: span?.end,
   };
 }
 
@@ -1140,6 +1949,88 @@ const removeBack = addBackInterceptor(() => {
   return true;
 });
 
+const pdfOn = ref(false);
+let bookPath = "";
+
+type PdfBridge = {
+  open: (path: string) => void;
+  close: () => void;
+  setVisible: (on: boolean) => void;
+  setFrame: (l: number, t: number, w: number, h: number) => void;
+  setHoles: (json: string) => void;
+  setPage: (index: number) => void;
+  turn: (dir: number) => void;
+  setColor: (hex: string) => void;
+};
+
+function pdfBridge(): PdfBridge | null {
+  return (window as unknown as { PdfTiles?: PdfBridge }).PdfTiles ?? null;
+}
+
+/** PDF 页画在网页上面。面板、输入框打开时收起；菜单栏和页脚的位置留空，不被盖住 */
+function syncPdfFrame() {
+  void nextTick(() => {
+    const bridge = pdfBridge();
+    if (!bridge || !pdfOn.value) return;
+    const obscured = !!sheet.value || !!editing.value || editingSummary.value || !!currentOverlay.value;
+    if (obscured) {
+      bridge.setVisible(false);
+      return;
+    }
+    const rect = host.value?.getBoundingClientRect();
+    if (!rect || rect.width < 2 || rect.height < 2) return;
+    const foot = measureFoot();
+    const frameH = Math.max(1, rect.height - (foot > 0 ? foot : 0));
+    bridge.setFrame(rect.left, rect.top, rect.width, frameH);
+    bridge.setHoles(JSON.stringify(nativeHoles(rect, frameH)));
+    bridge.setVisible(true);
+  });
+}
+
+function startPdf(path: string) {
+  const bridge = pdfBridge();
+  if (!bridge) return;
+  const w = window as unknown as {
+    __sparkPdfPage?: (index: number, count: number) => void;
+    __sparkPdfTap?: (zone?: string) => void;
+    __sparkPdfEdge?: (dir: number) => void;
+  };
+  w.__sparkPdfPage = (index, count) => {
+    pdfOn.value = true;
+    shownPage.value = index + 1;
+    shownPages.value = Math.max(count, 1);
+    fraction.value = count <= 1 ? 0 : index / (count - 1);
+    currentCfi.value = `pdf:${index}`;
+    const title = sectionTitle(index);
+    if (title?.label) {
+      chapter.value = title.label;
+      chapterHref.value = title.href;
+    }
+    showFoot();
+    scheduleSave({ cfi: currentCfi.value, fraction: fraction.value, updatedMs: Date.now(), section: index, charOffset: 0 });
+  };
+  // 和别的书一样：菜单开着时点哪里都先收起，中间呼出菜单，两侧翻页
+  w.__sparkPdfTap = (zone) => {
+    if (chrome.value) chrome.value = false;
+    else if (zone === "prev" || zone === "next") pdfBridge()?.turn(zone === "next" ? 1 : -1);
+    else chrome.value = true;
+  };
+  w.__sparkPdfEdge = (dir) => edgeToast(dir < 0 ? -1 : 1);
+  bridge.setColor(palette.value.bg);
+  bridge.open(path);
+  pdfOn.value = true;
+  syncPdfFrame();
+}
+
+function stopPdf() {
+  pdfOn.value = false;
+  try {
+    pdfBridge()?.close();
+  } catch {
+    /* 桌面没有这个接口 */
+  }
+}
+
 onMounted(async () => {
   try {
     const saved = JSON.parse(localStorage.getItem(PREFS) ?? "{}") as Partial<{ size: number; leading: typeof leading.value; margin: typeof margin.value; theme: ReaderTheme; flow: typeof flow.value; font: unknown; turnAnim: unknown }>;
@@ -1162,6 +2053,14 @@ onMounted(async () => {
     const opened = await mobileApi.shelfBookFile(props.id);
     title.value = bookStem(opened.name);
     pdfBook = opened.name.toLowerCase().endsWith(".pdf");
+    pdfMode.value = pdfBook;
+    bookPath = opened.path;
+    // 先读上次的位置。PDF 一打开原生就报第 1 页，晚读的话进度已经被它存成第 1 页了
+    const local = await mobileApi.shelfReadPoint(props.id).catch(() => null);
+    if (pdfBook) {
+      if (local && typeof local.section === "number" && local.section >= 0) pdfBridge()?.setPage(local.section);
+      startPdf(bookPath);
+    }
     const url = convertFileSrc(opened.path);
     // foliate-js 是没有类型声明的浏览器模块
     // @ts-expect-error 见上一行
@@ -1182,6 +2081,7 @@ onMounted(async () => {
       doc.addEventListener("pointerdown", onPointerDown);
       doc.addEventListener("pointerup", (ev) => onPointerUp(ev, doc));
       doc.addEventListener("click", (ev) => onFrameClick(ev, doc));
+      if (pdfBook) bindPdfGestures(doc);
       watchSelection(doc, detail.index);
       watchSwipe(doc);
       void paint();
@@ -1215,12 +2115,14 @@ onMounted(async () => {
       else pick.value = { cfi, text, top: 80, left: window.innerWidth / 2, below: true };
     }) as EventListener);
     view.addEventListener("relocate", ((e: Event) => {
-      const d = (e as CustomEvent<{ fraction?: number; cfi?: string; tocItem?: { label?: string; href?: string }; range?: Range }>).detail;
+      const d = (e as CustomEvent<{ fraction?: number; cfi?: string; section?: { current?: number }; tocItem?: { label?: string; href?: string }; range?: Range }>).detail;
+      // PDF 的页由原生画，网页阅读器停在哪页不算数，也不能拿它覆盖进度
+      if (pdfOn.value) return;
       fraction.value = d.fraction ?? fraction.value;
-      chapter.value = d.tocItem?.label?.trim() ?? chapter.value;
+      chapter.value = d.tocItem?.label ? horizontalPunct(d.tocItem.label.trim()) : chapter.value;
       chapterHref.value = d.tocItem?.href ?? chapterHref.value;
       currentCfi.value = d.cfi ?? currentCfi.value;
-      let snippet = d.range?.toString?.().replace(/\s+/g, " ").trim() ?? "";
+      let snippet = horizontalPunct(d.range?.toString?.().replace(/\s+/g, " ").trim() ?? "");
       // 一章的第一页开头是章节名，书签摘要和页面笔记的引用里不要它
       if (chapter.value && snippet.startsWith(chapter.value)) snippet = snippet.slice(chapter.value.length).trim();
       if (snippet) excerpt.value = snippet.slice(0, 42);
@@ -1236,21 +2138,48 @@ onMounted(async () => {
         relocateWaiters = [];
         for (const done of waiting) done();
       }
+      const sectionIndex = d.section?.current;
+      const arm = typeof sectionIndex === "number" && !pdfBook && !webChapters.has(sectionIndex) && (!nativeOn.value || nativeFollow);
+      if (restoreNative && !pdfBook && nativeBridge() && !webChapters.has(restoreNative.index)) {
+        const target = restoreNative;
+        restoreNative = null;
+        nativeFollow = false;
+        void openAtOffset(target.index, target.offset);
+      } else if (arm && typeof sectionIndex === "number") {
+        nativeFollow = false;
+        armNative(sectionIndex, sectionWithin(sectionIndex, fraction.value));
+      }
       schedulePrefetch();
-      scheduleSave({ cfi: d.cfi ?? "", fraction: fraction.value, updatedMs: Date.now() });
+      scheduleSave(readingPoint(d.cfi ?? "", fraction.value));
     }) as EventListener);
     applyLayout();
     toc.value = withPercent(flatToc(view.book.toc));
     // 先用手机上记下的位置打开，不等网络；云端的进度在后台对比，更新时再跳过去
-    const local = await mobileApi.shelfReadPoint(props.id).catch(() => null);
-    if (local?.cfi) await view.init({ lastLocation: local.cfi });
+    if (local && !pdfBook && typeof local.section === "number" && local.section >= 0 && typeof local.charOffset === "number" && local.charOffset >= 0) {
+      restoreNative = { index: local.section, offset: local.charOffset };
+    }
+    // PDF 的进度记的是原生页码（pdf:N），阅读器认不得，交给它会直接报错
+    const lastLocation = local?.cfi && !local.cfi.startsWith("pdf:") ? local.cfi : "";
+    if (lastLocation) await view.init({ lastLocation });
     else await view.init({ showTextStart: true });
     await revealWhenStyled();
     void mobileApi
       .shelfSyncPoint(shelf.vaultId ?? "", shelf.remoteDir, props.id)
       .then(async (synced) => {
-        if (!synced.fromCloud || !synced.point?.cfi || synced.point.cfi === local?.cfi || !view) return;
-        await view.goTo(synced.point.cfi);
+        if (!synced.fromCloud || !synced.point || !view) return;
+        const sameCfi = !!synced.point.cfi && synced.point.cfi === local?.cfi;
+        const sameOffset = synced.point.section === local?.section && synced.point.charOffset === local?.charOffset;
+        if (sameCfi && (synced.point.section == null || sameOffset)) return;
+        if (pdfBook) {
+          if (typeof synced.point.section !== "number" || synced.point.section < 0) return;
+          pdfBridge()?.setPage(synced.point.section);
+        } else if (nativeBridge() && typeof synced.point.section === "number" && synced.point.section >= 0 && typeof synced.point.charOffset === "number" && synced.point.charOffset >= 0 && !webChapters.has(synced.point.section)) {
+          nativeFollow = false;
+          await openAtOffset(synced.point.section, synced.point.charOffset);
+        } else if (synced.point.cfi) {
+          nativeFollow = true;
+          await view.goTo(synced.point.cfi);
+        } else return;
         toast(`已回到上次读到的位置${chapter.value ? ` · ${chapter.value}` : ""}`);
       })
       .catch(() => {});
@@ -1277,11 +2206,14 @@ async function revealWhenStyled() {
 }
 
 onBeforeUnmount(() => {
+  indexGen++;
   window.clearTimeout(footTimer);
   removeBack();
   document.removeEventListener("visibilitychange", onHide);
   void mobileApi.selectionMenu(false).catch(() => {});
   stopNativeTurn();
+  stopNativePages();
+  stopPdf();
   thawFoot();
   unlockZoom();
   restorePageColor();
@@ -1303,11 +2235,20 @@ function leave() {
   back();
 }
 
+/** PDF 的页由原生画，进度条、目录都直接换原生的页 */
+function pdfToFraction(value: number): boolean {
+  if (!pdfOn.value || !pdfBridge()) return false;
+  const count = Math.max(shownPages.value, 1);
+  pdfBridge()?.setPage(Math.round(Math.min(1, Math.max(0, value)) * (count - 1)));
+  return true;
+}
+
 function jump(event: Event) {
   const next = Number((event.target as HTMLInputElement).value) / 100;
   const prev = fraction.value;
   dragging.value = null;
-  void view?.goToFraction(next);
+  nativeFollow = true;
+  if (!pdfToFraction(next)) void view?.goToFraction(next);
   backTo.value = prev;
   window.setTimeout(() => {
     if (backTo.value === prev) backTo.value = null;
@@ -1316,13 +2257,92 @@ function jump(event: Event) {
 
 function restore() {
   if (backTo.value == null) return;
-  void view?.goToFraction(backTo.value);
+  nativeFollow = true;
+  if (!pdfToFraction(backTo.value)) void view?.goToFraction(backTo.value);
   backTo.value = null;
 }
 
 function goTo(target: string) {
   sheet.value = "";
   chrome.value = false;
+  if (pdfOn.value && pdfBridge()) {
+    void pdfGoTo(target);
+    return;
+  }
+  if (!pdfBook && nativeBridge()) {
+    void landNative(target);
+    return;
+  }
+  nativeFollow = true;
+  void view?.goTo(target);
+}
+
+/** PDF 目录的目标页要异步解析；书签记的是原生页码（pdf:N） */
+async function pdfGoTo(target: string) {
+  const page = /^pdf:(\d+)$/.exec(target);
+  if (page) {
+    pdfBridge()?.setPage(Number(page[1]));
+    return;
+  }
+  try {
+    const nav = view?.resolveNavigation(target) as { index?: number } | Promise<{ index?: number }> | undefined;
+    const resolved = nav && typeof (nav as Promise<unknown>).then === "function" ? await nav : (nav as { index?: number } | undefined);
+    if (typeof resolved?.index === "number") {
+      pdfBridge()?.setPage(resolved.index);
+      return;
+    }
+  } catch {
+    /* 解析不了就交给阅读器 */
+  }
+  void view?.goTo(target);
+}
+
+/** 目录和书签按锚点落到原生页，不再用整本书的进度去估算页码 */
+async function landNative(target: string) {
+  type NavHit = { index?: number; anchor?: (doc: Document) => unknown };
+  const pending = view?.resolveNavigation(target) as NavHit | Promise<NavHit> | undefined;
+  const resolved = (pending && typeof (pending as Promise<NavHit>).then === "function" ? await (pending as Promise<NavHit>) : pending) as NavHit | undefined;
+  const index = resolved?.index;
+  const section = typeof index === "number" ? bookSections()[index] : undefined;
+  if (index == null || !section?.createDocument || section.linear === "no") {
+    nativeFollow = true;
+    void view?.goTo(target);
+    return;
+  }
+  let doc = chapterDocs.get(index);
+  if (!doc) {
+    doc = await section.createDocument();
+    chapterDocs.set(index, doc);
+  }
+  const kind = chapterKind(doc);
+  markKind(index, kind);
+  if (kind === "web") {
+    nativeFollow = true;
+    nativeOn.value = false;
+    try {
+      nativeBridge()?.setVisible(false);
+    } catch {
+      /* 桌面没有这个接口 */
+    }
+    void view?.goTo(target);
+    return;
+  }
+  const offset = locateAnchor(doc, target, typeof resolved?.anchor === "function" ? resolved.anchor : undefined);
+  nativeFollow = false;
+  const hit = toc.value.find((item) => item.href === target);
+  if (hit?.label) chapter.value = hit.label;
+  chapterHref.value = target;
+  if (!chapterJson.has(index)) await pushChapter(index, -1, true);
+  else prefetchAround(index);
+  try {
+    nativeBridge()?.showAt(index, offset);
+  } catch {
+    /* 桌面没有这个接口 */
+  }
+  prefetchAround(index);
+  syncNativeStyle();
+  syncNativeFrame();
+  nativeFollow = false;
   void view?.goTo(target);
 }
 
@@ -1335,16 +2355,170 @@ function stepChapter(dir: number) {
   const items = toc.value;
   if (!items.length) return;
   const i = Math.min(Math.max(currentTocIndex.value + dir, 0), items.length - 1);
-  void view?.goTo(items[i].href);
+  const href = items[i]?.href;
+  if (typeof href === "string") goTo(href);
 }
 
 const tocList = ref<HTMLElement | null>(null);
-async function openPanel(which: "toc" | "notes" | "marks") {
+async function openPanel(which: "toc" | "notes" | "marks" | "search") {
   tab.value = which;
   sheet.value = "panel";
+  if (which === "search") {
+    if (!indexStarted) void indexBook();
+    await nextTick();
+    findInput.value?.focus();
+    return;
+  }
   if (which !== "toc") return;
   await nextTick();
   tocList.value?.querySelector(".toc-row.on")?.scrollIntoView({ block: "center" });
+}
+
+/**
+ * 每一章属于哪条目录：目录项先各解析一次，章节取它前面最近的那条。
+ * 不能每次都把整份目录解析一遍，上千章的书搜索时会卡死
+ */
+const sectionTitles = shallowRef<{ label: string; href: string }[] | null>(null);
+let titlesGen = 0;
+watch(toc, () => {
+  sectionTitles.value = null;
+  void buildSectionTitles();
+});
+
+/** AZW3、PDF 的目录项要异步解析，建好之前章节名先空着 */
+async function buildSectionTitles() {
+  const gen = ++titlesGen;
+  const count = bookSections().length;
+  const own: ({ label: string; href: string } | undefined)[] = new Array(count);
+  for (const item of toc.value) {
+    let index: number | undefined;
+    try {
+      type Nav = { index?: number } | undefined;
+      const nav = view?.resolveNavigation(item.href) as Nav | Promise<Nav>;
+      index = (nav && typeof (nav as Promise<Nav>).then === "function" ? await nav : (nav as Nav))?.index;
+    } catch {
+      index = undefined;
+    }
+    if (gen !== titlesGen) return;
+    if (typeof index === "number" && index >= 0 && index < count && !own[index]) own[index] = { label: item.label, href: item.href };
+  }
+  const out: { label: string; href: string }[] = [];
+  let last = { label: "", href: "" };
+  for (let i = 0; i < count; i++) {
+    last = own[i] ?? last;
+    out.push(last);
+  }
+  sectionTitles.value = out;
+  // 原生页、PDF 可能在目录建好之前就报了页，这时补上章节名
+  const at = pdfOn.value ? shownPage.value - 1 : nativeOn.value ? (nativeSpot?.index ?? -1) : -1;
+  const title = at >= 0 ? out[at] : undefined;
+  if (title?.label) {
+    chapter.value = title.label;
+    chapterHref.value = title.href;
+    showFoot();
+  }
+}
+
+function sectionTitle(index: number): { label: string; href: string } | null {
+  return sectionTitles.value?.[index] ?? null;
+}
+
+function sectionLabel(index: number): string {
+  return sectionTitle(index)?.label ?? "";
+}
+
+let searchTimer = 0;
+watch(query, (q) => {
+  clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => (searchFor.value = q.trim()), q.trim() ? 250 : 0);
+});
+
+const SEARCH_LIMIT = 60;
+
+const searchHits = computed(() => {
+  const q = horizontalPunct(searchFor.value);
+  if (!q) return [];
+  const out: { index: number; offset: number; excerpt: string; chapter: string }[] = [];
+  for (const chapter of indexed.value) {
+    if (out.length >= SEARCH_LIMIT) break;
+    const hits = findInPlain(chapter.plain, q, SEARCH_LIMIT - out.length, chapter.fold);
+    if (!hits.length) continue;
+    const label = sectionLabel(chapter.index);
+    for (const hit of hits) out.push({ index: chapter.index, offset: hit.offset, excerpt: horizontalPunct(hit.excerpt), chapter: label });
+  }
+  return out;
+});
+
+let indexStarted = false;
+
+/**
+ * 第一次打开搜索时才读全书正文。只留纯文本，不把每章的文档都留在内存里；
+ * 结果分批交给界面，避免每读一章就把已读的部分重新搜一遍
+ */
+async function indexBook() {
+  const gen = ++indexGen;
+  indexStarted = true;
+  indexing.value = true;
+  indexed.value = [];
+  const sections = bookSections();
+  const found: { index: number; plain: string; fold?: string }[] = [];
+  let shownAt = performance.now();
+  for (let i = 0; i < sections.length; i++) {
+    if (gen !== indexGen) return;
+    const section = sections[i];
+    if (!section?.createDocument || section.linear === "no") continue;
+    let doc = chapterDocs.get(i);
+    if (!doc) {
+      try {
+        doc = await section.createDocument();
+      } catch {
+        continue;
+      }
+      if (gen !== indexGen) return;
+    }
+    const plain = plainOf(doc);
+    doc = undefined;
+    if (!plain.trim()) continue;
+    // 竖排标点换成横排再搜，输入的《》也能找到正文里的︽︾。长度不变，偏移照旧
+    const fold = horizontalPunct(plain.toLowerCase());
+    found.push(fold.length === plain.length ? { index: i, plain, fold } : { index: i, plain });
+    if (performance.now() - shownAt > 400) {
+      indexed.value = found.slice();
+      shownAt = performance.now();
+    }
+    await wait(0);
+  }
+  if (gen !== indexGen) return;
+  indexed.value = found;
+  indexing.value = false;
+}
+
+async function goSearchHit(hit: { index: number; offset: number }) {
+  sheet.value = "";
+  chrome.value = false;
+  if (!pdfBook && nativeBridge() && !webChapters.has(hit.index)) {
+    nativeFollow = false;
+    await openAtOffset(hit.index, hit.offset);
+    if (nativeOn.value) return;
+  }
+  let doc = chapterDocs.get(hit.index);
+  if (!doc) {
+    try {
+      doc = await bookSections()[hit.index]?.createDocument?.();
+    } catch {
+      doc = undefined;
+    }
+    if (doc) chapterDocs.set(hit.index, doc);
+  }
+  if (!doc || !view) return;
+  const range = rangeAtOffset(doc, hit.offset);
+  if (!range) return;
+  nativeFollow = true;
+  try {
+    await view.goTo(view.getCFI(hit.index, range));
+  } catch (e) {
+    console.warn("跳到搜索结果失败", e);
+  }
 }
 
 /** 写过字的感悟。只划了线、没有写内容的不出现在列表里 */
@@ -1467,6 +2641,9 @@ async function highlight(write: boolean) {
     quote: chosen.text,
     note: "",
     chapter: chapter.value || "正文",
+    section: chosen.section,
+    start: chosen.start,
+    end: chosen.end,
   };
   clearPick();
   try {
@@ -1708,7 +2885,7 @@ function dateLabel(iso: string) {
 
 <template>
   <div class="page bare ebook" :class="{ scrolled, chromed: chrome }" :style="themeVars">
-    <div ref="host" class="ebook-view" :class="{ hidden: !ready }"></div>
+    <div ref="host" class="ebook-view" :class="{ hidden: !ready, native: nativeOn }"></div>
     <div v-if="!ready && !error" class="ebook-loading">正在打开…</div>
     <div v-if="error" class="m-empty">打不开这本书：{{ error }}</div>
     <div v-if="shownRibbon && !chrome" class="ebook-ribbon" aria-hidden="true"></div>
@@ -1745,6 +2922,7 @@ function dateLabel(iso: string) {
         <button v-if="backTo != null" class="ebook-back" @click="restore">↩ 回到 {{ Math.round(backTo * 100) }}%</button>
         <div class="ebook-tools">
           <button @click="openPanel('toc')"><Icon name="outline" />目录</button>
+          <button @click="openPanel('search')"><Icon name="search" />搜索</button>
           <button @click="writePageNote"><Icon name="pen" />笔记</button>
           <button @click="sheet = 'settings'"><Icon name="aa" />设置</button>
           <button @click="toggleNight"><Icon :name="palette.dark ? 'sun' : 'moon'" />{{ palette.dark ? "日间" : "夜读" }}</button>
@@ -1752,9 +2930,9 @@ function dateLabel(iso: string) {
       </div>
     </Transition>
 
-    <div v-if="!chrome" class="ebook-foot"><span>{{ shownChapter }}</span><span>{{ shownPercent }}%</span></div>
+    <div v-if="!chrome" class="ebook-foot"><span>{{ shownChapter }}</span><span v-if="(nativeOn || pdfOn) && shownPages > 0">{{ shownPage }}/{{ shownPages }}</span><span v-else>{{ shownPercent }}%</span></div>
 
-    <div v-if="pick" class="sel-menu" :class="{ below: pick.below }" :style="{ top: pick.top + 'px', left: pick.left + 'px' }">
+    <div v-if="pick && !nativeOn" class="sel-menu" :class="{ below: pick.below }" :style="{ top: pick.top + 'px', left: pick.left + 'px' }">
       <template v-if="pickedAnno">
         <button @click="highlight(true)">{{ pickedAnno.note ? "编辑想法" : "写想法" }}</button>
         <button @click="copyPick">复制</button>
@@ -1789,6 +2967,7 @@ function dateLabel(iso: string) {
         <template v-if="sheet === 'panel'">
           <div class="seg panel-tabs">
             <button :class="{ on: tab === 'toc' }" @click="openPanel('toc')">目录</button>
+            <button :class="{ on: tab === 'search' }" @click="openPanel('search')">搜索</button>
             <button :class="{ on: tab === 'notes' }" @click="tab = 'notes'">笔记 {{ noteCount }}</button>
             <button :class="{ on: tab === 'marks' }" @click="tab = 'marks'">书签 {{ marks.length }}</button>
           </div>
@@ -1806,6 +2985,18 @@ function dateLabel(iso: string) {
                 <span v-if="item.percent != null" class="pct">{{ item.percent }}%</span>
               </button>
               <p v-if="!toc.length" class="ghint">这本书没有目录</p>
+            </div>
+            <div v-else-if="tab === 'search'">
+              <input ref="findInput" v-model="query" class="find-input" type="search" enterkeyhint="search" placeholder="在这本书里找" />
+              <button v-for="(hit, i) in searchHits" :key="hit.index + ':' + hit.offset + ':' + i" class="note-row" @click="goSearchHit(hit)">
+                <span class="n">{{ hit.excerpt }}</span>
+                <span v-if="hit.chapter" class="hint">{{ hit.chapter }}</span>
+              </button>
+              <p v-if="!query.trim()" class="ghint">输入要找的字</p>
+              <p v-else-if="query.trim() !== searchFor" class="ghint">正在找…</p>
+              <p v-else-if="!searchHits.length && indexing" class="ghint">正在读后面的章节</p>
+              <p v-else-if="!searchHits.length" class="ghint">没有找到</p>
+              <p v-else-if="indexing" class="ghint">后面的章节还在读</p>
             </div>
             <div v-else-if="tab === 'notes'">
               <div class="sec">总结</div>
@@ -1858,16 +3049,18 @@ function dateLabel(iso: string) {
           <div class="seg theme-seg">
             <button v-for="(p, n) in READER_THEMES" :key="n" :class="{ on: theme === n }" :style="{ background: p.bg, color: p.fg }" @click="theme = n">{{ n }}</button>
           </div>
-          <div class="seglabel">翻页方式</div>
-          <div class="seg"><button v-for="n in (['左右翻页', '上下滚动'] as const)" :key="n" :class="{ on: flow === n }" @click="flow = n">{{ n }}</button></div>
-          <template v-if="flow === '左右翻页' && !pdfBook">
-            <div class="seglabel">翻页动画</div>
-            <div class="seg"><button v-for="n in TURN_ANIMS" :key="n" :class="{ on: turnAnim === n }" @click="turnAnim = n">{{ n }}</button></div>
-            <p class="ghint seg-hint">点屏幕两侧或左右滑动都能翻页。覆盖是旧页滑走，或上一页从左边盖上来</p>
+          <template v-if="!pdfBook">
+            <div class="seglabel">翻页方式</div>
+            <div class="seg"><button v-for="n in (['左右翻页', '上下滚动'] as const)" :key="n" :class="{ on: flow === n }" @click="flow = n">{{ n }}</button></div>
+            <template v-if="flow === '左右翻页'">
+              <div class="seglabel">翻页动画</div>
+              <div class="seg"><button v-for="n in TURN_ANIMS" :key="n" :class="{ on: turnAnim === n }" @click="turnAnim = n">{{ n }}</button></div>
+              <p class="ghint seg-hint">点屏幕两侧或左右滑动都能翻页。覆盖是旧页滑走，或上一页从左边盖上来</p>
+            </template>
+            <div class="seglabel">字体</div>
+            <div class="seg"><button v-for="n in (['书籍自带', '宋体', '楷体'] as const)" :key="n" :class="{ on: font === n }" @click="font = n">{{ n }}</button></div>
           </template>
-          <div class="seglabel">字体</div>
-          <div class="seg"><button v-for="n in (['书籍自带', '宋体', '楷体'] as const)" :key="n" :class="{ on: font === n }" @click="font = n">{{ n }}</button></div>
-          <p v-if="pdfBook" class="ghint">PDF 按原样显示，字号、行距、页边距、字体和翻页方式对它不起作用。</p>
+          <p v-if="pdfBook" class="ghint">PDF 按原样显示，左右滑动或点两侧翻页。双指捏合或双击可以放大，放大后单指拖动查看。字号、行距和页边距对它不起作用。</p>
         </template>
         <template v-else-if="sheet === 'info'">
           <h2>书籍信息</h2>

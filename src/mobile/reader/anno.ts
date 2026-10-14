@@ -8,6 +8,11 @@ export interface Anno {
   quote: string;
   note: string;
   chapter: string;
+  /** 原生正文所在章节。旧笔记没有，打开时从 cfi 补上 */
+  section?: number;
+  /** 这一章正文里的起止，不含末尾 */
+  start?: number;
+  end?: number;
 }
 
 export interface ReadingDoc {
@@ -21,7 +26,22 @@ export interface ReadingDoc {
   annos: Anno[];
 }
 
-const COMMENT = /^<!--\s*spark-anno\s+(\S+)\s+(\S+)\s+(\S+)\s*-->$/;
+const COMMENT = /^<!--\s*spark-anno\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+(\d+)\s+(\d+)\s+(\d+))?\s*-->$/;
+
+function annoFrom(id: string, cfi: string, time: string, quote: string, note: string, chapter: string, section?: string, start?: string, end?: string): Anno {
+  const anno: Anno = { id, cfi, time, quote, note, chapter };
+  if (section != null && start != null && end != null) {
+    const s = Number(section);
+    const a = Number(start);
+    const b = Number(end);
+    if (Number.isInteger(s) && Number.isInteger(a) && Number.isInteger(b) && b > a) {
+      anno.section = s;
+      anno.start = a;
+      anno.end = b;
+    }
+  }
+  return anno;
+}
 
 function field(front: string, key: string): string {
   const m = new RegExp(`^${key}:\\s*(.*)$`, "m").exec(front);
@@ -83,14 +103,7 @@ export function parseReadingNote(md: string): ReadingDoc {
       i++;
       const taken = takeNote(lines, i);
       i = taken.i;
-      doc.annos.push({
-        id: ahead[1],
-        cfi: ahead[2],
-        time: ahead[3],
-        quote: "",
-        note: taken.note,
-        chapter: chapter || "正文",
-      });
+      doc.annos.push(annoFrom(ahead[1], ahead[2], ahead[3], "", taken.note, chapter || "正文", ahead[4], ahead[5], ahead[6]));
       continue;
     }
     if (line.startsWith("> ")) {
@@ -104,14 +117,7 @@ export function parseReadingNote(md: string): ReadingDoc {
       i++;
       const taken = takeNote(lines, i);
       i = taken.i;
-      doc.annos.push({
-        id: comment[1],
-        cfi: comment[2],
-        time: comment[3],
-        quote: quoteText(quote),
-        note: taken.note,
-        chapter: chapter || "正文",
-      });
+      doc.annos.push(annoFrom(comment[1], comment[2], comment[3], quoteText(quote), taken.note, chapter || "正文", comment[4], comment[5], comment[6]));
       continue;
     }
     preamble.push(line);
@@ -132,7 +138,8 @@ export function renderReadingNote(doc: ReadingDoc): string {
   ];
   if (doc.preamble.trim()) parts.push(doc.preamble.trim(), "");
   for (const anno of doc.annos) {
-    parts.push(`<!-- spark-anno ${anno.id} ${anno.cfi} ${anno.time} -->`);
+    const span = anno.section != null && anno.start != null && anno.end != null ? ` ${anno.section} ${anno.start} ${anno.end}` : "";
+    parts.push(`<!-- spark-anno ${anno.id} ${anno.cfi} ${anno.time}${span} -->`);
     if (anno.note.trim()) parts.push(anno.note.trim(), "");
   }
   if (doc.summary.trim()) parts.push("## 总结", "", doc.summary.trim(), "");
