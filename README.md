@@ -2,6 +2,17 @@
 
 小巧、性能强的 Windows / macOS 桌面端 Markdown 笔记软件，笔记以本地 Markdown 文件保存。实测安装包不到 5MB，冷启动不到半秒；打开一万篇笔记的库后，应用内存约 100MB，搜索仍是毫秒级。以 [MIT 许可证](LICENSE) 发布。
 
+<p align="center">
+  <img src="docs/images/desktop-note.png" alt="在电脑上编写 Markdown 笔记" width="860">
+</p>
+<p align="center">
+  <img src="docs/images/desktop-mind.png" alt="思维导图" width="420">
+  <img src="docs/images/desktop-flow.png" alt="流程图" width="420">
+</p>
+<p align="center">
+  <img src="docs/images/phone-read.png" alt="在手机上阅读电子书" width="260">
+</p>
+
 支持 Windows 与 macOS 13 及以上版本。AI 的 API Key、WebDAV 密码和 Git 远程账号在 Windows 上写入凭据管理器，在 macOS 上写入钥匙串。安卓只读版的 WebDAV 密码写入系统密钥库。
 
 需求见 [docs/需求文档.md](docs/需求文档.md)，界面定稿设计稿见 [prototype/index.html](prototype/index.html)（风格 A，浅色 + 夜读）。改进代码的方式见 [CONTRIBUTING.md](CONTRIBUTING.md)：先 Fork，再提交 Pull Request。安全漏洞按 [SECURITY.md](SECURITY.md) 私下报告。
