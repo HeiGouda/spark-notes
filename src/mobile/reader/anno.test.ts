@@ -14,10 +14,15 @@ describe("读书笔记", () => {
     const parsed = parseReadingNote(second);
     expect(parsed.annos.map((a) => a.id)).toEqual(["a1", "a2"]);
     expect(parsed.annos[0].note).toBe("桌面上改过的想法");
+    expect(parsed.annos[0].quote).toBe("认知革命");
+    expect(parsed.annos[1].quote).toBe("八卦的工具");
+    expect(parsed.annos[1].note).toBe("");
+    expect(second).toContain("> 认知革命");
+    expect(second).toContain("> 八卦的工具");
     expect(second).toContain("<!-- spark-anno a1 epubcfi(/6/2) 2026-10-08T21:40:00.000Z -->");
     expect(second).not.toContain("## 第三章");
-    expect(second).not.toContain("> ");
     expect(second).not.toContain("# 人类简史");
+    expect(renderReadingNote(parseReadingNote(second))).toBe(second);
   });
 
   it("删掉一条时，别的感悟还在", () => {
@@ -31,10 +36,12 @@ describe("读书笔记", () => {
       doc.annos = doc.annos.filter((a) => a.id !== "a1");
     });
     expect(parseReadingNote(next).annos.map((a) => a.note)).toEqual(["留下"]);
-    expect(next).not.toContain("> 乙");
+    expect(parseReadingNote(next).annos.map((a) => a.quote)).toEqual(["乙"]);
+    expect(next).toContain("> 乙");
+    expect(next).not.toContain("> 甲");
   });
 
-  it("旧笔记里的书名、章节和摘录再保存时去掉，感悟和总结留下", () => {
+  it("旧笔记里的书名和章节标题再保存时去掉，摘录和感悟留下", () => {
     const old = `---
 book: 人类简史.epub
 title: 人类简史
@@ -58,14 +65,17 @@ author: 尤瓦尔·赫拉利
     expect(doc.annos.map((a) => a.note)).toEqual(["桌面上改过的想法"]);
     expect(doc.summary).toBe("读完了");
     const next = renderReadingNote(doc);
+    expect(doc.annos[0].quote).toBe("认知革命");
     expect(next).not.toContain("# 人类简史");
     expect(next).not.toContain("## 第一章");
-    expect(next).not.toContain("> 认知革命");
+    expect(next).toContain("> 认知革命");
     expect(next).toContain("桌面上改过的想法");
     expect(next).toContain("## 总结\n\n读完了");
     const again = parseReadingNote(next);
     expect(again.annos[0].cfi).toBe("epubcfi(/6/2)");
+    expect(again.annos[0].quote).toBe("认知革命");
     expect(again.summary).toBe("读完了");
+    expect(renderReadingNote(again)).toBe(next);
   });
 
   it("书名相同时文件夹加序号，同一本书沿用原来的", () => {
@@ -82,8 +92,50 @@ author: 尤瓦尔·赫拉利
     const parsed = parseReadingNote(md);
     expect(parsed.annos[0]).toMatchObject({ section: 2, start: 10, end: 12, note: "想法" });
     const old = parseReadingNote("<!-- spark-anno a9 epubcfi(/6/2) 2026-10-08T21:40:00.000Z -->\n留下的话\n");
-    expect(old.annos[0]).toMatchObject({ id: "a9", cfi: "epubcfi(/6/2)", note: "留下的话" });
+    expect(old.annos[0]).toMatchObject({ id: "a9", cfi: "epubcfi(/6/2)", note: "留下的话", quote: "" });
     expect(old.annos[0].start).toBeUndefined();
+    const kept = renderReadingNote(old);
+    expect(kept).not.toContain("> ");
+    expect(kept).toContain("留下的话");
+    expect(renderReadingNote(parseReadingNote(kept))).toBe(kept);
+  });
+
+  it("划线加想法、只划线、只写想法，以及多行引文里的章节样子", () => {
+    const md = withAnno("", META, (doc) => {
+      doc.annos.push(
+        { id: "a1", cfi: "c1", time: "t1", quote: "第一行\n## 像章节\n第三行", note: "我的想法", chapter: "第一章", section: 1, start: 0, end: 8 },
+        { id: "a2", cfi: "c2", time: "t2", quote: "只划线", note: "", chapter: "第一章" },
+        { id: "n1", cfi: "c3", time: "t3", quote: "", note: "只写想法", chapter: "第一章" },
+      );
+    });
+    const parsed = parseReadingNote(md);
+    expect(parsed.annos.map((a) => a.quote)).toEqual(["第一行\n## 像章节\n第三行", "只划线", ""]);
+    expect(parsed.annos.map((a) => a.note)).toEqual(["我的想法", "", "只写想法"]);
+    expect(parsed.annos[0]).toMatchObject({ section: 1, start: 0, end: 8 });
+    expect(parsed.annos[0].chapter).not.toBe("像章节");
+    expect(md).toContain("> ## 像章节");
+    expect(md).toContain("心得：\n我的想法");
+    expect(md).toContain("心得：\n只写想法");
+    expect(md).not.toContain("心得：\n\n只划线");
+    expect(md).toMatch(/> 只划线\n\n<!-- spark-anno/);
+    expect(md).not.toMatch(/^## 像章节/m);
+    expect(renderReadingNote(parsed)).toBe(md);
+  });
+
+  it("引文和注释之间空一行仍能读回", () => {
+    const md = `---
+book: 人类简史.epub
+title: 人类简史
+author: 尤瓦尔·赫拉利
+---
+
+> 空行下面才是注释
+
+<!-- spark-anno a1 c1 t1 -->
+想法
+`;
+    const doc = parseReadingNote(md);
+    expect(doc.annos[0]).toMatchObject({ quote: "空行下面才是注释", note: "想法" });
   });
 });
 

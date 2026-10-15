@@ -6,6 +6,8 @@ import "../styles/diagram.css";
 import "./mobile.css";
 import App from "./App.vue";
 import { installBackButton } from "./nav";
+import { installKeyboardInset } from "./keyboard";
 
+installKeyboardInset();
 installBackButton();
 createApp(App).use(createPinia()).mount("#app");

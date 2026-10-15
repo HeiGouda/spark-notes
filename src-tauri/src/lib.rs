@@ -840,6 +840,14 @@ pub fn run() {
             #[cfg(target_os = "android")]
             shelf::commands::shelf_save_point,
             #[cfg(target_os = "android")]
+            shelf::commands::shelf_read_notes,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_save_notes,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_read_bookmarks,
+            #[cfg(target_os = "android")]
+            shelf::commands::shelf_save_bookmarks,
+            #[cfg(target_os = "android")]
             shelf::commands::shelf_progress,
             #[cfg(target_os = "android")]
             shelf::commands::shelf_covers,

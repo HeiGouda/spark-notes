@@ -253,13 +253,43 @@ md.renderer.rules.task = (tokens, idx) =>
 md.renderer.rules.link_open = renderLinkOpen;
 md.renderer.rules.image = imageRule(md.renderer.rules.image!);
 
-const SPARK_ANNO_LINE = /^[ \t]*<!--\s*spark-anno\s+\S+\s+\S+\s+\S+\s*-->[ \t]*$/gm;
+// 后面还可以带章节和起止。只认三个词时，多出来的位置会显示在引用下面
+const SPARK_ANNO_LINE = /^[ \t]*<!--\s*spark-anno\s+\S+\s+\S+\s+\S+(?:\s+\S+)*\s*-->[ \t]*$/gm;
+
+/** 只对带定位注释的读书笔记：引用后面的那段加上「心得：」，普通笔记里的引用不动 */
+function labelThoughts(body: string): string {
+  const lines = body.split("\n");
+  const out: string[] = [];
+  let afterQuote = false;
+  for (const line of lines) {
+    if (line.startsWith("> ")) {
+      afterQuote = true;
+      out.push(line);
+      continue;
+    }
+    if (line.trim() === "") {
+      out.push(line);
+      continue;
+    }
+    if (afterQuote && !line.startsWith("#") && !/^心得[:：]/.test(line.trim())) {
+      out.push("心得：", line);
+      afterQuote = false;
+      continue;
+    }
+    afterQuote = false;
+    out.push(line);
+  }
+  return out.join("\n");
+}
 
 export function renderNote(source: string, opts: RenderOptions): Rendered {
   const { frontMatter, body } = splitFrontMatter(source);
   const env: Env = { opts, headings: [] };
   // 读书笔记里记位置的注释紧跟在引用块后面，不去掉会被当成引用的正文显示出来
-  const html = md.render(body.replace(SPARK_ANNO_LINE, ""), env);
+  const marked = SPARK_ANNO_LINE.test(body);
+  SPARK_ANNO_LINE.lastIndex = 0;
+  const shown = body.replace(SPARK_ANNO_LINE, "");
+  const html = md.render(marked ? labelThoughts(shown) : shown, env);
   const tags = [...new Set([...parseMeta(frontMatter).tags, ...inlineTags(body)])];
   return { html, headings: env.headings, tags };
 }

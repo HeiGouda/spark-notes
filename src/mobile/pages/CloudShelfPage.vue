@@ -54,7 +54,7 @@ function runDownload(book: CloudBook) {
 
 async function deleteCloud(book: CloudBook) {
   if (!shelf.vaultId) return;
-  const ok = await ask({ title: `从云端删除《${bookStem(book.name)}》？`, message: "书会移进云端书架的回收站，可以在笔记柜里恢复。手机里的副本一并移除，读书笔记和进度保留。", ok: "删除", danger: true });
+  const ok = await ask({ title: `从云端删除《${bookStem(book.name)}》？`, message: "书会移进云端书架的回收站，可以在笔记柜里恢复。手机里的副本一并移除，这台手机上的划线、书签和进度保留。", ok: "删除", danger: true });
   if (!ok) return;
   try {
     await mobileApi.shelfDeleteCloud(shelf.vaultId, shelf.remoteDir, book.rel);

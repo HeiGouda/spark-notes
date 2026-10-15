@@ -12,7 +12,7 @@ const shelf = useShelf();
 const dir = ref(shelf.remoteDir);
 
 async function choose(id: string) {
-  if (shelf.vaultId && shelf.vaultId !== id) toast("已有的读书笔记留在原来的库里，不会搬过去");
+  if (shelf.vaultId && shelf.vaultId !== id) toast("划线、心得和书签仍留在这台手机上");
   await shelf.setVault(id);
 }
 
@@ -51,7 +51,7 @@ async function clearDownloads() {
         </button>
         <div v-if="!mobile.vaults.length" class="row"><span class="main"><div class="sub">还没有笔记库，先在“我的”里添加</div></span></div>
       </div>
-      <p class="ghint">书架用这个库的 WebDAV 账号连接，划线和想法以后写进它的“读书笔记”文件夹。</p>
+      <p class="ghint">书架用这个库的 WebDAV 账号连接云端的书。划线、心得、读书笔记和书签只存在这台手机上，不写入笔记库。</p>
 
       <div class="grp-t">云端书架目录</div>
       <div class="grp">

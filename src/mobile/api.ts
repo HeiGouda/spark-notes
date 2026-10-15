@@ -108,6 +108,12 @@ export const mobileApi = {
   /** data 为空表示这本书没有封面 */
   shelfCoverSave: (id: string, data: Uint8Array) => invoke<void>("shelf_cover_save", { id, data: Array.from(data) }),
   shelfSavePoint: (id: string, point: ReadPoint) => invoke<void>("shelf_save_point", { id, point }),
+  /** 这本书的划线、心得和总结，只在这台手机上。没有时是空字符串 */
+  shelfReadNotes: (id: string) => invoke<string>("shelf_read_notes", { id }),
+  shelfSaveNotes: (id: string, content: string) => invoke<void>("shelf_save_notes", { id, content }),
+  /** 这本书的书签，只在这台手机上。没有时是空字符串 */
+  shelfReadBookmarks: (id: string) => invoke<string>("shelf_read_bookmarks", { id }),
+  shelfSaveBookmarks: (id: string, content: string) => invoke<void>("shelf_save_bookmarks", { id, content }),
   shelfSyncPoint: (vaultId: string, remoteDir: string, id: string) => invoke<SyncedPoint>("shelf_sync_point", { vaultId, remoteDir, id }),
   shelfPushPoint: (vaultId: string, remoteDir: string, id: string) => invoke<void>("shelf_push_point", { vaultId, remoteDir, id }),
   vaultTextRead: (vaultId: string, rel: string) => invoke<string>("vault_text_read", { vaultId, rel }),

@@ -5,7 +5,7 @@ import Icon from "../Icon.vue";
 import { mobileApi, type PageTurnAnim, type ReadPoint } from "../api";
 import { bookStem, useShelf } from "../shelf";
 import { decodeTxt, txtBook } from "../reader/txt";
-import { parseReadingNote, readingNoteRel, renderReadingNote, toggleBookmark, withAnno, type Anno, type Bookmark } from "../reader/anno";
+import { parseReadingNote, readingNoteRel, toggleBookmark, type Anno, type Bookmark, type ReadingDoc } from "../reader/anno";
 import { blocksFrom, findInPlain, isImageSvg, locateAnchor, offsetOfAnchor, plainOf, rangeAtOffset, rangeOfOccurrence, withImages } from "../reader/nativeBlocks";
 import { horizontalPunct } from "../reader/punct";
 import { styleResolver, type StyleOf } from "../reader/cssHints";
@@ -13,13 +13,13 @@ import { selectionFits, type SelBox } from "../reader/selection";
 import { LEADING, READER_THEMES, isReaderFont, readerCss, tocDepth, type ReaderFont, type ReaderTheme } from "../reader/style";
 import serifFont from "../fonts/NotoSerifSC-Regular-gb2312.woff2?url";
 import kaiFont from "../fonts/LXGWWenKai-Regular-gb2312.woff2?url";
-import { api, type TreeNode } from "../../lib/api";
 import { isDarkTheme } from "../../lib/themes";
 import { timeLabel } from "../browse";
 import { useMobile } from "../store";
 import AiSheet from "../chat/AiSheet.vue";
-import { addBackInterceptor, back, currentOverlay, open, openDoc, toast } from "../nav";
-import { ask } from "../dialog";
+import { copyPlainText } from "../clipboard";
+import { addBackInterceptor, back, currentOverlay, open, toast, toastMessage } from "../nav";
+import { ask, asking } from "../dialog";
 
 const PREFS = "spark-ebook";
 
@@ -40,6 +40,7 @@ const info = ref("");
 /** 底部面板：目录 / 搜索 / 笔记 / 书签在同一个面板里 */
 const sheet = ref<"" | "panel" | "settings" | "info">("");
 const tab = ref<"toc" | "notes" | "marks" | "search">("toc");
+const openedNoteId = ref<string | null>(null);
 const toc = ref<{ label: string; href: string; depth: number; percent: number | null }[]>([]);
 const query = ref("");
 /** 搜索框停手一会儿再找，免得每敲一个字就把整本书扫一遍 */
@@ -67,7 +68,12 @@ const excerpt = ref("");
 const swiped = ref<string | null>(null);
 let fileName = "";
 let authorName = "";
-let noteRel = "";
+/** 这本书的划线、心得和总结。只在这台手机上，不写进笔记库 */
+let noteDoc: ReadingDoc = { book: "", title: "", author: "", preamble: "", summary: "", annos: [] };
+/** 打开书时的读取还没回来，这中间又保存过，就把那次旧结果丢掉 */
+let notesEpoch = 0;
+/** 选区刚出现时，页面还没记下这句话，先把点过的按钮留着 */
+let pendingNativeAction = "";
 let pdfBook = false;
 const pdfMode = ref(false);
 let activeDoc: Document | null = null;
@@ -341,6 +347,26 @@ function restorePageColor() {
 /* 点按：中间呼出或收起菜单，左右两侧翻页。书页在 iframe 里，坐标要加上 iframe 自己的位置 */
 let down: { x: number; y: number; t: number } | null = null;
 let lastTapAt = 0;
+/** 按下时已经有选区。松手时选区可能已被浏览器清掉，这一下仍只取消，不翻页 */
+let armDismiss = false;
+
+/** 点是否落在提示条上。iframe 里的坐标有时相对书页，要换成屏幕坐标再比 */
+function pointInToast(e: { clientX: number; clientY: number }, doc: Document): boolean {
+  if (!toastMessage.value) return false;
+  const box = document.querySelector(".m-toast")?.getBoundingClientRect();
+  if (!box || box.width < 2 || box.height < 2) return false;
+  let x = e.clientX;
+  let y = e.clientY;
+  if (doc !== document) {
+    const frame = doc.defaultView?.frameElement as HTMLElement | null | undefined;
+    const rect = frame?.getBoundingClientRect();
+    if (rect && e.clientX >= 0 && e.clientX <= rect.width + 2 && e.clientY >= 0 && e.clientY <= rect.height + 2) {
+      x += rect.left;
+      y += rect.top;
+    }
+  }
+  return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+}
 
 function frameOffset(doc: Document): { left: number; top: number } {
   const frame = doc.defaultView?.frameElement as HTMLElement | null | undefined;
@@ -367,6 +393,8 @@ function onReaderTap(e: PointerEvent | MouseEvent, doc: Document) {
     clearPick();
     return;
   }
+  // 提示镂空把触摸交给网页。提示本身不接收点击，落在它上面时不要翻页或呼出菜单
+  if ((nativeOn.value || pdfOn.value) && pointInToast(e, doc)) return;
   lastTapAt = now;
   if (chrome.value) {
     chrome.value = false;
@@ -380,22 +408,40 @@ function onReaderTap(e: PointerEvent | MouseEvent, doc: Document) {
 function onPointerDown(e: PointerEvent) {
   unpeek();
   down = { x: e.screenX, y: e.screenY, t: e.timeStamp };
+  const sel = (e.view as Window | null)?.document?.getSelection?.();
+  armDismiss = !!pick.value || (!!sel && !sel.isCollapsed);
 }
 
 function onPointerUp(e: PointerEvent, doc: Document) {
   const start = down;
   down = null;
+  // 上下滚动的点按要等 click。这里把标志留着，不然按下时清掉的选区到不了 click
+  if (scrolled.value) return;
+  const dismiss = armDismiss;
+  armDismiss = false;
   if (!start || !e.isPrimary) return;
   if (performance.now() - pdfGestureAt < 500) return;
-  // 拖动（滑动翻页、拖选字的把手）和长按不算点按。上下滚动时父级在滚，松手用 click 判断
-  if (scrolled.value) return;
+  // 拖动（滑动翻页、拖选字的把手）和长按不算点按
   if (Math.hypot(e.screenX - start.x, e.screenY - start.y) > 12 || e.timeStamp - start.t > 500) return;
+  if (dismiss) {
+    clearPick();
+    e.stopPropagation();
+    return;
+  }
   onReaderTap(e, doc);
 }
 
 /** 上下滚动时点在前后章上，pointerup 经常被滚动吃掉，click 才会到 */
 function onFrameClick(e: MouseEvent, doc: Document) {
   if (!scrolled.value || e.button !== 0) return;
+  const dismiss = armDismiss;
+  armDismiss = false;
+  if (dismiss) {
+    if ((e.target as HTMLElement | null)?.closest?.("a[href]")) return;
+    clearPick();
+    e.stopPropagation();
+    return;
+  }
   onReaderTap(e, doc);
 }
 
@@ -605,7 +651,7 @@ function enqueueNative(task: () => Promise<void>) {
 }
 
 function edgeToast(dir: 1 | -1) {
-  toast(dir > 0 ? "已经是最后一页" : "已经是第一页");
+  toast(dir > 0 ? "最后一页" : "第一页");
 }
 
 /** 书页换好后等 Vue 改完页脚这些，再让原生开始动画 */
@@ -856,6 +902,7 @@ type NativeBridge = {
   showAt: (index: number, charOffset: number) => void;
   setSelectKind: (kind: string) => void;
   clearSelect: () => void;
+  copyText: (text: string) => boolean;
   clear: () => void;
 };
 
@@ -1060,7 +1107,7 @@ function syncNativeFrame() {
 function applyNativeFrame() {
   const bridge = nativeBridge();
   if (!bridge) return;
-  const obscured = !!sheet.value || (!!pick.value && !nativeOn.value) || !!editing.value || editingSummary.value || !!currentOverlay.value;
+  const obscured = !!sheet.value || (!!pick.value && !nativeOn.value) || !!editing.value || editingSummary.value || !!currentOverlay.value || !!asking.value;
   if (!nativeOn.value || obscured || pdfBook) {
     bridge.setVisible(false);
     return;
@@ -1097,6 +1144,11 @@ function nativeHoles(host: DOMRect, frameH: number) {
   if (pick.value) {
     const menu = document.querySelector(".sel-menu")?.getBoundingClientRect();
     if (menu) push(menu.left - 12, menu.top - 14, menu.right + 12, menu.bottom + 14);
+  }
+  // 提示是网页元素，位置是固定的（只有透明度在变）。镂空后露出的底是阅读页背景，和书页同色
+  if (toastMessage.value) {
+    const tip = document.querySelector(".m-toast")?.getBoundingClientRect();
+    if (tip && tip.width > 1 && tip.height > 1) push(tip.left, tip.top, tip.right, tip.bottom);
   }
   return holes;
 }
@@ -1253,7 +1305,7 @@ function bindNativeCallbacks() {
     syncNativeFrame();
   };
   w.__sparkNativeEdge = (dir) => {
-    toast(dir > 0 ? "已经是最后一页" : "已经是第一页");
+    toast(dir > 0 ? "最后一页" : "第一页");
   };
   w.__sparkNativePage = (index, page, pages, offset) => {
     const at = Math.max(0, offset ?? 0);
@@ -1307,7 +1359,8 @@ function bindNativeCallbacks() {
       }
     }
     if (!range) {
-      toast("找不到这句话");
+      pendingNativeAction = "";
+      toast("找不到这句");
       try {
         nativeBridge()?.clearSelect();
       } catch {
@@ -1321,10 +1374,13 @@ function bindNativeCallbacks() {
     const center = boxCenter ?? (hostRect?.width ?? window.innerWidth) / 2;
     const cfi = view.getCFI(index, range);
     const span = typeof start === "number" && typeof end === "number" && end > start ? { section: index, start, end } : undefined;
+    // 菜单栏还开着时，选区工具条会和它叠在一起，点按钮会点到菜单上
+    chrome.value = false;
     placePick(cfi, sentence, { top, bottom, left: center, width: 0 } as DOMRect, {
       left: hostRect?.left ?? 0,
       top: hostRect?.top ?? 0,
     }, span);
+    flushNativeAction();
     const kind = annos.value.some((anno) => anno.cfi === cfi || (span && anno.section === span.section && anno.start === span.start && anno.end === span.end)) ? "anno" : "new";
     try {
       nativeBridge()?.setSelectKind(kind);
@@ -1333,18 +1389,9 @@ function bindNativeCallbacks() {
     }
     syncNativeFrame();
   };
-  w.__sparkNativeAction = (action) => {
-    if (!pick.value) return;
-    if (action === "mark") void highlight(false);
-    else if (action === "note") void highlight(true);
-    else if (action === "copy") void copyPick();
-    else if (action === "ai") askAi(pick.value.text);
-    else if (action === "delete") {
-      const anno = annos.value.find((item) => item.cfi === pick.value?.cfi);
-      if (anno) void removeAnno(anno);
-    }
-  };
+  w.__sparkNativeAction = (action) => runNativeAction(action);
   w.__sparkNativeSelectClear = () => {
+    pendingNativeAction = "";
     pick.value = null;
   };
   w.__sparkHandoff = (index, dir) => handoffWeb(index, dir ?? 1);
@@ -1360,6 +1407,8 @@ function decodeNativeText(b64: string): string {
 }
 
 let syncingMarks = false;
+/** 正在把笔记读进内存。这期间不要跟着 annos 再去同步划线，避免和补原文抢着写文件 */
+let suspendMarkSync = false;
 
 function offsetsOf(doc: Document, range: Range): { start: number; end: number } {
   const start = offsetOfAnchor(doc, () => range);
@@ -1409,28 +1458,37 @@ async function syncNativeMarks() {
   syncingMarks = true;
   try {
     const spans: { s: number; a: number; b: number }[] = [];
-    const gained: Anno[] = [];
+    const missing: Anno[] = [];
     for (const anno of annos.value) {
-      let section = anno.section;
-      let start = anno.start;
-      let end = anno.end;
-      if (section == null || start == null || end == null || end <= start) {
-        const span = anno.cfi ? await spanFromCfi(anno.cfi) : null;
-        if (span) {
-          section = span.section;
-          start = span.start;
-          end = span.end;
-          gained.push({ ...anno, section, start, end });
-        }
-      }
+      // 底部「笔记」记的是当前页位置，那一页的范围很大，不能拿来画线
+      if (isPageNote(anno)) continue;
+      const section = anno.section;
+      const start = anno.start;
+      const end = anno.end;
       if (section != null && start != null && end != null && end > start) spans.push({ s: section, a: start, b: end });
+      else if (anno.cfi) missing.push(anno);
     }
+    // 已经知道位置的先画上。按 CFI 找位置要打开章节，不能挡在这一下前面
     try {
       bridge.setMarks(JSON.stringify(spans));
     } catch {
       /* 桌面没有这个接口 */
     }
-    if (gained.length && shelf.vaultId) {
+    const gained: Anno[] = [];
+    for (const anno of missing) {
+      const span = await spanFromCfi(anno.cfi);
+      if (!span) continue;
+      spans.push({ s: span.section, a: span.start, b: span.end });
+      gained.push({ ...anno, section: span.section, start: span.start, end: span.end });
+    }
+    if (missing.length) {
+      try {
+        bridge.setMarks(JSON.stringify(spans));
+      } catch {
+        /* 桌面没有这个接口 */
+      }
+    }
+    if (gained.length) {
       await commit((doc) => {
         for (const next of gained) {
           const hit = doc.annos.find((item) => item.id === next.id);
@@ -1488,7 +1546,7 @@ function stopNativePages() {
 }
 
 watch([swipeOn, turnAnim, atStart, atEnd, nativeOn], syncTurnConfig);
-watch([chrome, sheet, pick, editing, editingSummary, flow, currentOverlay], () => {
+watch([chrome, sheet, pick, editing, editingSummary, flow, currentOverlay, asking], () => {
   if (pdfBook) {
     if (nativeOn.value) stopNativePages();
     syncPdfFrame();
@@ -1497,13 +1555,17 @@ watch([chrome, sheet, pick, editing, editingSummary, flow, currentOverlay], () =
   syncNativeMode();
   syncNativeFrame();
 });
+watch(toastMessage, () => {
+  if (pdfBook) syncPdfFrame();
+  else syncNativeFrame();
+});
 watch([size, leading, margin, theme, font, turnAnim], () => {
   if (pdfOn.value) pdfBridge()?.setColor(palette.value.bg);
   if (!nativeOn.value || pdfBook) return;
   syncNativeStyle();
 });
 watch(annos, () => {
-  if (syncingMarks) return;
+  if (syncingMarks || suspendMarkSync) return;
   void syncNativeMarks();
 }, { deep: true });
 // 菜单、面板收起后画面回到书页，截好的前后页可能还能用，不能用的话重新截
@@ -1553,7 +1615,30 @@ function watchSwipe(doc: Document) {
   doc.addEventListener("touchend", end, opts);
   doc.addEventListener("touchcancel", end, opts);
 }
+function runNativeAction(action: string) {
+  if (!pick.value) {
+    pendingNativeAction = action;
+    return;
+  }
+  if (action === "mark") void highlight(false);
+  else if (action === "note") void highlight(true);
+  else if (action === "copy") void copyPick();
+  else if (action === "ai") askAi(pick.value.text);
+  else if (action === "delete") {
+    const anno = annoAtPick();
+    if (anno) void removeAnno(anno);
+  }
+}
+
+function flushNativeAction() {
+  const action = pendingNativeAction;
+  if (!action || !pick.value) return;
+  pendingNativeAction = "";
+  runNativeAction(action);
+}
+
 function clearPick() {
+  pendingNativeAction = "";
   pick.value = null;
   reportSelecting(false);
   try {
@@ -1976,7 +2061,7 @@ function syncPdfFrame() {
   void nextTick(() => {
     const bridge = pdfBridge();
     if (!bridge || !pdfOn.value) return;
-    const obscured = !!sheet.value || !!editing.value || editingSummary.value || !!currentOverlay.value;
+    const obscured = !!sheet.value || !!editing.value || editingSummary.value || !!currentOverlay.value || !!asking.value;
     if (obscured) {
       bridge.setVisible(false);
       return;
@@ -2184,7 +2269,7 @@ onMounted(async () => {
           nativeFollow = true;
           await view.goTo(synced.point.cfi);
         } else return;
-        toast(`已回到上次读到的位置${chapter.value ? ` · ${chapter.value}` : ""}`);
+        toast(chapter.value ? `回到 ${chapter.value}` : "回到上次的位置");
       })
       .catch(() => {});
     fileName = opened.name;
@@ -2525,19 +2610,15 @@ async function goSearchHit(hit: { index: number; offset: number }) {
   }
 }
 
-/** 写过字的感悟。只划了线、没有写内容的不出现在列表里 */
-const thoughts = computed(() => annos.value.filter((a) => a.note.trim()));
-const noteCount = computed(() => thoughts.value.length + (summary.value.trim() ? 1 : 0));
+/** 划线都列出来；底部「笔记」写的想法没有原文，有字才列出。一条里划线和想法算一条 */
+const noteItems = computed(() => annos.value.filter((a) => !isPageNote(a) || a.note.trim()));
+const openedNote = computed(() => noteItems.value.find((anno) => anno.id === openedNoteId.value) ?? null);
+const noteCount = computed(() => noteItems.value.length + (summary.value.trim() ? 1 : 0));
 
-function findFolder(nodes: TreeNode[], path: string): TreeNode | null {
-  for (const n of nodes) {
-    if (n.path === path) return n;
-    if (n.isDir) {
-      const hit = findFolder(n.children, path);
-      if (hit) return hit;
-    }
-  }
-  return null;
+function annoAtPick(): Anno | null {
+  const chosen = pick.value;
+  if (!chosen) return null;
+  return annos.value.find((item) => item.cfi === chosen.cfi || (chosen.section != null && chosen.start != null && chosen.end != null && item.section === chosen.section && item.start === chosen.start && item.end === chosen.end)) ?? null;
 }
 
 function underline(rects: DOMRect[], options: { color?: string; width?: number } = {}) {
@@ -2572,62 +2653,153 @@ async function paint() {
   schedulePrefetch();
 }
 
-async function noteRelOf(): Promise<string> {
-  const id = shelf.vaultId;
-  if (!id) throw new Error("先选择读书笔记库");
-  const root = await mobileApi.vaultRoot(id);
-  const scan = await api.scanVault(root);
-  const folder = findFolder(scan.nodes, "读书笔记");
-  const existing: { folder: string; book: string }[] = [];
-  for (const child of folder?.children ?? []) {
-    if (!child.isDir) continue;
-    const md = child.children.find((n) => !n.isDir && (n.name === `${child.name}.md` || n.path.endsWith(`/${child.name}.md`)));
-    if (!md) continue;
-    try {
-      const file = await api.readNote(root, md.path);
-      existing.push({ folder: child.name, book: parseReadingNote(file.content).book });
-    } catch {
-      /* 读不到这篇就不参与重名判断 */
-    }
-  }
-  return readingNoteRel(title.value || bookStem(fileName), fileName, existing);
+function blankNote(): ReadingDoc {
+  return { book: fileName, title: title.value, author: authorName, preamble: "", summary: "", annos: [] };
 }
 
-function rememberNote(md: string) {
-  const doc = parseReadingNote(md);
-  annos.value = doc.annos;
-  summary.value = doc.summary;
+function applyNote(doc: ReadingDoc) {
+  noteDoc = {
+    book: doc.book || fileName,
+    title: doc.title || title.value,
+    author: doc.author || authorName,
+    preamble: doc.preamble ?? "",
+    summary: doc.summary ?? "",
+    annos: Array.isArray(doc.annos) ? doc.annos : [],
+  };
+  annos.value = noteDoc.annos;
+  summary.value = noteDoc.summary;
+}
+
+/** 以前写在笔记库里的那一篇。只读一次，搬到手机上，不再改那个文件 */
+async function importLegacyNote(): Promise<ReadingDoc | null> {
+  if (!shelf.vaultId || !fileName) return null;
+  const rel = readingNoteRel(title.value || bookStem(fileName), fileName, []);
+  try {
+    const md = await mobileApi.vaultTextRead(shelf.vaultId, rel);
+    if (!md.trim()) return null;
+    const doc = parseReadingNote(md);
+    if (!doc.annos.length && !doc.summary.trim()) return null;
+    return doc;
+  } catch {
+    return null;
+  }
 }
 
 async function loadNotes() {
-  if (!shelf.vaultId || !fileName) return;
-  noteRel = await noteRelOf();
-  const md = await mobileApi.vaultTextRead(shelf.vaultId, noteRel);
-  const doc = parseReadingNote(md);
-  if (!doc.book) doc.book = fileName;
-  if (!doc.title) doc.title = title.value;
-  if (!doc.author) doc.author = authorName;
-  annos.value = doc.annos;
-  summary.value = doc.summary;
-  if (!md.trim()) return;
-  // 旧笔记里的书名、章节和摘录打开时清掉，只留下自己写的内容
-  const cleaned = renderReadingNote(doc);
-  if (cleaned.replace(/\r\n/g, "\n").trim() === md.replace(/\r\n/g, "\n").trim()) return;
-  await mobileApi.vaultTextWrite(shelf.vaultId, noteRel, cleaned);
-  if (store.currentId === shelf.vaultId) await store.loadTree();
+  if (!fileName) return;
+  const epoch = ++notesEpoch;
+  suspendMarkSync = true;
+  try {
+    const raw = await mobileApi.shelfReadNotes(props.id);
+    if (epoch !== notesEpoch) return;
+    if (raw.trim()) {
+      applyNote(JSON.parse(raw) as ReadingDoc);
+    } else {
+      const legacy = await importLegacyNote();
+      if (epoch !== notesEpoch) return;
+      applyNote(legacy ?? blankNote());
+      if (legacy) await mobileApi.shelfSaveNotes(props.id, JSON.stringify(noteDoc));
+    }
+  } catch (e) {
+    if (epoch === notesEpoch) suspendMarkSync = false;
+    throw e;
+  } finally {
+    if (epoch === notesEpoch) void finishNotes();
+  }
 }
 
-async function commit(change: (doc: ReturnType<typeof parseReadingNote>) => void) {
-  if (!shelf.vaultId) throw new Error("先选择读书笔记库");
-  if (!noteRel) noteRel = await noteRelOf();
-  const md = await mobileApi.vaultTextRead(shelf.vaultId, noteRel);
-  const next = withAnno(md, { book: fileName, title: title.value, author: authorName }, change);
-  await mobileApi.vaultTextWrite(shelf.vaultId, noteRel, next);
-  rememberNote(next);
-  if (store.currentId === shelf.vaultId) await store.loadTree();
+async function finishNotes() {
+  try {
+    await backfillQuotes();
+  } catch (e) {
+    console.warn("补回划线原文失败", e);
+  } finally {
+    suspendMarkSync = false;
+    void syncNativeMarks();
+  }
 }
 
-const pickedAnno = computed(() => (pick.value ? annos.value.find((a) => a.cfi === pick.value?.cfi) ?? null : null));
+/** 以前保存时把原文清掉了。还有章节偏移的话，按偏移从这一章把字补回去 */
+async function backfillQuotes() {
+  const targets = annos.value.filter((anno) => !isPageNote(anno) && !anno.quote.trim());
+  if (!targets.length) return;
+  const found: { id: string; quote: string; section: number; start: number; end: number }[] = [];
+  for (const anno of targets) {
+    let section = anno.section;
+    let start = anno.start;
+    let end = anno.end;
+    if (section == null || start == null || end == null || end <= start) {
+      const span = anno.cfi ? await spanFromCfi(anno.cfi) : null;
+      if (!span) continue;
+      section = span.section;
+      start = span.start;
+      end = span.end;
+    }
+    const quote = await quoteFromSpan(section, start, end);
+    if (!quote) continue;
+    found.push({ id: anno.id, quote, section, start, end });
+  }
+  if (!found.length) return;
+  await commit((doc) => {
+    for (const next of found) {
+      const hit = doc.annos.find((item) => item.id === next.id);
+      if (!hit || hit.quote.trim()) continue;
+      hit.quote = next.quote;
+      if (hit.section == null || hit.start == null || hit.end == null) {
+        hit.section = next.section;
+        hit.start = next.start;
+        hit.end = next.end;
+      }
+    }
+  });
+}
+
+async function quoteFromSpan(section: number, start: number, end: number): Promise<string> {
+  if (end <= start || start < 0) return "";
+  const sec = bookSections()[section];
+  if (!sec?.createDocument) return "";
+  let doc = chapterDocs.get(section);
+  if (!doc) {
+    try {
+      doc = await sec.createDocument();
+      chapterDocs.set(section, doc);
+    } catch {
+      return "";
+    }
+  }
+  const plain = plainOf(doc);
+  if (end > plain.length) return "";
+  return plain.slice(start, end).replace(/[ \t]+\n/g, "\n").trim();
+}
+
+let noteWrite: Promise<unknown> = Promise.resolve();
+function commit(change: (doc: ReadingDoc) => void) {
+  const interrupted = suspendMarkSync;
+  notesEpoch++;
+  const run = noteWrite.then(async () => {
+    if (!noteDoc.book) noteDoc.book = fileName;
+    change(noteDoc);
+    for (const anno of noteDoc.annos) {
+      if (!anno.id.startsWith("n")) continue;
+      delete anno.section;
+      delete anno.start;
+      delete anno.end;
+    }
+    await mobileApi.shelfSaveNotes(props.id, JSON.stringify(noteDoc));
+    const next = noteDoc.annos.map((item) => ({ ...item }));
+    noteDoc.annos = next;
+    annos.value = next;
+    summary.value = noteDoc.summary;
+    if (interrupted) {
+      suspendMarkSync = false;
+      void syncNativeMarks();
+    }
+  });
+  noteWrite = run.then(() => {}, () => {});
+  return run;
+}
+
+const pickedAnno = computed(() => annoAtPick());
 
 async function highlight(write: boolean) {
   const chosen = pick.value;
@@ -2650,13 +2822,43 @@ async function highlight(write: boolean) {
     end: chosen.end,
   };
   clearPick();
+  // 先在书页上画出并提示。写进云端要等网络，第一次还会建目录，等完再画就像点了没反应
+  suspendMarkSync = true;
+  annos.value = [...annos.value, anno];
+  paintKnownMarks();
+  if (write) startEdit(anno, false);
+  else toast("已划线");
   try {
-    await commit((doc) => doc.annos.push(anno));
-    await view?.addAnnotation({ value: anno.cfi });
-    if (write) startEdit(anno, false);
-    else toast("已划线");
+    await commit((doc) => {
+      if (!doc.annos.some((item) => item.id === anno.id)) doc.annos.push(anno);
+    });
+    const painted = view?.addAnnotation({ value: anno.cfi });
+    if (nativeOn.value) void painted?.catch((e) => console.warn("书页划线失败", e));
+    else await painted;
   } catch (e) {
+    annos.value = annos.value.filter((item) => item.id !== anno.id);
+    paintKnownMarks();
+    if (write) closeEditor();
     toast(e instanceof Error ? e.message : String(e));
+  } finally {
+    suspendMarkSync = false;
+    void syncNativeMarks();
+  }
+}
+
+/** 用已经记下的字符位置马上画黄线，不等按 CFI 再找一遍 */
+function paintKnownMarks() {
+  const bridge = nativeBridge();
+  if (!bridge || !nativeOn.value) return;
+  const spans = annos.value.flatMap((anno) =>
+    !isPageNote(anno) && anno.section != null && anno.start != null && anno.end != null && anno.end > anno.start
+      ? [{ s: anno.section, a: anno.start, b: anno.end }]
+      : [],
+  );
+  try {
+    bridge.setMarks(JSON.stringify(spans));
+  } catch {
+    /* 桌面没有这个接口 */
   }
 }
 
@@ -2672,10 +2874,6 @@ function startEdit(anno: Anno, isNew: boolean) {
 }
 
 function editSummary() {
-  if (!shelf.vaultId) {
-    toast("先选择读书笔记库");
-    return;
-  }
   sheet.value = "";
   chrome.value = false;
   editing.value = null;
@@ -2685,12 +2883,8 @@ function editSummary() {
 
 /** 底部“笔记”：写一条感悟，不摘录这一页的原文，也不在书里画线 */
 function writePageNote() {
-  if (!shelf.vaultId) {
-    toast("先选择读书笔记库");
-    return;
-  }
   if (!currentCfi.value) {
-    toast("书还没有打开好，稍等一下");
+    toast("书还在打开");
     return;
   }
   chrome.value = false;
@@ -2715,7 +2909,7 @@ async function saveDraft() {
         doc.summary = text;
       });
       closeEditor();
-      toast(text ? "已保存到读书笔记" : "已清空总结");
+      toast(text ? "已保存" : "已清空");
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e));
     }
@@ -2725,31 +2919,35 @@ async function saveDraft() {
   if (!current) return;
   const text = draft.value.trim();
   if (current.isNew && !text) {
-    toast("还没有写内容");
+    toast("先写一点内容");
     return;
   }
   try {
     await commit((doc) => {
       if (current.isNew) {
-        doc.annos.push({ ...current.anno, note: text, quote: "" });
+        doc.annos.push({ ...current.anno, note: text });
         return;
       }
       const hit = doc.annos.find((a) => a.id === current.anno.id);
-      if (hit) {
-        hit.note = text;
-        hit.quote = "";
-      }
+      if (hit) hit.note = text;
     });
     closeEditor();
-    toast("已保存到读书笔记");
+    toast("已保存");
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e));
   }
 }
 
 async function removeAnno(anno: Anno) {
+  const line = !isPageNote(anno);
+  const ok = await ask({
+    title: line ? "删除这条划线？" : "删除这条心得？",
+    message: line ? "划线和心得会一起删掉。" : "这条心得会删掉。",
+    ok: "删除",
+    danger: true,
+  });
+  if (!ok) return;
   clearPick();
-  if (!(await ask({ title: "删除这条划线？", message: "写过的想法会一起删除。", ok: "删除", danger: true }))) return;
   try {
     await commit((doc) => {
       doc.annos = doc.annos.filter((a) => a.id !== anno.id);
@@ -2760,24 +2958,35 @@ async function removeAnno(anno: Anno) {
   }
 }
 
+/** 以前写在云端书架 .spark/bookmarks.json 里、按文件名分组的书签。只读一次 */
+async function importLegacyMarks(): Promise<Bookmark[]> {
+  if (!shelf.vaultId || !fileName) return [];
+  try {
+    const raw = await mobileApi.shelfTextRead(shelf.vaultId, shelf.remoteDir, ".spark/bookmarks.json");
+    if (!raw.trim()) return [];
+    const all = JSON.parse(raw) as Record<string, Bookmark[]>;
+    return Array.isArray(all[fileName]) ? all[fileName] : [];
+  } catch {
+    return [];
+  }
+}
+
 async function loadMarks() {
-  if (!shelf.vaultId || !fileName) return;
-  const raw = await mobileApi.shelfTextRead(shelf.vaultId, shelf.remoteDir, ".spark/bookmarks.json");
-  if (!raw.trim()) {
-    marks.value = [];
+  if (!fileName) return;
+  const raw = await mobileApi.shelfReadBookmarks(props.id);
+  if (raw.trim()) {
+    const parsed = JSON.parse(raw) as Bookmark[];
+    marks.value = Array.isArray(parsed) ? parsed : [];
     return;
   }
-  const all = JSON.parse(raw) as Record<string, Bookmark[]>;
-  marks.value = Array.isArray(all[fileName]) ? all[fileName] : [];
+  const legacy = await importLegacyMarks();
+  marks.value = legacy;
+  if (legacy.length) await mobileApi.shelfSaveBookmarks(props.id, JSON.stringify(legacy));
 }
 
 async function saveMarks(next: Bookmark[], prev: Bookmark[]) {
-  if (!shelf.vaultId) return;
   try {
-    const raw = await mobileApi.shelfTextRead(shelf.vaultId, shelf.remoteDir, ".spark/bookmarks.json");
-    const all = raw.trim() ? (JSON.parse(raw) as Record<string, Bookmark[]>) : {};
-    all[fileName] = next;
-    await mobileApi.shelfTextWrite(shelf.vaultId, shelf.remoteDir, ".spark/bookmarks.json", JSON.stringify(all));
+    await mobileApi.shelfSaveBookmarks(props.id, JSON.stringify(next));
   } catch (e) {
     marks.value = prev;
     toast(e instanceof Error ? e.message : String(e));
@@ -2786,13 +2995,17 @@ async function saveMarks(next: Bookmark[], prev: Bookmark[]) {
 
 const marked = computed(() => marks.value.some((b) => b.cfi === currentCfi.value));
 
-async function onBookmark() {
-  if (!shelf.vaultId) {
-    toast("先选择读书笔记库");
+function onNoteClick(anno: Anno) {
+  if (swiped.value === anno.id) {
+    swiped.value = null;
     return;
   }
+  openedNoteId.value = anno.id;
+}
+
+async function onBookmark() {
   if (!currentCfi.value) {
-    toast("书还没有打开好，稍等一下");
+    toast("书还在打开");
     return;
   }
   const prev = marks.value;
@@ -2805,7 +3018,7 @@ async function onBookmark() {
     createdMs: Date.now(),
   });
   marks.value = next;
-  toast(adding ? "已添加书签" : "已移除书签");
+  toast(adding ? "已加书签" : "已去掉书签");
   await saveMarks(next, prev);
 }
 
@@ -2860,21 +3073,8 @@ function askAi(text: string) {
 async function copyPick() {
   const text = pick.value?.text ?? "";
   clearPick();
-  try {
-    await navigator.clipboard.writeText(text);
-    toast("已复制");
-  } catch (e) {
-    toast(`复制失败：${e instanceof Error ? e.message : e}`);
-  }
-}
-
-async function openNoteFile() {
-  if (!shelf.vaultId || !noteRel) {
-    toast("还没有读书笔记");
-    return;
-  }
-  if (store.currentId !== shelf.vaultId) await store.selectVault(shelf.vaultId);
-  openDoc(noteRel);
+  const copied = await copyPlainText(text);
+  toast(copied.ok ? "已复制" : `复制失败：${copied.reason}`);
 }
 
 function toggleNight() {
@@ -2926,7 +3126,6 @@ function dateLabel(iso: string) {
         <button v-if="backTo != null" class="ebook-back" @click="restore">↩ 回到 {{ Math.round(backTo * 100) }}%</button>
         <div class="ebook-tools">
           <button @click="openPanel('toc')"><Icon name="outline" />目录</button>
-          <button @click="openPanel('search')"><Icon name="search" />搜索</button>
           <button @click="writePageNote"><Icon name="pen" />笔记</button>
           <button @click="sheet = 'settings'"><Icon name="aa" />设置</button>
           <button @click="toggleNight"><Icon :name="palette.dark ? 'sun' : 'moon'" />{{ palette.dark ? "日间" : "夜读" }}</button>
@@ -2956,7 +3155,7 @@ function dateLabel(iso: string) {
       <div class="sheet note-sheet">
         <div class="grab"></div>
         <textarea v-model="draft" class="note-input" rows="5" :placeholder="editingSummary ? '写下读完后的总结' : '写下感悟'" autofocus></textarea>
-        <p class="note-hint">保存到 {{ noteRel ? noteRel.replace(/\/[^/]+$/, "") : "读书笔记" }}</p>
+        <p class="note-hint">保存在这台手机</p>
         <div class="note-btns">
           <button class="btn" @click="closeEditor">取消</button>
           <button class="btn pri" @click="saveDraft">保存</button>
@@ -2972,7 +3171,7 @@ function dateLabel(iso: string) {
           <div class="seg panel-tabs">
             <button :class="{ on: tab === 'toc' }" @click="openPanel('toc')">目录</button>
             <button :class="{ on: tab === 'search' }" @click="openPanel('search')">搜索</button>
-            <button :class="{ on: tab === 'notes' }" @click="tab = 'notes'">笔记 {{ noteCount }}</button>
+            <button :class="{ on: tab === 'notes' }" @click="tab = 'notes'; openedNoteId = null">笔记 {{ noteCount }}</button>
             <button :class="{ on: tab === 'marks' }" @click="tab = 'marks'">书签 {{ marks.length }}</button>
           </div>
           <div class="panel-body">
@@ -3002,24 +3201,38 @@ function dateLabel(iso: string) {
               <p v-else-if="!searchHits.length" class="ghint">没有找到</p>
               <p v-else-if="indexing" class="ghint">后面的章节还在读</p>
             </div>
+            <div v-else-if="tab === 'notes' && openedNote" class="note-view">
+              <button class="back" @click="openedNoteId = null">返回</button>
+              <p class="hint">{{ openedNote.chapter || "正文" }} · {{ dateLabel(openedNote.time) }}</p>
+              <p v-if="openedNote.quote.trim()" class="q">{{ openedNote.quote }}</p>
+              <p v-if="openedNote.note.trim()" class="n">{{ `心得：\n${openedNote.note}` }}</p>
+              <p v-if="!openedNote.quote.trim() && !openedNote.note.trim()" class="ghint">这条笔记没有文字</p>
+            </div>
             <div v-else-if="tab === 'notes'">
               <div class="sec">总结</div>
               <button class="note-row" @click="editSummary">
                 <span :class="summary.trim() ? 'n' : 'hint'">{{ summary.trim() || "读完后写一段总结" }}</span>
               </button>
-              <div class="sec">感悟</div>
-              <button
-                v-for="anno in thoughts"
-                :key="anno.id"
-                class="note-row"
-                :class="{ lost: missing.has(anno.id) }"
-                @click="missing.has(anno.id) ? null : goTo(anno.cfi)"
-              >
-                <span class="n">{{ anno.note }}</span>
-                <span class="hint">{{ missing.has(anno.id) ? "在书中找不到这段文字" : dateLabel(anno.time) }}</span>
-              </button>
-              <p v-if="!thoughts.length" class="ghint">还没有感悟。点底部「笔记」记下来。</p>
-              <button v-if="noteCount" class="panel-link" @click="openNoteFile">在文件页打开读书笔记 ›</button>
+              <div class="sec">笔记</div>
+              <div v-for="anno in noteItems" :key="anno.id" class="mark-row" :class="{ open: swiped === anno.id, dragging: markDrag?.id === anno.id && markDrag.horizontal }">
+                <button class="mark-del" @click="removeAnno(anno)"><Icon name="x" :size="18" />删除</button>
+                <button
+                  class="mark-main"
+                  :class="{ lost: missing.has(anno.id) }"
+                  :style="{ transform: markShift(anno.id) }"
+                  @touchstart.passive="markStart($event, anno.id)"
+                  @touchmove="markMove"
+                  @touchend="markEnd"
+                  @touchcancel="markEnd"
+                  @contextmenu.prevent
+                  @click="onNoteClick(anno)"
+                >
+                  <span v-if="anno.quote.trim()" class="q">{{ anno.quote }}</span>
+                  <span v-if="anno.note.trim()" class="n">{{ `心得：\n${anno.note}` }}</span>
+                  <span class="hint">{{ missing.has(anno.id) ? "在书中找不到这段文字" : dateLabel(anno.time) }}</span>
+                </button>
+              </div>
+              <p v-if="!noteItems.length" class="ghint">还没有划线。选中文字可以划一下，也可以点底部「笔记」写一条。</p>
             </div>
             <div v-else>
               <div v-for="mark in marks" :key="mark.id" class="mark-row" :class="{ open: swiped === mark.id, dragging: markDrag?.id === mark.id && markDrag.horizontal }">

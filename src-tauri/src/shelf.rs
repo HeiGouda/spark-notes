@@ -166,6 +166,8 @@ pub fn remove_local(base: &Path, id: &str) -> Result<(), String> {
     for path in [cover_path(base, id), no_cover_path(base, id)] {
         let _ = fs::remove_file(path);
     }
+    drop_notes(base, id)?;
+    drop_bookmarks(base, id)?;
     Ok(())
 }
 
@@ -316,6 +318,93 @@ pub fn write_point(base: &Path, id: &str, point: ReadPoint) -> Result<(), String
     let mut map = load_progress(base)?;
     map.insert(id.to_string(), point);
     save_progress(base, &map)
+}
+
+fn notes_path(base: &Path) -> PathBuf {
+    books_dir(base).join("notes.json")
+}
+
+/// 每本书一份读书笔记（划线、心得、总结）。只在这台手机上，不进笔记库
+fn load_notes(base: &Path) -> Result<std::collections::BTreeMap<String, String>, String> {
+    match fs::read_to_string(notes_path(base)) {
+        Ok(s) if s.trim().is_empty() => Ok(std::collections::BTreeMap::new()),
+        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("读书笔记损坏：{e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(std::collections::BTreeMap::new()),
+        Err(e) => Err(format!("读取读书笔记失败：{e}")),
+    }
+}
+
+fn save_notes_map(base: &Path, map: &std::collections::BTreeMap<String, String>) -> Result<(), String> {
+    let path = notes_path(base);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("创建书架目录失败：{e}"))?;
+    }
+    atomic_write(&path, &serde_json::to_string(map).map_err(|e| e.to_string())?)
+}
+
+pub fn read_notes(base: &Path, id: &str) -> Result<String, String> {
+    Ok(load_notes(base)?.get(id).cloned().unwrap_or_default())
+}
+
+pub fn write_notes(base: &Path, id: &str, content: &str) -> Result<(), String> {
+    let mut map = load_notes(base)?;
+    if content.trim().is_empty() {
+        map.remove(id);
+    } else {
+        map.insert(id.to_string(), content.to_string());
+    }
+    save_notes_map(base, &map)
+}
+
+fn drop_notes(base: &Path, id: &str) -> Result<(), String> {
+    let mut map = load_notes(base)?;
+    if map.remove(id).is_none() {
+        return Ok(());
+    }
+    save_notes_map(base, &map)
+}
+
+fn bookmarks_path(base: &Path) -> PathBuf {
+    books_dir(base).join("bookmarks.json")
+}
+
+fn load_bookmarks(base: &Path) -> Result<std::collections::BTreeMap<String, String>, String> {
+    match fs::read_to_string(bookmarks_path(base)) {
+        Ok(s) if s.trim().is_empty() => Ok(std::collections::BTreeMap::new()),
+        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("书签损坏：{e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(std::collections::BTreeMap::new()),
+        Err(e) => Err(format!("读取书签失败：{e}")),
+    }
+}
+
+fn save_bookmarks_map(base: &Path, map: &std::collections::BTreeMap<String, String>) -> Result<(), String> {
+    let path = bookmarks_path(base);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("创建书架目录失败：{e}"))?;
+    }
+    atomic_write(&path, &serde_json::to_string(map).map_err(|e| e.to_string())?)
+}
+
+pub fn read_bookmarks(base: &Path, id: &str) -> Result<String, String> {
+    Ok(load_bookmarks(base)?.get(id).cloned().unwrap_or_default())
+}
+
+pub fn write_bookmarks(base: &Path, id: &str, content: &str) -> Result<(), String> {
+    let mut map = load_bookmarks(base)?;
+    if content.trim().is_empty() || content.trim() == "[]" {
+        map.remove(id);
+    } else {
+        map.insert(id.to_string(), content.to_string());
+    }
+    save_bookmarks_map(base, &map)
+}
+
+fn drop_bookmarks(base: &Path, id: &str) -> Result<(), String> {
+    let mut map = load_bookmarks(base)?;
+    if map.remove(id).is_none() {
+        return Ok(());
+    }
+    save_bookmarks_map(base, &map)
 }
 
 /// 云端更新的那份胜出；时间相同用本地的
@@ -578,6 +667,30 @@ pub mod commands {
         blocking(move || write_point(&app_base(&app)?, &id, point)).await
     }
 
+    /// 这本书的划线、心得和总结。没有时是空字符串
+    #[tauri::command]
+    pub async fn shelf_read_notes(app: AppHandle, id: String) -> Result<String, String> {
+        blocking(move || read_notes(&app_base(&app)?, &id)).await
+    }
+
+    /// 整份覆盖这本书的读书笔记。空内容表示删掉
+    #[tauri::command]
+    pub async fn shelf_save_notes(app: AppHandle, id: String, content: String) -> Result<(), String> {
+        blocking(move || write_notes(&app_base(&app)?, &id, &content)).await
+    }
+
+    /// 这本书的书签。没有时是空字符串
+    #[tauri::command]
+    pub async fn shelf_read_bookmarks(app: AppHandle, id: String) -> Result<String, String> {
+        blocking(move || read_bookmarks(&app_base(&app)?, &id)).await
+    }
+
+    /// 整份覆盖这本书的书签。空内容或 [] 表示删掉
+    #[tauri::command]
+    pub async fn shelf_save_bookmarks(app: AppHandle, id: String, content: String) -> Result<(), String> {
+        blocking(move || write_bookmarks(&app_base(&app)?, &id, &content)).await
+    }
+
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct SyncedPoint {
@@ -805,6 +918,24 @@ mod tests {
         assert_eq!(a.origin, "import");
         assert!(import_bytes(&dir, "图片.png", b"x").is_err());
         assert_eq!(import_bytes(&dir, "笔记.pdf", b"pdf").unwrap().name, "笔记.pdf");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn notes_stay_on_this_phone_and_leave_with_the_book() {
+        let dir = std::env::temp_dir().join(format!("spark-shelf-notes-{}", now_ms()));
+        let book = import_bytes(&dir, "三体.epub", b"a").unwrap();
+        assert_eq!(read_notes(&dir, &book.id).unwrap(), "");
+        write_notes(&dir, &book.id, "{\"annos\":[]}").unwrap();
+        assert_eq!(read_notes(&dir, &book.id).unwrap(), "{\"annos\":[]}");
+        write_notes(&dir, &book.id, "").unwrap();
+        assert_eq!(read_notes(&dir, &book.id).unwrap(), "");
+        write_notes(&dir, &book.id, "{\"summary\":\"读完了\"}").unwrap();
+        write_bookmarks(&dir, &book.id, "[{\"id\":\"b1\"}]").unwrap();
+        assert_eq!(read_bookmarks(&dir, &book.id).unwrap(), "[{\"id\":\"b1\"}]");
+        remove_local(&dir, &book.id).unwrap();
+        assert_eq!(read_notes(&dir, &book.id).unwrap(), "");
+        assert_eq!(read_bookmarks(&dir, &book.id).unwrap(), "");
         let _ = fs::remove_dir_all(&dir);
     }
 

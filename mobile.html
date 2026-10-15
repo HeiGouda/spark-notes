@@ -8,6 +8,11 @@
 
   <body>
     <div id="app"></div>
+    <script>
+      // 模块还没起来时，原生先报的键盘高度先记在这里
+      window.__sparkKb = 0;
+      window.__sparkKeyboard = function (px) { window.__sparkKb = Number(px) || 0; };
+    </script>
     <script type="module" src="/src/mobile/main.ts"></script>
   </body>
 </html>

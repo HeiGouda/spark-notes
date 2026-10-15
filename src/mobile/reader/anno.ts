@@ -1,4 +1,7 @@
-/** 读书笔记 md：只记自己写的感悟和读完后的总结。位置写在不显示的注释里，不摘录原文 */
+/**
+ * 读书笔记 md。划线写在注释上面，一行原文一行 `> `；只写想法、没有划线时不摘录。
+ * 位置仍在不显示的注释里。旧文件没有 `> ` 时原文留空，打开时不改写。
+ */
 
 export interface Anno {
   id: string;
@@ -44,7 +47,8 @@ function annoFrom(id: string, cfi: string, time: string, quote: string, note: st
 }
 
 function field(front: string, key: string): string {
-  const m = new RegExp(`^${key}:\\s*(.*)$`, "m").exec(front);
+  // 不能用 \s：空字段时它会把下一行吃进去，再保存就把书名和作者对错位
+  const m = new RegExp(`^${key}:[ \\t]*(.*)$`, "m").exec(front);
   return (m?.[1] ?? "").trim().replace(/^["']|["']$/g, "");
 }
 
@@ -60,7 +64,15 @@ function takeNote(lines: string[], i: number): { note: string; i: number } {
   while (i < lines.length && lines[i].trim() === "") i++;
   const note: string[] = [];
   while (i < lines.length && !isAnnoBoundary(lines[i])) note.push(lines[i++]);
-  return { note: note.join("\n").trim(), i };
+  return { note: unwrapThought(note.join("\n")), i };
+}
+
+/** 显示时加的「心得：」标题，读回来不要留在正文里 */
+function unwrapThought(note: string): string {
+  const text = note.trim();
+  const matched = /^心得[:：][ \t]*([\s\S]*)$/.exec(text);
+  if (!matched) return text;
+  return matched[1].trim();
 }
 
 export function parseReadingNote(md: string): ReadingDoc {
@@ -109,12 +121,15 @@ export function parseReadingNote(md: string): ReadingDoc {
     if (line.startsWith("> ")) {
       const quote: string[] = [];
       while (i < lines.length && lines[i].startsWith("> ")) quote.push(lines[i++]);
-      const comment = COMMENT.exec(lines[i]?.trim() ?? "");
+      // 引文和注释之间可以空一行。空行本身不是新的一条
+      let j = i;
+      while (j < lines.length && lines[j].trim() === "") j++;
+      const comment = COMMENT.exec(lines[j]?.trim() ?? "");
       if (!comment) {
         preamble.push(...quote);
         continue;
       }
-      i++;
+      i = j + 1;
       const taken = takeNote(lines, i);
       i = taken.i;
       doc.annos.push(annoFrom(comment[1], comment[2], comment[3], quoteText(quote), taken.note, chapter || "正文", comment[4], comment[5], comment[6]));
@@ -138,9 +153,18 @@ export function renderReadingNote(doc: ReadingDoc): string {
   ];
   if (doc.preamble.trim()) parts.push(doc.preamble.trim(), "");
   for (const anno of doc.annos) {
+    const quote = anno.quote.trim();
+    // 只划线、没写想法时也要留下原文。只写想法（没有引文）不补空的 >
+    if (quote) {
+      for (const line of quote.split("\n")) parts.push(`> ${line}`);
+      // 空一行，不然下一行会被当成引用的延续，定位注释就显示在原文里
+      parts.push("");
+    }
     const span = anno.section != null && anno.start != null && anno.end != null ? ` ${anno.section} ${anno.start} ${anno.end}` : "";
     parts.push(`<!-- spark-anno ${anno.id} ${anno.cfi} ${anno.time}${span} -->`);
-    if (anno.note.trim()) parts.push(anno.note.trim(), "");
+    const thought = anno.note.trim();
+    if (thought) parts.push("", "心得：", thought);
+    parts.push("");
   }
   if (doc.summary.trim()) parts.push("## 总结", "", doc.summary.trim(), "");
   return parts.join("\n").replace(/\n{3,}/g, "\n\n").replace(/\s*$/, "\n");

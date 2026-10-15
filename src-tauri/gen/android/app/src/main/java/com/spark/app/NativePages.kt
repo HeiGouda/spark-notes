@@ -1,5 +1,8 @@
 package com.spark.app
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -8,8 +11,10 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PersistableBundle
 import android.os.SystemClock
 import android.text.Layout
 import android.text.SpannableStringBuilder
@@ -26,6 +31,8 @@ import android.view.ViewConfiguration
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import org.json.JSONArray
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -1164,7 +1171,14 @@ class NativePages(context: android.content.Context) : View(context) {
 
   private fun barButton(x: Float, y: Float): Int {
     prepareBar()
-    return barHits.indexOfFirst { it.second.contains(x, y) }
+    val exact = barHits.indexOfFirst { it.second.contains(x, y) }
+    if (exact >= 0) return exact
+    val slop = 16f * resources.displayMetrics.density
+    return barHits.indexOfFirst {
+      val hit = RectF(it.second)
+      hit.inset(-slop, -slop * 1.5f)
+      hit.contains(x, y)
+    }
   }
 
   private fun drawBar(canvas: Canvas) {
@@ -1544,6 +1558,8 @@ class NativePages(context: android.content.Context) : View(context) {
         if (!dragging) return false
         velocity?.addMovement(event)
         if (barDown >= 0) return true
+        // 选区还在时手指移动只是选字，不要把书页滚走，菜单会跟着跑、点不准
+        if (selecting) return true
         if (!moved) {
           val dx = event.x - downX
           val dy = event.y - downY
@@ -1735,11 +1751,9 @@ class NativePages(context: android.content.Context) : View(context) {
           return true
         }
         if (selecting) {
+          // clearSelection 会先把 selecting 清掉。接着 onTap 会当成没有选区，同一次点击就翻页
           clearSelection()
           callJs("window.__sparkNativeSelectClear&&window.__sparkNativeSelectClear()")
-          val travel = kotlin.math.hypot((event.x - downX).toDouble(), (event.y - downY).toDouble()).toFloat()
-          val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
-          if (travel < slop * 3f) onTap(event.x)
           return true
         }
         if (!moved) {
@@ -1794,7 +1808,7 @@ class NativePages(context: android.content.Context) : View(context) {
     if (selecting) {
       clearSelection()
       callJs("window.__sparkNativeSelectClear&&window.__sparkNativeSelectClear()")
-      if (zone != "menu") return
+      return
     }
     if (zone == "prev" || zone == "next") {
       turnByTap(if (zone == "next") 1 else -1)
@@ -2071,7 +2085,10 @@ class NativePages(context: android.content.Context) : View(context) {
   }
 
   private fun clearSelection() {
-    if (!selecting && selA < 0) return
+    if (!selecting && selA < 0) {
+      flushDeferredLayout()
+      return
+    }
     selecting = false
     selectionGesture = false
     handle = 0
@@ -2080,6 +2097,13 @@ class NativePages(context: android.content.Context) : View(context) {
     selA = -1
     selB = -1
     invalidate()
+    flushDeferredLayout()
+  }
+
+  private fun flushDeferredLayout() {
+    if (!deferLayout) return
+    deferLayout = false
+    if (width > 0 && height > 0 && texts.containsKey(chapter)) relayoutCurrent()
   }
 
   private fun cancelPress() {
@@ -2266,6 +2290,9 @@ class NativePages(context: android.content.Context) : View(context) {
     }
   }
 
+  /** 选字时页脚冒出来会把视口缩短。这时重排会把选区挪走，第一下就点不中划线 */
+  private var deferLayout = false
+
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     if (w <= 0 || h <= 0 || (w == oldw && h == oldh) || !texts.containsKey(chapter)) return
@@ -2274,6 +2301,15 @@ class NativePages(context: android.content.Context) : View(context) {
       invalidate()
       return
     }
+    if (selecting && w == oldw) {
+      deferLayout = true
+      invalidate()
+      return
+    }
+    relayoutCurrent()
+  }
+
+  private fun relayoutCurrent() {
     keepScrollSpot()
     rasterToken++
     styleGen++
@@ -2561,6 +2597,8 @@ class NativePages(context: android.content.Context) : View(context) {
       main.post {
         marks = parseMarks(json)
         quoteStamp++
+        // 上下滚动的高亮是现画的，不进位图。不刷新的话要等下一次滚动才消失
+        invalidate()
         rasterAroundSoon(forceAll = true)
       }
     }
@@ -2568,6 +2606,29 @@ class NativePages(context: android.content.Context) : View(context) {
     @JavascriptInterface
     fun clearSelect() {
       main.post { clearSelection() }
+    }
+
+    /**
+     * 选字菜单点在原生页上，网页没有用户手势，Clipboard API 会拒绝。
+     * 在主线程写入并返回是否成功。不记录文字内容。
+     */
+    @JavascriptInterface
+    fun copyText(text: String): Boolean {
+      if (Looper.myLooper() == Looper.getMainLooper()) return writeClipboard(text)
+      val ok = java.util.concurrent.atomic.AtomicBoolean(false)
+      val latch = CountDownLatch(1)
+      main.post {
+        try {
+          ok.set(writeClipboard(text))
+        } finally {
+          latch.countDown()
+        }
+      }
+      return try {
+        latch.await(2, TimeUnit.SECONDS) && ok.get()
+      } catch (_: InterruptedException) {
+        false
+      }
     }
 
     @JavascriptInterface
@@ -2601,6 +2662,26 @@ class NativePages(context: android.content.Context) : View(context) {
         clearPool()
         visibility = GONE
       }
+    }
+  }
+
+  /**
+   * 安卓 13 起系统会自己弹「已复制」。标成敏感后不再弹，避免和书页上的提示叠成两条。
+   * 文字仍在剪贴板里，可以粘贴。
+   */
+  private fun writeClipboard(text: String): Boolean {
+    return try {
+      val manager = context.getSystemService(ClipboardManager::class.java) ?: return false
+      val clip = ClipData.newPlainText("text", text)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val extras = PersistableBundle()
+        extras.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        clip.description.setExtras(extras)
+      }
+      manager.setPrimaryClip(clip)
+      true
+    } catch (_: Exception) {
+      false
     }
   }
 

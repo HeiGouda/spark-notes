@@ -14,6 +14,9 @@
 -keepclassmembers class com.spark.app.PageTurn$SelectingFlag {
     @android.webkit.JavascriptInterface <methods>;
 }
+-keepclassmembers class com.spark.app.NativePages$Bridge {
+    @android.webkit.JavascriptInterface <methods>;
+}
 
 # Uncomment this to preserve the line number information for
 # debugging stack traces.

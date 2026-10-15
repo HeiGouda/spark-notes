@@ -7,6 +7,7 @@ import { renderMarkdown } from "../../lib/markdown";
 import type { ChatMsg } from "../../lib/chat";
 import { useMobileAi } from "../ai";
 import { useMobileChat } from "../chat";
+import { copyPlainText } from "../clipboard";
 import { toast } from "../nav";
 
 const props = defineProps<{ open: boolean }>();
@@ -74,12 +75,8 @@ function grow() {
 watch(() => chat.draft, () => nextTick(grow));
 
 async function copy(m: ChatMsg) {
-  try {
-    await navigator.clipboard.writeText(m.content);
-    toast("已复制");
-  } catch (e) {
-    toast(`复制失败：${e instanceof Error ? e.message : e}`);
-  }
+  const copied = await copyPlainText(m.content);
+  toast(copied.ok ? "已复制" : `复制失败：${copied.reason}`);
 }
 
 async function send() {
